@@ -107,8 +107,8 @@ class DextraMixer:
         return self.trace
 
     def predict_posterior_class(self,
-                                trace: Union[az.InferenceData, pm.backends.base.MultiTrace] = None) -> Union[
-        pd.Series, np.ndarray]:
+                                trace: Union[az.InferenceData, pm.backends.base.MultiTrace] = None,
+                                rng: int = 42) -> Union[pd.Series, np.ndarray]:
         '''
         check papers for FDR control:
         https://academic.oup.com/bioinformatics/article/36/Supplement_2/i745/6055912
@@ -124,7 +124,7 @@ class DextraMixer:
             trace = self.trace
 
         with self.model.posterior_predictive_model:
-            pp = pm.sample_posterior_predictive(trace, var_names=[self.model.class_var])
+            pp = pm.sample_posterior_predictive(trace, var_names=[self.model.class_var], random_seed=rng)
             return pp.posterior_predictive[self.model.class_var]
 
 
@@ -135,7 +135,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
 
     def build_model(self,
                     X: Union[pd.Series, np.ndarray],
-                    negCont: Union[pd.Series, np.ndarray],
+                    negCont: Union[pd.Series, np.ndarray] = None,
                     mode: str = "H",
                     C: Union[pd.Series, np.ndarray] = None,
                     Sigma: Union[pd.Series, np.ndarray] = None,
@@ -159,7 +159,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
     @abc.abstractmethod
     def _build_posterior_predictive_model(self,
                                           X: Union[pd.Series, np.ndarray],
-                                          negCont: Union[pd.Series, np.ndarray],
+                                          negCont: Union[pd.Series, np.ndarray] = None,
                                           mode: str = "H",
                                           C: Union[pd.Series, np.ndarray] = None,
                                           Sigma: Union[pd.Series, np.ndarray] = None,
@@ -221,7 +221,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
 
     def data_setter(self,
                     X: Union[pd.Series, np.ndarray],
-                    negCont: Union[pd.Series, np.ndarray],
+                    negCont: Union[pd.Series, np.ndarray] = None,
                     C: Union[pd.Series, np.ndarray] = None,
                     Sigma: Union[pd.DataFrame, np.ndarray] = None
                     ):
@@ -274,9 +274,15 @@ class DextraMixerMixtureModel(ADextraMixerModel):
     &X_{.j}^{\text{neg}} \sim \text{NegBinom}(e^{q^0}, \alpha^0)&\forall i \in N\\
     \text{s.t.  }  q_{\text{raw}}^0 &< q_{\text{raw}}^1\\
     \end{align}$$
+
+    with $C(i)$ being the clone index of T cell $i$ and $\hat{s}_i$ a cell-specific scaling factor accounting for
+    differences in sequencing depth. $q_c$ is the expectation value of avidity for clone $c\in C$ or the expacation
+    value of unspecific binding of epitope $i$.
     """
-    __name = "mix"
+
+    __name = "mixture_model"
     __version = "1.0"
+    __class_var = "z"
     _model = None
     _posterior_predictive_model = None
 
@@ -292,20 +298,16 @@ class DextraMixerMixtureModel(ADextraMixerModel):
     def model(self):
         return self._model
 
-    @model.setter
-    def model(self, value):
-        self._model = value
+    @property
+    def class_var(self) -> str:
+        return self.__class_var
 
     @property
     def posterior_predictive_model(self):
         return self._posterior_predictive_model
 
-    @posterior_predictive_model.setter
-    def posterior_predictive_model(self, value):
-        self._posterior_predictive_model = value
-
     @staticmethod
-    def _get_default_model_config() -> Dict:
+    def get_default_model_config() -> Dict:
         model_config: Dict = {
             "mu_q_mean_prior": 0.0,
             "mu_q_var_prior": 10.0,
@@ -320,11 +322,10 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                                C: Union[pd.Series, np.ndarray] = None, Sigma: Union[pd.Series, np.ndarray] = None,
                                **kwargs):
 
-        with pm.Model(coords=self.model_coords) as self.model:
+        with pm.Model(coords=self.model_coords) as self._model:
 
             # Create mutable data containers
             x_data = pm.MutableData("x_data", X)
-            size_factor_data = pm.MutableData("size_factor_data", np.ones(len(X)))
             negCont_data = pm.MutableData("negCont_data", negCont)
             c_data = pm.MutableData("c_data", C)
             sigma_data = pm.MutableData("sigma_data", Sigma)
@@ -350,11 +351,12 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             # cluster probability
             if C is not None:
                 if Sigma is not None:
-                    w_raw = pm.p_raw = pm.MvNormal("w_raw", 0, sigma_data)
-                    w = pm.Deterministic("w", pm.math.invlogit(w_raw))
+                    w_raw = pm.MvNormal("w_raw", 0, sigma_data)
+                    w = pm.math.invlogit(w_raw)
+                    w = pm.Deterministic("w", pm.math.stack([1 - w, w], axis=-1))
+
                 else:
-                    w = pm.Dirichlet("w", w_logits_prior, shape=(len(self.model_coords["clone"]),
-                                                                 len(self.model_coords["cluster"])), dims="clone")
+                    w = pm.Dirichlet("w", w_logits_prior, dims=("clone", "cluster"))
             else:
                 w = pm.Dirichlet("w", w_logits_prior)
 
@@ -384,7 +386,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                                           C: Union[pd.Series, np.ndarray] = None,
                                           Sigma: Union[pd.Series, np.ndarray] = None, **kwargs):
 
-        with pm.Model(coords=self.model_coords) as self.posterior_predictive_model:
+        with pm.Model(coords=self.model_coords) as self._posterior_predictive_model:
 
             # Create mutable data containers
             x_data = pm.MutableData("x_data", X)
@@ -412,9 +414,9 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             # cluster probability
             if C is not None:
                 if Sigma is not None:
-                    w_raw = pm.p_raw = pm.MvNormal("w_raw", 0, sigma_data)
-                    w = pm.Deterministic("w", pm.math.invlogit(w_raw))
-                    w = pm.math.stack([1 - w, w], axis=-1)
+                    w_raw = pm.MvNormal("w_raw", 0, sigma_data)
+                    w = pm.math.invlogit(w_raw)
+                    w = pm.Deterministic("w", pm.math.stack([1 - w, w], axis=-1))
                 else:
                     w = pm.Dirichlet("w", np.ones(2),
                                      shape=(len(self.model_coords["clone"]),
@@ -432,5 +434,3 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                 ], axis=0)
 
             z = pm.Categorical(self.class_var, logit_p=log_probs.T)
-
-
