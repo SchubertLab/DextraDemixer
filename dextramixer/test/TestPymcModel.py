@@ -1,5 +1,7 @@
 import unittest
 
+import numpy as np
+
 from dextramixer.model.pymc_model import *
 from dextramixer.utils import t_cell_simulation
 
@@ -19,6 +21,7 @@ class TestPymcModels(unittest.TestCase):
         self.X = self.df_data.avidity.values
         self.C = self.df_data.clone.values
         self.binder = self.df_data.binder.values
+        self.Sigma = np.eye(len(pd.unique(self.C)))
         self.neg_cont = self.df_neg_cont.avidity.values
 
     def test_model_registration(self):
@@ -52,13 +55,31 @@ class TestPymcModels(unittest.TestCase):
         mixer = DextraMixer()
         mixer.build_model(self.df_data.avidity.values,  C=self.C)
         trace = mixer.fit()
-        print(az.summary(trace))
+        t = az.summary(trace)
+        print(t)
 
         z = mixer.predict_posterior_class(trace)
         idx = z.mean(("chain", "draw"))
         N = len(self.binder)
         accuracy = (self.binder == idx).sum() / N
-        print(accuracy)
+        print("PPC:", accuracy)
+        idx = np.array([ 1 if t.loc['w[%i, 1]'%i, 'mean'] > 0.5 else 0 for i in self.C])
+        print("Posterior class weight:", (self.binder == idx).sum() / N)
+
+    def test_simple_mixture_model_Sigma(self):
+        mixer = DextraMixer()
+        mixer.build_model(self.df_data.avidity.values,  C=self.C, Sigma=self.Sigma)
+        trace = mixer.fit()
+        t = az.summary(trace)
+        print(t)
+
+        z = mixer.predict_posterior_class(trace)
+        idx = z.mean(("chain", "draw"))
+        N = len(self.binder)
+        accuracy = (self.binder == idx).sum() / N
+        print("PPC:", accuracy)
+        idx = np.array([ 1 if t.loc['w[%i, 1]'%i, 'mean'] > 0.5 else 0 for i in self.C])
+        print("Posterior class weight:", (self.binder == idx).sum() / N)
 
 
 if __name__ == '__main__':
