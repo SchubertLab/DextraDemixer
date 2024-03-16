@@ -25,10 +25,10 @@ class TestPymcModels(unittest.TestCase):
         self.neg_cont = self.df_neg_cont.avidity.values
 
     def test_model_registration(self):
-       print(DextraMixer.available_methods())
+       print(DextraMixerPymc.available_methods())
 
     def test_simple_mixture_model(self):
-        mixer = DextraMixer()
+        mixer = DextraMixerPymc()
         mixer.build_model(self.X)
         trace = mixer.fit()
         print(az.summary(trace))
@@ -40,7 +40,7 @@ class TestPymcModels(unittest.TestCase):
         print(accuracy)
 
     def test_simple_mixture_neg_control(self):
-        mixer = DextraMixer()
+        mixer = DextraMixerPymc()
         mixer.build_model(self.X, negCont=self.neg_cont)
         trace = mixer.fit()
         print(az.summary(trace))
@@ -52,7 +52,7 @@ class TestPymcModels(unittest.TestCase):
         print(accuracy)
 
     def test_simple_mixture_model_C(self):
-        mixer = DextraMixer()
+        mixer = DextraMixerPymc()
         mixer.build_model(self.df_data.avidity.values,  C=self.C)
         trace = mixer.fit()
         t = az.summary(trace)
@@ -67,7 +67,7 @@ class TestPymcModels(unittest.TestCase):
         print("Posterior class weight:", (self.binder == idx).sum() / N)
 
     def test_simple_mixture_model_Sigma(self):
-        mixer = DextraMixer()
+        mixer = DextraMixerPymc()
         mixer.build_model(self.df_data.avidity.values,  C=self.C, Sigma=self.Sigma)
         trace = mixer.fit()
         t = az.summary(trace)

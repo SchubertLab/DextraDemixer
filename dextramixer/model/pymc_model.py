@@ -1,3 +1,5 @@
+
+
 from typing import Dict, List, Optional, Tuple, Union
 import abc
 
@@ -8,21 +10,29 @@ import pymc as pm
 
 from dextramixer.utils import RegisteredModel
 
+import warnings
+warnings.warn("DextraMixer-Pymc module is deprecated. Please use the DextraMixer-Numpyro module",
+              DeprecationWarning, stacklevel=2)
 
-class DextraMixer:
+
+class DextraMixerPymc:
     """
-    This class implements several mixture models to infer pMHC dextramere specificity from single cell immune profiling data
-    with increasing usage of information
+    This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
+    data with increasing usage of information
 
     **Given**:
 
-    A read count matrix ***$X_{ij}\in \mathbb{N}$*** approximating the avidity of $i\in N$ T cell for the $j\in M$ epitope. The $N$ T cells can be grouped based on their T-cell receptor sequence into $C$ cluster.
+    A read count matrix ***$X_{ij}\in \mathbb{N}$*** approximating the avidity of $i\in N$ T cell for the $j\in M$
+    epitope. The $N$ T cells can be grouped based on their T-cell receptor sequence into $C$ cluster.
 
     **Assumption**:
 
     1) Each read counts $X_{.j}$ of an epitope is iid.
-    2) We assume that $X_{.j}$ can be represented as a mixture of two Negative Binomial distributions. Each clonal group $c \in C$ belongs to either the clone-specific **Binding** or the **Non-Binding** component. The **Non-Binding** component represents unspecific epitope binding and assay noise.
-    3) It is assumed that unspecific binding T cells and non-binding T cells exhibit lower read counts compared to specifically binding T cell after appropriat normalization.
+    2) We assume that $X_{.j}$ can be represented as a mixture of two Negative Binomial distributions. Each clonal group
+       $c \in C$ belongs to either the clone-specific **Binding** or the **Non-Binding** component. The **Non-Binding**
+       component represents unspecific epitope binding and assay noise.
+    3) It is assumed that unspecific binding T cells and non-binding T cells exhibit lower read counts compared to
+       specifically binding T cell after appropriat normalization.
     4) T cells of a clonal group $c\in C$ are drawn from the same distribution.
 
     """
@@ -77,9 +87,9 @@ class DextraMixer:
         The sampler config dict is used to send parameters to the sampler .
         It will be used during fitting in case the user doesn't provide any sampler_config of their own.
         """
-        sampler_config: Dict = {
-            "draws": 1_000,
-            "tune": 1_000,
+        sampler_config = {
+            "draws": 1000,
+            "tune": 1000,
             "chains": 4,
             "nuts": {
                 "target_accept": 0.95,
@@ -143,7 +153,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         """
         """
         self._generate_and_preprocess_model_data(X, negCont, mode, C, Sigma, **kwargs)
-        self._build_inference_model(X,  negCont, mode, C, Sigma)
+        self._build_inference_model(X, negCont, mode, C, Sigma)
         self._build_posterior_predictive_model(X, negCont, mode, C, Sigma)
 
     @abc.abstractmethod
@@ -199,7 +209,8 @@ class ADextraMixerModel(metaclass=RegisteredModel):
     @property
     def _serializable_model_config(self) -> Dict[str, Union[int, float, Dict]]:
         """
-        _serializable_model_config is a property that returns a dictionary with all the model parameters that we want to save.
+        _serializable_model_config is a property that returns a dictionary with all the model parameters that we want to
+         save.
         """
         return self.get_default_model_config()
 
@@ -210,7 +221,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         else:
             self.model_config = DextraMixerMixtureModel.get_default_model_config()
 
-        self.model_coords: Dict = {
+        self.model_coords = {
             "cluster": np.arange(2),
         }
 
@@ -276,7 +287,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
     \end{align}$$
 
     with $C(i)$ being the clone index of T cell $i$ and $\hat{s}_i$ a cell-specific scaling factor accounting for
-    differences in sequencing depth. $q_c$ is the expectation value of avidity for clone $c\in C$ or the expacation
+    differences in sequencing depth. $q_c$ is the expectation value of avidity for clone $c\in C$ or the expactation
     value of unspecific binding of epitope $i$.
     """
 
@@ -308,7 +319,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
 
     @staticmethod
     def get_default_model_config() -> Dict:
-        model_config: Dict = {
+        model_config = {
             "mu_q_mean_prior": 0.0,
             "mu_q_var_prior": 10.0,
             "sigma_q_var_prior": 5.0,
@@ -423,9 +434,9 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                                             len(self.model_coords["cluster"])))
 
                 log_probs = pm.math.concatenate([
-                        [pm.math.log(w[c_data, 0]) + pm.logp(comp_dists[0], x_data)],
-                        [pm.math.log(w[c_data, 1]) + pm.logp(comp_dists[1], x_data)]
-                    ], axis=0)
+                    [pm.math.log(w[c_data, 0]) + pm.logp(comp_dists[0], x_data)],
+                    [pm.math.log(w[c_data, 1]) + pm.logp(comp_dists[1], x_data)]
+                ], axis=0)
             else:
                 w = pm.Dirichlet("w", np.ones(2))
                 log_probs = pm.math.concatenate([
