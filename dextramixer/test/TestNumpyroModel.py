@@ -25,10 +25,10 @@ class MyTestCase(unittest.TestCase):
                                                           binding_ratio=0.5,
                                                           rnd=43)
         self.X = jnp.array(self.df_data.avidity.to_xarray())
-        self.C = self.df_data.clone.to_xarray()
-        self.binder = self.df_data.binder.to_xarray()
-        self.Sigma = np.eye(len(pd.unique(self.C)))
-        self.neg_cont = self.df_neg_cont.avidity.to_xarray()
+        self.C = jnp.array(self.df_data.clone.to_numpy())
+        self.binder = jnp.array(self.df_data.binder.to_xarray())
+        self.Sigma = jnp.eye(len(jnp.unique(self.C)))
+        self.neg_cont = jnp.array(self.df_neg_cont.avidity.to_xarray())
 
     def test_model_registration(self):
        print(DextraMixer.available_methods())
@@ -37,25 +37,67 @@ class MyTestCase(unittest.TestCase):
         mixer = DextraMixer(model_type="mixturemodel")
         mixer.preprocess_model_data(self.X)
         trace = mixer.fit()
-        print(mixer.sampler.print_summary())
+        print(az.summary(trace, var_names=["~log_p"]))
 
-        #z = mixer.predict_posterior_class(trace)
-        #idx = z.mean(("chain", "draw"))
-        #N = len(self.binder)
-        #accuracy = (self.binder == idx).sum() / N
-        #print(accuracy)
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
 
     def test_simple_mixture_mode(self):
-       pass
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(self.X)
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
 
     def test_simple_mixture_neg_control(self):
-       pass
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(self.X, neg_cont=self.neg_cont)
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
 
     def test_simple_mixture_model_C(self):
-        pass
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.X, c=self.C)
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
 
     def test_simple_mixture_model_Sigma(self):
-        pass
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(self.X, c=self.C, sigma=self.Sigma)
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_full(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(self.X, c=self.C, sigma=self.Sigma, neg_cont=self.neg_cont)
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
 
 
 if __name__ == '__main__':

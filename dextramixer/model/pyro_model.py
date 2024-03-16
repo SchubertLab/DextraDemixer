@@ -78,10 +78,10 @@ class DextraMixer:
         return [k for k in ADextraMixerModel.registry.keys()]
 
     def preprocess_model_data(self,
-                              x: Union[pd.Series, np.ndarray],
-                              neg_cont: Union[pd.Series, np.ndarray] = None,
-                              c: Union[pd.Series, np.ndarray] = None,
-                              sigma: Union[pd.Series, np.ndarray] = None,
+                              x: Union[pd.Series, np.ndarray, Array],
+                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
+                              c: Union[pd.Series, np.ndarray, Array] = None,
+                              sigma: Union[pd.Series, np.ndarray, Array] = None,
                               **kwargs):
 
         self.model.preprocess_model_data(x, neg_cont, c, sigma, self.mode, **kwargs)
@@ -100,7 +100,7 @@ class DextraMixer:
             "progress_bar": False,
             "nuts": {
                 "target_accept_prob": 0.9,
-                "max_tree_depth": 12
+                "max_tree_depth": 15
             }
         }
         return sampler_config
@@ -128,6 +128,33 @@ class DextraMixer:
 
         return self.__make_arvis()
 
+    def predict_posterior_class(self, threshold: float = None, target_fdr: float = None):
+
+        if threshold is None and target_fdr is None:
+            raise ValueError("Either a manual `threshold` or a `target_fdr` must be specified.")
+        if threshold is not None and target_fdr is not None:
+            raise ValueError("Please specify either a manual `threshold` or a `target_fdr` but not both.")
+
+        # posterior probability of belonging to the binding class
+        p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
+
+        if target_fdr is not None:
+            # Direct posterior probability approach cf. Newton et al.(2004)
+            def opt_thresh(p_, alpha):
+
+                incs = p_.copy()
+                incs = incs[::-1].sort()
+
+                for c in jnp.unique(incs):
+                    fdr = jnp.mean(1 - incs[incs >= c])
+                    if fdr < alpha:
+                        return c, fdr
+                return 1., 0
+
+            threshold, fdr_ = opt_thresh(p, target_fdr)
+        assignment = (p >= threshold).astype("int32")
+        return p, assignment
+
     def __make_arvis(self):
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
@@ -146,10 +173,10 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         self._coords = None
 
     def preprocess_model_data(self,
-                              x: Union[pd.Series, np.ndarray],
-                              neg_cont: Union[pd.Series, np.ndarray] = None,
-                              c: Union[pd.Series, np.ndarray] = None,
-                              sigma: np.ndarray = None,
+                              x: Union[pd.Series, np.ndarray, Array],
+                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
+                              c: Union[pd.Series, np.ndarray, Array] = None,
+                              sigma: Union[np.ndarray, Array] = None,
                               mode: str = "H",
                               **kwargs):
         """
@@ -160,7 +187,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         self.data = {"x": jnp.array(x, dtype=float_dtype),
                      "neg_cont": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
                      "clone": None if c is None else jnp.array(c, dtype=int_dtype),
-                     "sigma": None if c is None else jnp.array(sigma, dtype=float_dtype),
+                     "sigma": None if sigma is None else jnp.array(sigma, dtype=float_dtype),
                      }
 
         self.mode = mode
@@ -175,7 +202,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         }
 
         if self.data["clone"] is not None:
-            C_nof = len(jnp.unique(self.data["c"]))
+            C_nof = len(jnp.unique(self.data["clone"]))
             self.coords["clone_axis"] = npy.plate("clone_axis", C_nof, dim=-1)
 
         if self.data["neg_cont"] is not None:
@@ -183,12 +210,12 @@ class ADextraMixerModel(metaclass=RegisteredModel):
             self.coords["neg_sample_axis"] = npy.plate("neg_sample_axis", N_neg, dim=-1)
 
         if self.data["sigma"] is not None:
-            if self.data["c"] is None:
+            if self.data["clone"] is None:
                 raise ValueError("If `sigma` is given, clonality vector `c` must be given as well")
             else:
-                if self.data["sigma"].shape[0] != self.data["c"].shape[0]:
-                    raise ValueError(("Sigma must have shape [{C_nof},{C_nof}] and defined over clonotypes but has [{"
-                                      + "sigma_shape}").format(C_nof=C_nof, sigma_shape=self.data["sigma"].shape))
+                if self.data["sigma"].shape[0] != C_nof:
+                    raise ValueError(("Sigma must have shape ({C_nof},{C_nof}) and defined over clonotypes but has"
+                                      + "{sigma_shape}").format(C_nof=C_nof, sigma_shape=self.data["sigma"].shape))
 
     @abc.abstractmethod
     def model(self, **kwargs):
@@ -341,7 +368,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                 w_raw = npy.sample("w_raw", npd.TransformedDistribution(
                     npd.MultivariateNormal(covariance_matrix=sigma),
                     npd.transforms.SigmoidTransform()))
-                w = jnp.stack([1 - w_raw, w_raw], axis=-1)
+                w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
             else:
                 with clone_axis:
                     w = npy.sample("w", npd.Dirichlet(jnp.ones(K)))
@@ -367,4 +394,4 @@ class DextraMixerMixtureModel(ADextraMixerModel):
 
             # Until here, where we can track the membership probability of each sample
             log_probs = mixture.component_log_probs(yhat)
-            p = npy.deterministic("p", log_probs - logsumexp(log_probs, axis=-1, keepdims=True))
+            p = npy.deterministic("log_p", log_probs - logsumexp(log_probs, axis=-1, keepdims=True))
