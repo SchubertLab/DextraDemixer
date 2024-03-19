@@ -5,6 +5,7 @@ import abc
 from typing import TYPE_CHECKING, Literal, Optional, Union, Dict
 
 import arviz as az
+import jax.lax
 import numpy as np
 import pandas as pd
 
@@ -54,10 +55,10 @@ class DextraMixer:
 
     """
 
-    def __init__(self, model_type: str = "mixturemodel", mode: str = "H", ):
+    def __init__(self, model_type: str = "mixturemodel", mode: str = "H"):
         self.sampler = None
         self.trace = None
-        self.mode = mode
+        self.mode = mode.upper()
         self.model = ADextraMixerModel.registry.get(model_type, DextraMixerMixtureModel)()
 
     @property
@@ -79,15 +80,16 @@ class DextraMixer:
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
-                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
+                              size_factor: Union[pd.Series, np.ndarray, Array],
+                              neg_x: Union[pd.Series, np.ndarray, Array] = None,
+                              size_factor_neg: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
+                              c_neg: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[pd.Series, np.ndarray, Array] = None,
                               **kwargs):
 
-        self.model.preprocess_model_data(x, neg_cont, c, sigma, self.mode, **kwargs)
-
-    def get_default_model_config(self) -> Dict[str, Union[int, float]]:
-        return self.model.get_default_model_config
+        self.__check_parameters(x, neg_x, size_factor, size_factor_neg, c, c_neg, sigma)
+        self.model.preprocess_model_data(x, size_factor, neg_x, size_factor_neg, c, c_neg, sigma, self.mode, **kwargs)
 
     @staticmethod
     def get_default_sampler_config() -> Dict[str, Union[int, float]]:
@@ -110,7 +112,7 @@ class DextraMixer:
         fits the mixture model with MCMC and returns the trace
         """
         if self.model is None:
-            raise Exception("Model is not initialized. Please call `build_model` first.")
+            raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
         if sampler_config is None:
             sampler_config = self.get_default_sampler_config()
@@ -159,6 +161,50 @@ class DextraMixer:
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
 
+    def __check_parameters(self, x, neg_x, size_factor, size_factor_neg, c, c_neg, sigma):
+
+        N = x.shape[0]
+
+        if self.mode == "C":
+            if c is None:
+                raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
+
+        if size_factor.shape[0] != N:
+            raise ValueError(
+                f"`size_factor` and count data `x` require the same size but got {size_factor.shape[0]} and {N}")
+
+        if c is not None:
+            if c.shape[0] != N:
+                raise ValueError(f"`c` and count data `x` require the same size but got {c.shape[0]} and {N}")
+
+        if neg_x is not None:
+            N_neg = neg_x.shape[0]
+
+            if size_factor_neg is None:
+                raise ValueError("If `neg_x` is given `size_factor_neg` must be given to.")
+
+            if size_factor_neg.shape[0] != N_neg:
+                raise ValueError(f"`size_factor_neg` and count data `neg_x` require the same size but got"
+                                 + f" {size_factor_neg.shape[0]} and {N_neg}")
+
+            if self.mode == "C":
+                if c_neg is None:
+                    raise ValueError("If `mode`= C a clonotype vector `c_neg` for the negative"
+                                     + "control samples must be specified.")
+                else:
+                    if c_neg.shape[0] != N_neg:
+                        raise ValueError(f"`c_neg` and count data `neg_x` require the same size but got "
+                                         + f"{c_neg.shape[0]} and {N_neg}")
+
+        if sigma is not None:
+            if c is None:
+                raise ValueError("If `sigma` is given, clonality vector `c` must be given as well")
+            else:
+                C_nof = len(np.unique(c))
+                if sigma.shape[0] != C_nof:
+                    raise ValueError(f"Sigma must have shape ({C_nof},{C_nof}) and defined over clonotypes but has"
+                                      + f"{sigma.shape}")
+
 
 class ADextraMixerModel(metaclass=RegisteredModel):
     """
@@ -174,19 +220,26 @@ class ADextraMixerModel(metaclass=RegisteredModel):
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
+                              size_factor: Union[pd.Series, np.ndarray, Array],
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
+                              size_factor_neg: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
+                              c_neg: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[np.ndarray, Array] = None,
                               mode: str = "H",
                               **kwargs):
         """
         """
         float_dtype = "float64"
-        int_dtype = "int64"
+        int_dtype = "int32"
 
         self.data = {"x": jnp.array(x, dtype=float_dtype),
-                     "neg_cont": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
+                     "neg_x": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
+                     "size_factor": jnp.array(size_factor, dtype=float_dtype),
+                     "size_factor_neg": None if size_factor_neg is None else jnp.array(size_factor_neg,
+                                                                                       dtype=float_dtype),
                      "clone": None if c is None else jnp.array(c, dtype=int_dtype),
+                     "clone_neg": None if c_neg is None else jnp.array(c_neg, dtype=int_dtype),
                      "sigma": None if sigma is None else jnp.array(sigma, dtype=float_dtype),
                      }
 
@@ -208,14 +261,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         if self.data["neg_cont"] is not None:
             N_neg = neg_cont.shape[0]
             self.coords["neg_sample_axis"] = npy.plate("neg_sample_axis", N_neg, dim=-1)
-
-        if self.data["sigma"] is not None:
-            if self.data["clone"] is None:
-                raise ValueError("If `sigma` is given, clonality vector `c` must be given as well")
-            else:
-                if self.data["sigma"].shape[0] != C_nof:
-                    raise ValueError(("Sigma must have shape ({C_nof},{C_nof}) and defined over clonotypes but has"
-                                      + "{sigma_shape}").format(C_nof=C_nof, sigma_shape=self.data["sigma"].shape))
 
     @abc.abstractmethod
     def model(self, **kwargs):
@@ -274,20 +319,24 @@ class DextraMixerMixtureModel(ADextraMixerModel):
     \text{ELSE:}\\
     &w_c \sim \text{Dir}([1,1]) &\forall c \in C\\
     \text{IF mode == "H":}\\
-    &\frac{X_{.j}}{s_i}\sim (1-w^0_{C(i)})\text{NegBinom}(e^{q^0}, \alpha) + w^1_{C(i)}\text{NegBinom}(e^{q^1}, \alpha)&\forall i \in N\\
+    &X_{ij}\sim (1-w^0_{C(i)})\text{NegBinom}({s_i}*e^{q^0}, \alpha) + w^1_{C(i)}\text{NegBinom}({s_i}*e^{q^1}, \alpha)&\forall i \in N\\
+    \text{ELIF mode == "C":}\\
+    &X_{ij}\sim (1-w^0_{C(i)})\text{NegBinom}({s_i}*e^{q^0}, \alpha_{C(i)}) + w^1_{C(i)}\text{NegBinom}({s_i}*e^{q^1}, \alpha_{C(i)})&\forall i \in N\\
     \text{ELSE:}\\
-    &\frac{X_{.j}}{s_i}\sim (1-w^0_{C(i)})\text{NegBinom}(e^{q^0}, \alpha^0) + w^1_{C(i)}\text{NegBinom}(e^{q^1}, \alpha^1)&\forall i \in N\\
+    &X_{ij}\sim (1-w^0_{C(i)})\text{NegBinom}({s_i}*e^{q^0}, \alpha^0) + w^1_{C(i)}\text{NegBinom}({s_i}*e^{q^1}, \alpha^1)&\forall i \in N\\
     \text{ELSE:}\\
     &w \sim \text{Dir}([1,1])\\
     \text{IF mode == "H":}\\
-    &\frac{X_{.j}}{s_i}\sim (1-w^0)\text{NegBinom}(e^{q^0}, \alpha) + w^1\text{NegBinom}(e^{q^1}, \alpha)&\forall i \in N\\
+    &X_{ij}\sim (1-w^0)\text{NegBinom}({s_i}*e^{q^0}, \alpha) + w^1\text{NegBinom}({s_i}*e^{q^1}, \alpha)&\forall i \in N\\
     \text{ELSE:}\\
-    &\frac{X_{.j}}{s_i}\sim (1-w^0)\text{NegBinom}(e^{q^0}, \alpha^0) + w^1\text{NegBinom}(e^{q^1}, \alpha^1)&\forall i \in N\\
+    &X_{ij}\sim (1-w^0)\text{NegBinom}({s_i}*e^{q^0}, \alpha^0) + w^1\text{NegBinom}({s_i}*e^{q^1}, \alpha^1)&\forall i \in N\\
     \text{IF $X_{.j}^{\text{neg}}$ defined:}\\
     \text{IF mode == "H":}\\
-    &X_{.j}^{\text{neg}} \sim \text{NegBinom}(e^{q^0}, \alpha)&\forall i \in N\\
+    &X_{.j}^{\text{neg}} \sim \text{NegBinom}({s_i}^{\text{neg}}*e^{q^0}, \alpha)&\forall i \in N_{\text{neg}}\\
+    \text{ELIF mode == "C":}\\
+    &X_{.j}^{\text{neg}} \sim \text{NegBinom}({s_i}^{\text{neg}}*e^{q^0}, \alpha[C_{\text{neg}}(i)])&\forall i \in N_{\text{neg}}\\
     \text{ELSE:}\\
-    &X_{.j}^{\text{neg}} \sim \text{NegBinom}(e^{q^0}, \alpha^0)&\forall i \in N\\
+    &X_{.j}^{\text{neg}} \sim \text{NegBinom}({s_i}^{\text{neg}}*e^{q^0}, \alpha^0)&\forall i \in N_{\text{neg}}\\
     \text{s.t.  }  q_{\text{raw}}^0 &< q_{\text{raw}}^1\\
     \end{align}$$
 
@@ -324,16 +373,19 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             **kwargs):
 
         if self.coords is None:
-            raise RuntimeError("Model was not properly initialized. Please call first `preprocess_model_data`")
+            raise RuntimeError("Model was not properly initialized. Please call `build_model` first")
 
         model_config = {**DextraMixerMixtureModel.get_default_model_config(), **kwargs["model_config"]} if (
                 "model_config" in kwargs) else DextraMixerMixtureModel.get_default_model_config()
 
         # data
         x = self.data["x"]
+        size_factor = self.data["size_factor"]
+        size_factor_neg = self.data["size_factor_neg"]
         clone = self.data["clone"]
+        clone_neg = self.data["clone_neg"]
         sigma = self.data["sigma"]
-        neg_cont = self.data["neg_cont"]
+        neg_x = self.data["neg_x"]
 
         # plates
         sample_axis = self.coords["sample_axis"]
@@ -341,7 +393,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         K = cluster_axis.size
         if clone is not None:
             clone_axis = self.coords["clone_axis"]
-        if neg_cont is not None:
+        if neg_x is not None:
             neg_sample_axis = self.coords["neg_sample_axis"]
 
         # hyperprior parameters
@@ -357,6 +409,9 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         # shape prior
         if self.mode == "H":
             alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
+        elif self.mode == "C":
+            with clone_axis:
+                alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
         else:
             with cluster_axis:
                 alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
@@ -377,19 +432,33 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             w = npy.sample("w", npd.Dirichlet(jnp.ones(K)))
             z = npd.Categorical(probs=w)
 
-        q = npy.sample("q", npd.TransformedDistribution(npd.LogNormal(loc=mu_q, scale=sigma_q).expand([K]),
-                                                        npd.transforms.OrderedTransform()))
-        mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q, concentration=alpha))
+        q = npy.sample("q",
+                       npd.TransformedDistribution(npd.LogNormal(loc=mu_q, scale=sigma_q).expand([K]),
+                                                   npd.transforms.OrderedTransform()))
 
-        if neg_cont is not None:
+        if neg_x is not None:
             with neg_sample_axis:
                 if self.mode == "H":
-                    yhat_neg = npy.sample("yhat_neg", npd.NegativeBinomial2(mean=q[0], concentration=alpha), obs=neg_cont)
+                    yhat_neg = npy.sample("yhat_neg",
+                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0], concentration=alpha),
+                                          obs=neg_x)
+                elif self.mode == "C":
+                    yhat_neg = npy.sample("yhat_neg",
+                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0],
+                                                                concentration=alpha[clone_neg]),
+                                          obs=neg_x)
                 else:
-                    yhat_neg = npy.sample("yhat_neg", npd.NegativeBinomial2(mean=q[0], concentration=alpha[0]),
-                                          obs=neg_cont)
+                    yhat_neg = npy.sample("yhat_neg",
+                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0], concentration=alpha[0]),
+                                          obs=neg_x)
 
-        with sample_axis:
+        with sample_axis as i:
+            if self.mode == "C":
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=size_factor[i] * q,
+                                                                         concentration=alpha[clone[i]]))
+            else:
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=size_factor[i] * q, concentration=alpha))
+
             yhat = npy.sample("yhat", mixture, obs=x)
 
             # Until here, where we can track the membership probability of each sample
