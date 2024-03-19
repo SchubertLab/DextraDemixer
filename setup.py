@@ -1,8 +1,6 @@
 from setuptools import setup, find_packages  # Always prefer setuptools over distutils
-from distutils.core import Extension
 from codecs import open  # To use a consistent encoding
 from os import path
-import glob
 
 here = path.abspath(path.dirname(__file__))
 
@@ -85,9 +83,10 @@ setup(
             'numpy>=1.25.2',
             'scipy>=1.11.4'
             'pandas>=2.1.4',
-            'pymc>=5.6.1',
-            #'numpyro>=0.13.2'
-            'arviz>=0.16.0',
+            #'pymc>=5.6.1',
+            'jax>=0.4.20',
+            'numpyro>=0.13.2'
+            'arviz>=0.17.1',
             'mudata>=0.2.3'
             'scanpy>=1.9.8',
             'scirpy>=0.13.0',

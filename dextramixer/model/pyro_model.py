@@ -55,10 +55,10 @@ class DextraMixer:
 
     """
 
-    def __init__(self, model_type: str = "mixturemodel", mode: str = "H", ):
+    def __init__(self, model_type: str = "mixturemodel", mode: str = "H"):
         self.sampler = None
         self.trace = None
-        self.mode = mode
+        self.mode = mode.upper()
         self.model = ADextraMixerModel.registry.get(model_type, DextraMixerMixtureModel)()
 
     @property
