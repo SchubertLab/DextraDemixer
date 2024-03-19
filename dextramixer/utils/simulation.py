@@ -40,7 +40,8 @@ def t_cell_simulation(n_clones=3,
     :n_cell_per_non_binder: range of sampled T cells per non-binding clone (lower than n_cell_per_binder)
     :rnd: random seed
 
-    return: two df (one epitope data and one neg controlle) with n_clones*n_cells_per_clone rows and avidity, binary binding, and clonotype assignment as column
+    return: two df (one epitope data and one neg controle) with n_clones*n_cells_per_clone rows and avidity,
+            binary binding, and clonotype assignment as column
     """
 
     if n_cells_per_non_binder is None:
