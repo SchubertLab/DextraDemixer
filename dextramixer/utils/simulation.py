@@ -1,6 +1,14 @@
+import jax
+
 import numpy as np
 import pandas as pd
+import scanpy as sc
+import anndata as ad
+import numpyro as npy
+import numpyro.distributions as npd
+
 from scipy import stats
+from scipy.special import expit
 
 
 def t_cell_simulation(n_clones=3,
@@ -54,8 +62,8 @@ def t_cell_simulation(n_clones=3,
         mean_binder_range = [500, 510]
 
     np.random.seed(rnd)
-    d = {"avidity": [], "binder": [], "clone": []}
-    d_neg = {"avidity": [], "binder": [], "clone": []}
+    d = {"avidity": [], "binder": [], "clone": [], "size_factor": []}
+    d_neg = {"avidity": [], "binder": [], "clone": [], "size_factor": []}
     binder_assignment = np.random.binomial(1, binding_ratio, size=n_clones)
 
     for i in range(n_clones):
@@ -82,17 +90,142 @@ def t_cell_simulation(n_clones=3,
     return pd.DataFrame.from_dict(d), pd.DataFrame.from_dict(d_neg)
 
 
-def generate_nb_val(mu, alpha, size):
-    """Generate negative binomial distributed samples by
-    drawing a sample from a gamma distribution with mean `mu` and
-    shape parameter `alpha`, then drawing from a Poisson
-    distribution whose rate parameter is given by the sampled
-    gamma variable.
+def simulate_sc_pmhc_data(total_cells: int = 5000,
+                          nof_clones: int = 150,
+                          binding_ratio: float = 0.05,
+                          neg_mean: float = 4.710658073425293,
+                          neg_concentration: float = 0.393927070346017,
+                          binding_fold_increase_range=None,
+                          inv_concentration_range=None,
+                          size_factor_param=None,
+                          cells_per_binder_param=None,
+                          cells_per_nonbinder_param=None,
+                          clonotype_covariance: np.array = None,
+                          generate_neg_x: bool = False,
+                          rnd: int = 42
+                          ) -> sc.AnnData:
     """
-    g = stats.gamma.rvs(alpha, scale=mu / alpha, size=size)
-    if len(g) <= 1:
-        return [stats.poisson.rvs(g)]
-    return stats.poisson.rvs(g)
+    Given negative control mean and concentration parameters (estimated from real data) generate binding data with
+    predefined positive fold-change. All other parameters should be also realistic.
+
+    Args:
+        total_cells: number of total cell to generate
+        nof_clones: number of clones measured in experiments.
+        binding_ratio: ratio of binder vs non-binder
+        neg_mean: the mean parameter of a Negative Binomial distribution fitted against negative control
+                   pMHC-dextramer data.
+        neg_concentration: the concentration parameter of a Negative Binomial distribution fitted against negative
+                           control pMHC-dextramer data.
+        binding_fold_increase_range: a list of positive fold-changes based on the neg_mean for `binding` data from which
+                                   randomly will be selected.
+        inv_concentration_range: a tuple of start and end ranges of inverse concentration parameters from which randomly
+                                 samples will be generated for each clone.
+        size_factor_param: a triple of lognormal params with which library sizes are drawn per cell.
+        cells_per_binder_param: loc and scale parameter of exponential distribution fitted against clone size data
+        cells_per_nonbinder_param: loc and scale parameter of exponential distribution fitted against clone size data (<=10)
+        clonotype_covariance: covariance matrix based on sequence-distances of clonotype.
+        generate_neg_x: boolean indicating whether negative control samples should be generated for each clone.
+        rnd: random seed.
+
+    Returns:
+        An Anndata object containing all generated count data and clonal information, size_factors, and binder status
+    """
+
+    np.random.seed(rnd)
+
+    if cells_per_nonbinder_param is None:
+        cells_per_nonbinder_param = [1, 1.759259259259259]
+    if cells_per_binder_param is None:
+        cells_per_binder_param = [11.0, 179.78571428571428]
+    if inv_concentration_range is None:
+        inv_concentration_range = [0.001, 2.5]
+    if binding_fold_increase_range is None:
+        binding_fold_increase_range = [0.5, 1, 5, 10, 50, 100, 150, 200]
+    if size_factor_param is None:
+        size_factor_param = [0.8, 1.3]
+
+    if clonotype_covariance is None:
+        binder_assignment = np.random.binomial(1, binding_ratio, size=nof_clones)
+    else:
+        # inducing correlation structure TODO: might need to add noise here?
+        p_clone = expit(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=clonotype_covariance))
+        binder_assignment = np.random.binomial(1, p_clone)
+
+    total_le = total_cells - nof_clones
+    raw_cells_per_clone = np.array(stats.expon.rvs(*cells_per_binder_param)
+                                   if binder_assignment[i] else stats.expon.rvs(*cells_per_nonbinder_param)
+                                   for i in range(nof_clones))
+    raw_cells_per_clone_norm = raw_cells_per_clone/raw_cells_per_clone.sum()
+    cells_per_clone = np.random.multinomial(total_le, raw_cells_per_clone_norm) + np.ones(nof_clones)
+
+    d = {"x": [], "x_neg": [], "binder": [], "clone": [],
+         "size_factor": [], "fold_increase": [], "mean": [], "concentration": []}
+
+    for i in range(nof_clones):
+        is_binder = binder_assignment[i]
+        n_cells = cells_per_clone[i]
+        size_factor = stats.lognorm.rvs(size_factor_param, size=n_cells)
+
+        if is_binder:
+            fold_change = np.random.choice(*binding_fold_increase_range)
+            mean = size_factor * (neg_mean + fold_change*neg_mean)
+            concentration = 1.0/np.random.uniform(*inv_concentration_range)
+            x = generate_nb_val(mean, concentration, size=n_cells)
+        else:
+            fold_change = 0
+            mean = size_factor * neg_mean
+            a = (0.001 - neg_concentration) / (neg_concentration/3)
+            concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration/3)
+            x = generate_nb_val(mean, concentration, size=n_cells)
+
+        d["x"].extend(x)
+        d["binder"].extend([is_binder] * n_cells)
+        d["clone"].extend([i] * n_cells)
+        d["size_factor"].extend(size_factor)
+        d["fold_increase"].extend([fold_change] * n_cells)
+        d["mean"].extend(mean)
+        d["concentration"].extend([concentration] * n_cells)
+        d["x_neg"].extend([np.NaN]*n_cells)
+
+        if generate_neg_x:
+            n_cells = np.random.randint(*cells_per_nonbinder_param)
+            size_factor = np.random.uniform(*size_factor_param)
+            fold_change = 0
+            mean = size_factor * neg_mean
+            concentration = neg_concentration
+            x_neg = generate_nb_val(mean, concentration, size=n_cells)
+
+            d["x"].extend([np.NaN] * n_cells)
+            d["binder"].extend([0] * n_cells)
+            d["clone"].extend([i] * n_cells)
+            d["size_factor"].extend([size_factor] * n_cells)
+            d["fold_increase"].extend([fold_change] * n_cells)
+            d["mean"].extend([mean] * n_cells)
+            d["concentration"].extend([concentration] * n_cells)
+            d["x_neg"].extend([x_neg] * n_cells)
+
+    adata = ad.AnnData(np.array([d["x"], d["x_neg"]], dtype="float64").T)
+    adata.var_names = ["epitope1", "neg_control"]
+    adata.obs["size_factor"] = d["size_factor"]
+    adata.obs["binder"] = d["binder"]
+    adata.obs["clone"] = d["clone"]
+    adata.obs["fold_increase"] = d["fold_change"]
+    adata.obs["mean"] = d["mean"]
+    adata.obs["concentration"] = d["concentration"]
+
+    return adata
+
+
+def generate_nb_val(mu, alpha, size=1, rng_key=42):
+    """Generate negative binomial samples
+
+    Args:
+        mu: the mean parameter (must be positive)
+        alpha: the inverse overdispersion parameter (must be positive)
+        size: the number of iid draws
+        rng_key: an integer to initialize the random key generator.
+    """
+    return npd.NegativeBinomial2(mu, alpha).sample(jax.random.PRNGKey(rng_key), sample_shape=(size,))
 
 
 def convert_neg_bino_params(mu, std):
