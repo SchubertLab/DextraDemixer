@@ -1,5 +1,5 @@
 import warnings
-from typing import Union
+from typing import Union, Tuple, Optional
 
 import jax
 
@@ -18,7 +18,7 @@ from scipy.special import expit
 
 import matplotlib.pyplot as plt
 
-from dextramixer.utils import sample_cov_from_eigs, dist_to_cov
+from dextramixer.utils.utils import sample_cov_from_eigs, dist_to_cov
 
 
 def t_cell_simulation(n_clones=3,
@@ -113,16 +113,23 @@ class DextramerSimulator:
         default_params = {
             "neg_mean": 4.710658073425293,
             "neg_concentration": 0.393927070346017,
-            "size_factor_param": [0.42792255, -262.7462615966805, 1361.486],
-            "cells_per_binder_param": [11.0, 179.78571428571428],
-            "cells_per_nonbinder_param": [1, 1.759259259259259],
+            "size_factor_param": (0.42792255, -262.7462615966805, 1361.486),
+            "cells_per_binder_param": [0.005516163158815324, 3559.0, 10.0],
+            "cells_per_nonbinder_param": [0.450069425326169, 1874.0, 1.0],
             "concentration_param": [0.001, 2.5],
-            "clonotype_eigs_param": [0, 1],
+            "clonotype_eigs_param": (-155.18652967415233, 532.7534635778651),
         }
         return default_params
 
-    def estimate_simulation_params(self, mdata, neg_cont_key, gex_key="gex", ir_key="airr", ir_dist_key="",
-                                   boltzmann_boundary=(0, 10000), plot_qq=False, rng_key=42):
+    def estimate_simulation_params(self,
+                                   mdata: md.MuData,
+                                   neg_cont_key: str,
+                                   gex_key: str = "gex",
+                                   ir_key: str = "airr",
+                                   ir_dist_key: str = "dist",
+                                   boltzmann_boundary: Tuple[int, int] = (0, 10000),
+                                   plot_qq: bool = False,
+                                   rng_key: int = 42) -> Optional[plt.Axes]:
         """
         Estimates necessary parameters from real world pMHC data. Requires a negative control pMHC dextramer
         and known clonotype ids and clonotype distances based on some distance measure.
@@ -213,6 +220,9 @@ class DextramerSimulator:
             return self.__qq_plot(size_factor, clone_size, q80_clone_size, invdisp, dist, cov, eigs)
 
     def __qq_plot(self, size_factor, clone_size, q80_clone_size, invdisp, dist, cov, eigs):
+        """
+        Plots QQ plots of fitted theoretical distribution against empirical distribution
+        """
 
         if self.params is not None:
             params = DextramerSimulator.default_params().update(self.params)
@@ -266,11 +276,12 @@ class DextramerSimulator:
                            binding_ratio: float = 0.05,
                            binding_fold_increase_range: list[float] = None,
                            use_clonotype_cov: bool = False,
+                           simulate_neg_control: bool = False,
                            rng_key: int = 42
-                           ) -> sc.AnnData:
+                           ) -> md.MuData:
         """
         Given negative control mean and concentration parameters (estimated from real data) generate binding data for
-        one epitope with predefined positive fold-change.
+        one pMHC with predefined positive fold-change.
 
         Args:
             total_cells: number of total cell to generate
@@ -278,6 +289,7 @@ class DextramerSimulator:
             binding_ratio: ratio of binder vs non-binder
             binding_fold_increase_range: list of fold increase for pMHC binding cells
             use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
+            simulate_neg_control: whether to simulate a negative control pMHC for each cell (default: False)
             rng_key: random seed.
 
         Returns:
@@ -301,7 +313,7 @@ class DextramerSimulator:
         concentration_param = params["concentration_param"]
 
         if binding_fold_increase_range is None:
-            binding_fold_increase_range = [0.5, 1, 5, 10, 50, 100, 150, 200]
+            binding_fold_increase_range = [ 200] # 0.5, 1, 5, 10, 50, 100, 150,
 
         if use_clonotype_cov:
             # sample covariance matrix
@@ -316,33 +328,38 @@ class DextramerSimulator:
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
         total_le = total_cells - nof_clones
-        raw_cells_per_clone = np.array(stats.boltzmann.rvs(*cells_per_binder_param)
+        raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_binder_param)
                                        if binder_assignment[i] else stats.boltzmann.rvs(*cells_per_nonbinder_param)
-                                       for i in range(nof_clones))
-        cells_per_clone_p = stats.dirichlet(raw_cells_per_clone)
-        cells_per_clone = np.random.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)
+                                       for i in range(nof_clones)])
+        cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone)[0]
+        cells_per_clone = (np.random.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
-        d = {"x": [], "binder": [], "clone": [],
+        d = {"x": [], "x_neg": [], "binder": [], "clone": [],
              "size_factor": [], "fold_increase": [], "mean": [], "concentration": []}
 
         for i in range(nof_clones):
             is_binder = binder_assignment[i]
             n_cells = cells_per_clone[i]
-            size_factor = stats.lognorm.rvs(size_factor_param, size=n_cells)
+            size_factor = stats.lognorm.rvs(*size_factor_param, size=n_cells)
 
             if is_binder:
-                fold_change = np.random.choice(*binding_fold_increase_range)
+                fold_change = np.random.choice(binding_fold_increase_range)
                 mean = size_factor * (neg_mean + fold_change * neg_mean)
                 concentration = stats.gamma.rvs(*concentration_param)
-                x = self.generate_nb_val(mean, concentration, size=n_cells)
             else:
                 fold_change = 0
                 mean = size_factor * neg_mean
                 a = (0.001 - neg_concentration) / (neg_concentration / 3)
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3)
-                x = self.generate_nb_val(mean, concentration, size=n_cells)
 
-            d["x"].extend(x)
+            x = self.generate_nb_val(mean, concentration)
+
+            if simulate_neg_control:
+                mean = size_factor * neg_mean
+                x_neg = self.generate_nb_val(mean, neg_concentration)
+                d["x_neg"].extend(x_neg[0].tolist())
+
+            d["x"].extend(x[0].tolist())
             d["binder"].extend([is_binder] * n_cells)
             d["clone"].extend([i] * n_cells)
             d["size_factor"].extend(size_factor)
@@ -350,72 +367,25 @@ class DextramerSimulator:
             d["mean"].extend(mean)
             d["concentration"].extend([concentration] * n_cells)
 
-        adata = ad.AnnData(np.array([d["x"]], dtype="float64").T)
-        adata.var_names = ["epitope1"]
+        if simulate_neg_control:
+            adata = ad.AnnData(np.array([d["x"], d["x_neg"]], dtype="float64").T)
+            adata.var_names = ["pmhc1", "neg_control"]
+        else:
+            adata = ad.AnnData(np.array([d["x"]]).T)
+            adata.var_names = ["pmhc1"]
+        adata.var["feature_types"] = ["Antigen Capture"]
         adata.obs["size_factor"] = d["size_factor"]
-        adata.obs["binder"] = d["binder"]
-        adata.obs["clone"] = d["clone"]
-        adata.obs["fold_increase"] = d["fold_change"]
+        adata.obs["fold_increase"] = d["fold_increase"]
         adata.obs["mean"] = d["mean"]
         adata.obs["concentration"] = d["concentration"]
 
-        return adata
+        adata_tcr = ad.AnnData()
+        adata_tcr.obs["is_binder"] = d["binder"]
+        adata_tcr.obs["clone_id"] = d["clone"]
+        if use_clonotype_cov:
+            adata_tcr.uns["clone_cov"] = cov
 
-    def simulate_neg_control_pmhc(self,
-                                  adata_sim: Union[sc.AnnData, md.MuData],
-                                  modality_key: str = "gex",
-                                  n_cells: int = 500,
-                                  rng_key: int = 42
-                                  ):
-        """
-        Simulates negative control pMHC dextramer.
-
-        Args:
-            adata_sim: anndata containing simulated pMHC data.
-            modality_key: key to pMHC modality anndata in case MuData was given
-            n_cells: number of cells to generate
-            rng_key: random seed.
-        """
-        np.random.seed(rng_key)
-
-        if isinstance(adata_sim, md.MuData):
-            adata = adata_sim[modality_key]
-            is_MuData = True
-        if isinstance(adata_sim, sc.AnnData):
-            adata = adata_sim
-            is_MuData = False
-
-        if self.params is not None:
-            params = {**DextramerSimulator.default_params(), **self.params}
-        else:
-            params = DextramerSimulator.default_params()
-
-        # params
-        neg_mean = params["neg_mean"]
-        neg_concentration = params["neg_concentration"]
-        size_factor_param = params["size_factor_param"]
-
-        size_factor = stats.lognorm.rvs(*size_factor_param, size=n_cells)
-        mean = size_factor * neg_mean
-        concentration = neg_concentration
-        x_neg = self.generate_nb_val(mean, concentration, size=n_cells)
-
-        adat_neg = ad.AnnData(np.array(x_neg, dtype="float64").T)
-        adat_neg.var_names = ["neg_control"]
-        adat_neg.obs["size_factor"] = size_factor
-        adat_neg.obs["binder"] = [0] * n_cells
-        adat_neg.obs["clone"] = [-1] * n_cells
-        adat_neg.obs["fold_increase"] = [0] * n_cells
-        adat_neg.obs["mean"] = mean
-        adat_neg.obs["concentration"] = [neg_concentration] * n_cells
-
-        adata_new = ad.concat([adata, adat_neg], join="outer")
-
-        if is_MuData:
-            adata_sim.mod[modality_key] = adata_new
-            return adata_sim
-        else:
-            return adata_new
+        return md.MuData({"gex": adata, "airr": adata_tcr})
 
     @staticmethod
     def generate_nb_val(mu, alpha, size=1, rng_key=42):
