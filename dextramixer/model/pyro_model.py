@@ -13,11 +13,9 @@ import scanpy as sc
 # import scirpy as ir
 # from mudata import MuData
 from anndata import AnnData
-
+import jax
 from jax import random
 from jax.nn import logsumexp
-from jax.config import config
-
 import jax.numpy as jnp
 
 import numpyro as npy
@@ -30,7 +28,7 @@ if TYPE_CHECKING:
     from jax._src.prng import PRNGKeyArray
     from jax._src.typing import Array
 
-config.update("jax_enable_x64", True)
+jax.config.update("jax_enable_x64", True)
 
 
 class DextraMixer:
@@ -233,9 +231,12 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         float_dtype = "float64"
         int_dtype = "int32"
 
-        self.data = {"x": jnp.array(x, dtype=float_dtype),
+        N = x.shape[0]
+        K = 2
+
+        self.data = {"x": jnp.array(x, dtype=int_dtype),
                      "neg_x": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
-                     "size_factor": jnp.array(size_factor, dtype=float_dtype),
+                     "size_factor": jnp.array(size_factor, dtype=float_dtype).reshape((N, 1)),
                      "size_factor_neg": None if size_factor_neg is None else jnp.array(size_factor_neg,
                                                                                        dtype=float_dtype),
                      "clone": None if c is None else jnp.array(c, dtype=int_dtype),
@@ -244,9 +245,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
                      }
 
         self.mode = mode
-
-        N = x.shape[0]
-        K = 2
 
         # set coord axis
         self.coords = {
@@ -258,7 +256,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
             C_nof = len(jnp.unique(self.data["clone"]))
             self.coords["clone_axis"] = npy.plate("clone_axis", C_nof, dim=-1)
 
-        if self.data["neg_cont"] is not None:
+        if self.data["neg_x"] is not None:
             N_neg = neg_cont.shape[0]
             self.coords["neg_sample_axis"] = npy.plate("neg_sample_axis", N_neg, dim=-1)
 
@@ -433,7 +431,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             z = npd.Categorical(probs=w)
 
         q = npy.sample("q",
-                       npd.TransformedDistribution(npd.LogNormal(loc=mu_q, scale=sigma_q).expand([K]),
+                       npd.TransformedDistribution(npd.LogNormal(loc=mu_q, scale=sigma_q).expand((K,)),
                                                    npd.transforms.OrderedTransform()))
 
         if neg_x is not None:
@@ -455,7 +453,10 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         with sample_axis as i:
             if self.mode == "C":
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=size_factor[i] * q,
-                                                                         concentration=alpha[clone[i]]))
+                                                                         concentration=alpha[clone[i]].reshape(
+                                                                             (sample_axis.size, 1))
+                                                                         )
+                                                )
             else:
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=size_factor[i] * q, concentration=alpha))
 
