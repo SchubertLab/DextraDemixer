@@ -114,7 +114,7 @@ class DextraMixer:
         x = agex[:, pmhc_key].X
         x_neg = agex[:, neg_cont_key].X if neg_cont_key else None
         _, size_factor = sc.pp.normalize_total(mdata["gex"], inplace=False).values()
-
+        size_factor = size_factor.reshape(x.shape[0], 1)
         c = air.obs[ir_clone_id].to_numpy().astype("int32") if ir_clone_id is not None else None
         sigma = air.uns[ir_cov_key] if ir_cov_key is not None else None
 
@@ -279,7 +279,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         N = x.shape[0]
         K = 2
 
-        self.data = {"x": jnp.array(x, dtype=float_dtype),
+        self.data = {"x": jnp.array(x, dtype=int_dtype),
                      "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
                      "size_factor": jnp.array(size_factor, dtype=float_dtype),
                      "clone": None if c is None else jnp.array(c, dtype=int_dtype),

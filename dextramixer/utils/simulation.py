@@ -43,7 +43,8 @@ def t_cell_simulation(n_clones=3,
             a4. draw count data from negative binomial n_cells_per_clone times with generated parameters
         
         B. for non-binder: 
-            b1. draw from an epitope-specific negative binomial, representing unspecific binding, with low mean and moderate std 
+            b1. draw from an epitope-specific negative binomial, representing unspecific binding, with low mean and
+                moderate std
             b2. draw n_cell_per_clone uniformly from n_cell_per_non_binder
             b3. draw count data from negative binomial n_cells_per_clone times with generated parameters
 
@@ -81,23 +82,38 @@ def t_cell_simulation(n_clones=3,
 
         if is_binder:
             n_cell = np.random.randint(*n_cells_per_binder, size=1)[0]
+
             mean = np.random.uniform(*mean_binder_range, size=1)[0]
             shape = np.random.uniform(*shape_binder_range, size=1)[0]
-            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean, shape, size=n_cell))
-            d["binder"].extend([is_binder] * n_cell)
-            d["clone"].extend([i] * n_cell)
+            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean, shape, size=n_cell).tolist())
+
         else:
             n_cell = np.random.randint(*n_cells_per_non_binder, size=1)[0]
-            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean_non_binder, shape_non_binder, size=n_cell))
-            d["binder"].extend([is_binder] * n_cell)
-            d["clone"].extend([i] * n_cell)
+            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean_non_binder, shape_non_binder, size=n_cell).tolist())
 
-        n_cell = np.random.randint(*n_cells_per_non_binder, size=1)[0]
-        d_neg["avidity"].extend(DextramerSimulator.generate_nb_val(mean_non_binder, shape_non_binder, size=n_cell))
+        d["binder"].extend([is_binder] * n_cell)
+        d["clone"].extend([i] * n_cell)
+        d["size_factor"].extend(np.ones(n_cell))
+
+        d_neg["avidity"].extend(DextramerSimulator.generate_nb_val(mean_non_binder,
+                                                                   shape_non_binder, size=n_cell).tolist())
         d_neg["binder"].extend([0] * n_cell)
         d_neg["clone"].extend([i] * n_cell)
+        d_neg["size_factor"].extend(np.ones(n_cell))
 
-    return pd.DataFrame.from_dict(d), pd.DataFrame.from_dict(d_neg)
+    print(len(d["avidity"]))
+    print(len(d_neg["avidity"]))
+
+    adata = ad.AnnData(np.array([d["avidity"], d_neg["avidity"]], dtype="float64").T)
+    adata.var_names = ["pmhc1", "neg_control"]
+    adata.var["feature_types"] = ["Antigen Capture", "Antigen Capture"]
+    adata.obs["size_factor"] = d["size_factor"]
+
+    adata_tcr = ad.AnnData()
+    adata_tcr.obs["is_binder"] = d["binder"]
+    adata_tcr.obs["clone_id"] = d["clone"]
+
+    return md.MuData({"gex": adata, "airr": adata_tcr})
 
 
 class DextramerSimulator:

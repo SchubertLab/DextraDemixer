@@ -8,19 +8,29 @@ import jax.numpy as jnp
 
 from dextramixer.model import DextraMixer
 from dextramixer.utils import DextramerSimulator
-
+from dextramixer.utils.simulation import t_cell_simulation
 
 class MyTestCase(unittest.TestCase):
 
     def setUp(self):
         npy.set_platform("cpu")
         npy.set_host_device_count(4)
-        self.mdata = DextramerSimulator().simulate_pmhc_data(total_cells=200, nof_clones=5, binding_ratio=0.5)
-        self.binder = self.mdata.mod["airr"].obs["is_binder"]
-        #print(self.mdata)
+        #self.mdata = DextramerSimulator().simulate_pmhc_data(total_cells=10, nof_clones=4, binding_ratio=0.5)
+        self.mdata = t_cell_simulation(n_clones=10,
+                                       mean_binder_range=[350, 550],
+                                       shape_binder_range=[300, 500],
+                                       n_cells_per_binder=[50, 100],
+                                       mean_non_binder=50,
+                                       shape_non_binder=10,
+                                       n_cells_per_non_binder=[50, 100],
+                                       binding_ratio=0.5,
+                                       rnd=443)
+
+        self.binder = self.mdata.mod["airr"].obs["is_binder"].to_numpy()
+        print(self.mdata)
 
     def test_model_registration(self):
-       print(DextraMixer.available_methods())
+        print(DextraMixer.available_methods())
 
     def test_simple_mixture_model(self):
         mixer = DextraMixer(model_type="mixturemodel")
@@ -71,6 +81,10 @@ class MyTestCase(unittest.TestCase):
         print(az.summary(trace, var_names=["~log_p"]))
 
         p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+
+        print("p", p.shape)
+        print("assig", assignment.shape)
+        print("binder", self.binder.shape)
 
         N = len(self.binder)
         accuracy = (self.binder == assignment).sum() / N
