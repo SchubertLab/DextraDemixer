@@ -84,8 +84,8 @@ setup(
             'scipy>=1.11.4'
             'pandas>=2.1.4',
             #'pymc>=5.6.1',
-            'jax>=0.4.20',
-            'numpyro>=0.13.2'
+            'jax>=0.4.26',
+            'numpyro>=0.14.0'
             'arviz>=0.17.1',
             'mudata>=0.2.3'
             'scanpy>=1.9.8',
