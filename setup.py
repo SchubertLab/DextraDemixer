@@ -84,6 +84,8 @@ setup(
             'scipy>=1.11.4'
             'pandas>=2.1.4',
             #'pymc>=5.6.1',
+            'statsmodels>=0.14.1',
+            'matplotlib>=3.8.3',
             'jax>=0.4.26',
             'numpyro>=0.14.0'
             'arviz>=0.17.1',
