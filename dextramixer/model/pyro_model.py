@@ -89,9 +89,10 @@ class DextraMixer:
                               mdata: md.MuData,
                               pmhc_key: str,
                               gex_key: str = "gex",
-                              neg_cont_key: str = None,
+                              size_factor_key: str = None,
+                              neg_ctrl_key: str = None,
                               ir_key: str = "airr",
-                              ir_clone_id: str = None,
+                              ir_clone_key: str = None,
                               ir_cov_key: str = None,
                               **kwargs):
         """
@@ -101,21 +102,28 @@ class DextraMixer:
             mdata: A Mudata containing only dextramer counts and clonotype information
             pmhc_key: a string specifying the pMHC column in `gex_key` modality`s `X` which should be deconvolved
             gex_key: the MuData transcriptome module key
-            neg_cont_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
+            size_factor_key: the obs key to where size factors for each cell are stored in the gex Anndata. If `None`
+                             size factors will be calculated based on scanpy's `normalize_total` function
+            neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
             ir_key: the MuData AIRR module key
-            ir_clone_id: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
+            ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
             ir_cov_key: (Optional) the key in AIRR module's `.uns` that contains a full, symmetric and square distance matrix
                          for all clonotype cluster
-            kwargs: dicitionary of additional information pasted to the Model object (used for custom model prior)
+            kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
         """
-        agex = mdata.mod[gex_key]
+        gex = mdata.mod[gex_key]
         air = mdata.mod[ir_key]
+        N = gex.shape[0]
 
-        x = agex[:, pmhc_key].X
-        x_neg = agex[:, neg_cont_key].X if neg_cont_key else None
-        _, size_factor = sc.pp.normalize_total(mdata["gex"], inplace=False).values()
+        x = gex[:, pmhc_key].X.reshape((N, ))
+        x_neg = gex[:, neg_ctrl_key].X.reshape((N,)) if neg_ctrl_key else None
+        if size_factor_key is None:
+            _, size_factor = sc.pp.normalize_total(mdata["gex"], inplace=False).values()
+        else:
+            size_factor = gex.obs[size_factor_key].to_numpy()
+
         size_factor = size_factor.reshape(x.shape[0], 1)
-        c = air.obs[ir_clone_id].to_numpy().astype("int32") if ir_clone_id is not None else None
+        c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
         sigma = air.uns[ir_cov_key] if ir_cov_key is not None else None
 
         self.__check_parameters(x, x_neg, size_factor, c, sigma)
@@ -137,7 +145,7 @@ class DextraMixer:
         }
         return sampler_config
 
-    def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng: int = 3) -> az.InferenceData:
+    def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng_key: int = 3) -> az.InferenceData:
         """
         fits the mixture model with MCMC and returns the trace
         """
@@ -156,7 +164,7 @@ class DextraMixer:
             **sampling_config
         )
 
-        self.sampler.run(random.PRNGKey(rng))
+        self.sampler.run(random.PRNGKey(rng_key))
 
         return self.__make_arvis()
 
@@ -212,6 +220,11 @@ class DextraMixer:
             assignment = jnp.argmax(p_, axis=1)
         return p, assignment
 
+    def summary(self):
+        if self.trace is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit()` first.")
+        return az.summary(self.trace, var_names=["~log_p"])
+
     def __make_arvis(self):
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
@@ -220,7 +233,6 @@ class DextraMixer:
         """
         checks consistency of input data before initializing the model
         """
-
         N = x.shape[0]
 
         if self.mode == "C":
@@ -388,7 +400,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
     def __init__(self):
         super().__init__()
         self._name = "mixturemodel"
-        self._version = "0.0.1"
+        self._version = "0.0.2"
 
     @staticmethod
     def get_default_model_config() -> Dict:
@@ -422,6 +434,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         x = self.data["x"]
         x_neg = self.data["x_neg"]
         size_factor = self.data["size_factor"].reshape(self.coords["sample_axis"].size, 1)
+        size_factor_neg = self.data["size_factor"].reshape((self.coords["sample_axis"].size,))
         clone = self.data["clone"]
         sigma = self.data["sigma"]
 
@@ -478,16 +491,16 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             with neg_sample_axis:
                 if self.mode == "H":
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor * q[0], concentration=alpha),
+                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0], concentration=alpha),
                                           obs=x_neg)
                 elif self.mode == "C":
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor * q[0],
+                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0],
                                                                 concentration=alpha[clone]),
                                           obs=x_neg)
                 else:
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor * q[0], concentration=alpha[0]),
+                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0], concentration=alpha[0]),
                                           obs=x_neg)
 
         with sample_axis as i:

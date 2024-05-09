@@ -24,7 +24,7 @@ class MyTestCase(unittest.TestCase):
                                        shape_non_binder=10,
                                        n_cells_per_non_binder=[50, 100],
                                        binding_ratio=0.5,
-                                       rnd=443)
+                                       rng_key=443)
 
         self.binder = self.mdata.mod["airr"].obs["is_binder"].to_numpy()
         print(self.mdata)
@@ -32,59 +32,84 @@ class MyTestCase(unittest.TestCase):
     def test_model_registration(self):
         print(DextraMixer.available_methods())
 
-    def test_simple_mixture_model(self):
-        mixer = DextraMixer(model_type="mixturemodel")
-        mixer.preprocess_model_data(self.mdata, "pmhc1")
-
-    # @TODO
-    # @unittest.SkipTest
-    # def test_GPU_Metal(self):
-    #     npy.set_platform("METAL")
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="H")
-    #     mixer.preprocess_model_data(self.X, self.size_factor)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_H(self):
-    #     npy.set_platform("cpu")
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="H")
-    #     mixer.preprocess_model_data(self.X, self.size_factor)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_ppc_threshold(self):
-    #     npy.set_platform("cpu")
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="H")
-    #     mixer.preprocess_model_data(self.X, self.size_factor)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(threshold=0.5)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_I(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="I")
-    #     mixer.preprocess_model_data(self.X, self.size_factor)
+    @unittest.SkipTest
+    def test_GPU_Metal(self):
+        npy.set_platform("METAL")
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
 
         p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
 
-        print("p", p.shape)
-        print("assig", assignment.shape)
-        print("binder", self.binder.shape)
+    def test_simple_mixture_model_H(self):
+        npy.set_platform("cpu")
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_sampler_config_override(self):
+        npy.set_platform("cpu")
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control",
+                                    size_factor_key="size_factor")
+        trace = mixer.fit(sampler_config={
+            "num_samples": 500,
+            "num_chains": 4,
+            "progress_bar": False,
+            "nuts": {
+                "target_accept_prob": 0.95,
+                "max_tree_depth": 10
+            }
+        })
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_ppc_threshold(self):
+        npy.set_platform("cpu")
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_ppc_argmax(self):
+        npy.set_platform("cpu")
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    neg_ctrl_key="neg_control")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class()
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_I(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
 
         N = len(self.binder)
         accuracy = (self.binder == assignment).sum() / N
@@ -92,7 +117,7 @@ class MyTestCase(unittest.TestCase):
 
     def test_posterior_threshold(self):
         mixer = DextraMixer(model_type="mixturemodel")
-        mixer.preprocess_model_data(self.mdata, "pmhc1")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor")
         trace = mixer.fit()
         print(az.summary(trace))
 
@@ -104,23 +129,22 @@ class MyTestCase(unittest.TestCase):
         accuracy = (self.binder == assignment).sum() / N
         print("Accuracy", accuracy)
 
-    # TODO
-    # def test_simple_mixture_neg_control_H(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="H")
-    #     mixer.preprocess_model_data(self.X, self.size_factor,
-    #                                 neg_x=self.neg_cont,
-    #                                 size_factor_neg=self.size_factor_neg)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
+    def test_simple_mixture_neg_control_H(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    neg_ctrl_key="neg_control")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
 
     def test_simple_mixture_neg_control_I(self):
         mixer = DextraMixer(model_type="mixturemodel", mode="I")
-        mixer.preprocess_model_data(self.mdata, "pmhc1")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    neg_ctrl_key="neg_control")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
 
@@ -131,7 +155,8 @@ class MyTestCase(unittest.TestCase):
 
     def test_simple_mixture_model_C_I(self):
         mixer = DextraMixer(model_type="mixturemodel", mode="I")
-        mixer.preprocess_model_data(self.mdata, "pmhc1")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    ir_clone_key="clone_id")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
 
@@ -140,86 +165,104 @@ class MyTestCase(unittest.TestCase):
         accuracy = (self.binder == assignment).sum() / N
         print("Accuracy", accuracy)
 
-    # TODO
-    # def test_simple_mixture_model_C_C(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="C")
-    #     mixer.preprocess_model_data(self.X, self.size_factor, c=self.C)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_Sigma_H(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="H")
-    #     mixer.preprocess_model_data(self.X, self.size_factor, c=self.C, sigma=self.Sigma)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_Sigma_I(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="I")
-    #     mixer.preprocess_model_data(self.X, self.size_factor, c=self.C, sigma=self.Sigma)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_Sigma_C(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="C")
-    #     mixer.preprocess_model_data(self.X, self.size_factor, c=self.C, sigma=self.Sigma)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_full_H(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="H")
-    #     mixer.preprocess_model_data(self.X, self.size_factor, c=self.C, sigma=self.Sigma,
-    #                                 neg_x=self.neg_cont, size_factor_neg=self.size_factor_neg)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_full_I(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="I")
-    #     mixer.preprocess_model_data(self.X, self.size_factor, c=self.C, sigma=self.Sigma,
-    #                                 neg_x=self.neg_cont, size_factor_neg=self.size_factor_neg)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
-    #
-    # def test_simple_mixture_model_full_C(self):
-    #     mixer = DextraMixer(model_type="mixturemodel", mode="C")
-    #     mixer.preprocess_model_data(self.X, self.size_factor, c=self.C, sigma=self.Sigma,
-    #                                 neg_x=self.neg_cont, size_factor_neg=self.size_factor_neg, c_neg=self.neg_c)
-    #     trace = mixer.fit()
-    #     print(az.summary(trace, var_names=["~log_p"]))
-    #
-    #     p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
-    #     N = len(self.binder)
-    #     accuracy = (self.binder == assignment).sum() / N
-    #     print("Accuracy", accuracy)
+    def test_simple_mixture_model_C_H(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    ir_clone_key="clone_id")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_C_C(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    ir_clone_key="clone_id")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_Sigma_H(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    ir_clone_key="clone_id", ir_cov_key="ir_cov")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_Sigma_I(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    ir_clone_key="clone_id", ir_cov_key="ir_cov")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_Sigma_C(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    ir_clone_key="clone_id", ir_cov_key="ir_cov")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_full_H(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    neg_ctrl_key="neg_control",
+                                    ir_clone_key="clone_id", ir_cov_key="ir_cov")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_full_I(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    neg_ctrl_key="neg_control",
+                                    ir_clone_key="clone_id", ir_cov_key="ir_cov")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_full_C(self):
+        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor",
+                                    neg_ctrl_key="neg_control",
+                                    ir_clone_key="clone_id", ir_cov_key="ir_cov")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(self.binder)
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
 
 
 if __name__ == '__main__':
