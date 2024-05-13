@@ -87,6 +87,8 @@ setup(
             'statsmodels>=0.14.1',
             'matplotlib>=3.8.3',
             'jax>=0.4.26',
+            'jax-lib>=0.4.26',
+            'jax-metal>=0.0.7; platform_system=="darwin"'
             'numpyro>=0.14.0'
             'arviz>=0.17.1',
             'mudata>=0.2.3'
