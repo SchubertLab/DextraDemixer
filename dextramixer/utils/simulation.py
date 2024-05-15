@@ -1,7 +1,7 @@
 import collections.abc
 import numbers
 import warnings
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Optional, Any
 
 import jax
 
@@ -14,6 +14,7 @@ import mudata as md
 import numpyro as npy
 import numpyro.distributions as npd
 import statsmodels.formula.api as smf
+from mudata import MuData
 
 from scipy import stats
 from scipy.special import expit
@@ -21,6 +22,8 @@ from scipy.special import expit
 import matplotlib.pyplot as plt
 
 from dextramixer.utils.utils import sample_cov_from_eigs, dist_to_cov, remove_outliers, convert_neg_binom_params
+
+jax.config.update("jax_enable_x64", True)
 
 
 def generate_nb_val(mu, alpha, size):
@@ -135,6 +138,7 @@ class DextramerSimulator:
     """
 
     def __init__(self):
+        self.dist_params = None
         self.params = None
 
     @staticmethod
@@ -142,10 +146,10 @@ class DextramerSimulator:
         default_params = {
             "neg_mean": 4.710658073425293,
             "neg_concentration": 0.393927070346017,
-            "size_factor_param": (0.42792255, -262.7462615966805, 1361.486),
+            #"size_factor_param": (0.42792255, -262.7462615966805, 1361.486),
             "cells_per_binder_param": [0.005516163158815324, 3559.0, 10.0],
             "cells_per_nonbinder_param": [0.450069425326169, 1874.0, 1.0],
-            "concentration_param": (0.6017693693535755, 0.09382864854673992, 3.0634293748626753),  # [0.001, 2.5],
+            "concentration_param": (0.6017693693535755, 0.09382864854673992, 3.0634293748626753),
             "clonotype_eigs_param": (-155.18652967415233, 532.7534635778651),
         }
         return default_params
@@ -200,37 +204,35 @@ class DextramerSimulator:
                              "data.")
 
         if isinstance(filter_extreme_values, bool):
-            filter_extreme_values = [filter_extreme_values]*5
-        if isinstance(filter_extreme_values, collections.abc.Collection) and len(filter_extreme_values) < 5:
-            raise ValueError("`filter_extreme_values` must have a length of at least five.")
+            filter_extreme_values = [filter_extreme_values] * 5
+        if isinstance(filter_extreme_values, collections.abc.Collection) and len(filter_extreme_values) < 4:
+            raise ValueError("`filter_extreme_values` must have a length of at least four.")
 
         if isinstance(iq_range, numbers.Number) and not isinstance(iq_range, bool):
-            iq_range = [iq_range]*5
+            iq_range = [iq_range] * 5
 
-        if isinstance(iq_range, collections.abc.Collection) and len(iq_range) < 5:
-            raise ValueError("`iq_range` must have a length of at least five.")
+        if isinstance(iq_range, collections.abc.Collection) and len(iq_range) < 4:
+            raise ValueError("`iq_range` must have a length of at least four.")
 
+        dist_param = {}
         param = {}
 
         # normalize gex data
-        X_norm, size_factor = sc.pp.normalize_total(mdata.mod[gex_key], inplace=False).values()
+        X = mdata.mod[gex_key].X
         neg_idx = mdata.mod[gex_key].var["gene_ids"].to_list().index(neg_ctrl_key)
 
         #####################
         # Estimate parameters
         #####################
-        neg_x = __remove_extreme_values(X_norm[:, neg_idx].toarray()[:, 0], filter_extreme_values[i], iq_range[i])
-        size_factor = __remove_extreme_values(size_factor, filter_extreme_values[i], iq_range[i])
+        neg_x = __remove_extreme_values(X[:, neg_idx].toarray()[:, 0], filter_extreme_values[i], iq_range[i])
 
         # estimation of mean and inverse dispersion parameter from nb model
         nbfit = smf.negativebinomial("nbdata ~ 1",
                                      data=pd.DataFrame({"nbdata": neg_x})).fit(disp=False)
 
-        param["neg_mean"] = np.exp(nbfit.params.iloc[0])
-        param["neg_concentration"] = 1 / nbfit.params.iloc[1]
-
-        # fit size factor distribution
-        param["size_factor_param"] = stats.lognorm.fit(size_factor)
+        dist_param["neg_mean"] = np.exp(nbfit.params.iloc[0])
+        dist_param["neg_concentration"] = 1 / nbfit.params.iloc[1]
+        param["neg_x"] = neg_x
 
         # fit clonotype size distribution
         clone_size = __remove_extreme_values(mdata.mod[ir_key].obs.groupby("clone_id", dropna=False).size(),
@@ -249,15 +251,17 @@ class DextramerSimulator:
             warnings.warn("Estimation of boltzmann parameters on the upper 80-quantile of clone sizes failed. Please "
                           "adjust boundary conditions of the parameters")
 
-        param["cells_per_nonbinder_param"] = list(res_low.params)
-        param["cells_per_binder_param"] = list(res_high.params)
+        dist_param["cells_per_nonbinder_param"] = list(res_low.params)
+        dist_param["cells_per_binder_param"] = list(res_high.params)
+        param["cells_per_nonbinder"] = clone_size[clone_size <= q80_clone_size]
+        param["cells_per_binder"] = clone_size[clone_size > q80_clone_size]
 
         # fit inv dispersion distribution
         invdisp = []
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             for c, g in mdata.mod[ir_key].obs.groupby("clone_id", dropna=False):
-                if g.shape[0] < 15:
+                if g.shape[0] < 15: #at least 15 cells to fit neg_binom model
                     continue
                 m = mdata.mod["gex"][g.index]
                 for j in m.var.gene_ids:
@@ -269,22 +273,25 @@ class DextramerSimulator:
                     invdisp.append(1 / nbfit.params.iloc[1])  # concentration parameter
 
         invdisp = __remove_extreme_values(np.array(invdisp), filter_extreme_values[i], iq_range[i])
-        param["concentration_param"] = stats.gamma.fit(invdisp)
+        dist_param["concentration_param"] = stats.gamma.fit(invdisp)
+        param["concentration"] = invdisp
 
         # fit prior for covariance matrix
         dist = mdata.mod[ir_key].uns[ir_dist_key]
 
         cov = dist_to_cov(dist)
         eigs = __remove_extreme_values(np.real(np.linalg.eigvals(cov)), filter_extreme_values[i], iq_range[i])
-        param["clonotype_eigs_param"] = stats.semicircular.fit(eigs)
+        dist_param["clonotype_eigs_param"] = stats.semicircular.fit(eigs)
+        param["clonotype_eigs"] = eigs
 
+        self.dist_params = dist_param
         self.params = param
 
-        # QQ plot
+        # QC plot
         if plot_qc:
-            return self.__qc_plot(neg_x, size_factor, clone_size, q80_clone_size, invdisp, dist, cov, eigs, rng_key)
+            return self.__qc_plot(neg_x, clone_size, q80_clone_size, invdisp, dist, cov, eigs, rng_key)
 
-    def __qc_plot(self, neg_x, size_factor, clone_size, q80_clone_size, invdisp, dist, cov, eigs, rng_key):
+    def __qc_plot(self, neg_x, clone_size, q80_clone_size, invdisp, dist, cov, eigs, rng_key):
         """
         Plots QQ plots of fitted theoretical distribution against empirical distribution
         """
@@ -306,7 +313,7 @@ class DextramerSimulator:
         blue = sns.color_palette("tab10", 10)[0]
         sample_size = 5000
 
-        fig, axs = plt.subplots(7, 3, layout='tight', gridspec_kw={'height_ratios': [1, 1, 1, 1, 1, 1, 2]})
+        fig, axs = plt.subplots(6, 3, layout='tight', gridspec_kw={'height_ratios': [1, 1, 1, 1, 1, 2]})
 
         sns.histplot(neg_x, log_scale=True, legend=False, ax=axs[0, 0])
         negbinom_params = convert_neg_binom_params(params["neg_mean"], 1 / params["neg_concentration"])
@@ -318,80 +325,70 @@ class DextramerSimulator:
         sns.histplot(stats.nbinom.rvs(*negbinom_params, size=sample_size), log_scale=True, legend=False, ax=axs[0, 2])
         axs[0, 2].title.set_text("Fitted negative control distribution")
 
-        sns.histplot(x=size_factor, log_scale=False, legend=False, ax=axs[1, 0])
-        axs[1, 0].title.set_text("Empirical size factor distribution")
-        stats.probplot(size_factor, dist=stats.lognorm,
-                       sparams=params["size_factor_param"], plot=axs[1, 1], rvalue=True)
-        axs[1, 1].get_children()[2].set_fontsize("x-small")
-        axs[1, 1].get_lines()[0].set_color(blue)
-        axs[1, 1].title.set_text("Lognormal fitted size factor")
-        sns.histplot(stats.lognorm.rvs(*params["size_factor_param"], size=sample_size),
-                     log_scale=False, legend=False, ax=axs[1, 2])
-        axs[1, 2].title.set_text("Fitted size factor distribution")
-
-        sns.histplot(clone_size[clone_size > q80_clone_size], log_scale=True, legend=False, ax=axs[2, 0])
-        axs[2, 0].title.set_text("Empirical clone size distribution $>$ q80")
+        sns.histplot(clone_size[clone_size > q80_clone_size], log_scale=True, legend=False, ax=axs[1, 0])
+        axs[1, 0].title.set_text("Empirical clone size distribution $>$ q80")
         stats.probplot(clone_size[clone_size > q80_clone_size], dist=stats.boltzmann,
-                       sparams=params["cells_per_binder_param"], plot=axs[2, 1], rvalue=True)
+                       sparams=params["cells_per_binder_param"], plot=axs[1, 1], rvalue=True)
+        axs[1, 1].get_children()[2].set_fontsize("x-small")
+        axs[1, 1].title.set_text("Discrete Boltzmann fitted clone size")
+        axs[1, 1].get_lines()[0].set_color(blue)
+        sns.histplot(stats.boltzmann.rvs(*params["cells_per_binder_param"], size=sample_size),
+                     log_scale=True, legend=False, ax=axs[1, 2])
+        axs[1, 2].title.set_text("Fitted clone size distribution")
+
+        sns.histplot(clone_size[clone_size <= q80_clone_size], log_scale=True, legend=False, ax=axs[2, 0])
+        axs[2, 0].title.set_text("Empirical clone size distribution $\leq$ q80")
+        stats.probplot(clone_size[clone_size <= q80_clone_size], dist=stats.boltzmann,
+                       sparams=params["cells_per_nonbinder_param"], plot=axs[2, 1], rvalue=True)
         axs[2, 1].get_children()[2].set_fontsize("x-small")
         axs[2, 1].title.set_text("Discrete Boltzmann fitted clone size")
         axs[2, 1].get_lines()[0].set_color(blue)
-        sns.histplot(stats.boltzmann.rvs(*params["cells_per_binder_param"], size=sample_size),
+        sns.histplot(stats.boltzmann.rvs(*params["cells_per_nonbinder_param"], size=sample_size),
                      log_scale=True, legend=False, ax=axs[2, 2])
         axs[2, 2].title.set_text("Fitted clone size distribution")
 
-        sns.histplot(clone_size[clone_size <= q80_clone_size], log_scale=True, legend=False, ax=axs[3, 0])
-        axs[3, 0].title.set_text("Empirical clone size distribution $\leq$ q80")
-        stats.probplot(clone_size[clone_size <= q80_clone_size], dist=stats.boltzmann,
-                       sparams=params["cells_per_nonbinder_param"], plot=axs[3, 1], rvalue=True)
+        sns.histplot(x=invdisp, log_scale=False, legend=False, ax=axs[3, 0])
+        axs[3, 0].title.set_text("Empirical inverse dispersion \n distribution of clonotypes")
+        stats.probplot(invdisp, dist=stats.gamma,
+                       sparams=params["concentration_param"], plot=axs[3, 1], rvalue=True)
+        axs[3, 1].title.set_text("Gamma fitted inverse dispersion \n of clonotypes")
         axs[3, 1].get_children()[2].set_fontsize("x-small")
-        axs[3, 1].title.set_text("Discrete Boltzmann fitted clone size")
         axs[3, 1].get_lines()[0].set_color(blue)
-        sns.histplot(stats.boltzmann.rvs(*params["cells_per_nonbinder_param"], size=sample_size),
-                     log_scale=True, legend=False, ax=axs[3, 2])
-        axs[1, 2].title.set_text("Fitted clone size distribution")
+        axs[3, 2].title.set_text("Fitted inverse dispersion \n distribution of clonotypes ")
+        sns.histplot(stats.gamma.rvs(*params["concentration_param"], size=sample_size),
+                     log_scale=False, legend=False, ax=axs[3, 2])
 
-        sns.histplot(x=invdisp, log_scale=False, legend=False, ax=axs[4, 0])
-        axs[4, 0].title.set_text("Empirical inverse dispersion \n distribution of clonotypes")
-        stats.probplot(size_factor, dist=stats.gamma,
-                       sparams=params["concentration_param"], plot=axs[4, 1], rvalue=True)
-        axs[4, 1].title.set_text("Gamma fitted inverse dispersion \n of clonotypes")
+        axs[4, 0].title.set_text("Empirical covariance \n eigenvalue distribution")
+        sns.histplot(eigs, log_scale=True, ax=axs[4, 0])
+        stats.probplot(eigs, dist="semicircular", sparams=params["clonotype_eigs_param"], plot=axs[4, 1], rvalue=True)
+        axs[4, 1].title.set_text("Semicircle fitted eigenvalues")
         axs[4, 1].get_children()[2].set_fontsize("x-small")
         axs[4, 1].get_lines()[0].set_color(blue)
-        axs[4, 2].title.set_text("Fitted inverse dispersion \n distribution of clonotypes ")
-        sns.histplot(stats.gamma.rvs(*params["concentration_param"], size=sample_size),
-                     log_scale=False, legend=False, ax=axs[4, 2])
-
-        axs[5, 0].title.set_text("Empirical covariance \n eigenvalue distribution")
-        sns.histplot(eigs, log_scale=True, ax=axs[5, 0])
-        stats.probplot(eigs, dist="semicircular", sparams=params["clonotype_eigs_param"], plot=axs[5, 1], rvalue=True)
-        axs[5, 1].title.set_text("Semicircle fitted eigenvalues")
-        axs[5, 1].get_children()[2].set_fontsize("x-small")
-        axs[5, 1].get_lines()[0].set_color(blue)
-        axs[5, 2].title.set_text("Fitted eigenvalue distribution")
+        axs[4, 2].title.set_text("Fitted eigenvalue distribution")
         sns.histplot(stats.semicircular.rvs(*params["clonotype_eigs_param"], size=sample_size),
-                     log_scale=True, legend=False, ax=axs[5, 2])
+                     log_scale=True, legend=False, ax=axs[4, 2])
 
-        axs[6, 0].title.set_text("Distance matrix \n between clonotypes")
-        sns.heatmap(dist, square=True, ax=axs[6, 0], cbar_kws={"shrink": 0.5})
-        axs[6, 1].title.set_text("Covariance matrix \n between clonotypes")
-        sns.heatmap(cov, square=True, ax=axs[6, 1], cbar_kws={"shrink": 0.5})
+        axs[5, 0].title.set_text("Distance matrix \n between clonotypes")
+        sns.heatmap(dist, square=True, ax=axs[5, 0], cbar_kws={"shrink": 0.5})
+        axs[5, 1].title.set_text("Covariance matrix \n between clonotypes")
+        sns.heatmap(cov, square=True, ax=axs[5, 1], cbar_kws={"shrink": 0.5})
         eigs = stats.semicircular.rvs(*params["clonotype_eigs_param"], size=len(clone_size))
         cov_est = sample_cov_from_eigs(eigs, rng_key=rng_key)
-        axs[6, 2].title.set_text("Eigenvalue simulated \n covariance matrix")
-        sns.heatmap(cov_est, square=True, ax=axs[6, 2], cbar_kws={"shrink": 0.5})
+        axs[5, 2].title.set_text("Eigenvalue simulated \n covariance matrix")
+        sns.heatmap(cov_est, square=True, ax=axs[5, 2], cbar_kws={"shrink": 0.5})
 
         return axs
 
-    def simulate_pmhc_data(self,
-                           total_cells: int = 5000,
-                           nof_clones: int = 150,
-                           binding_ratio: float = 0.05,
-                           binding_fold_increase_range: list[float] = None,
-                           use_clonotype_cov: bool = False,
-                           simulate_neg_control: bool = False,
-                           rng_key: int = 42
-                           ) -> md.MuData:
+    def simulate_pmhc_data_from_distribution(self,
+                                             total_cells: int = 5000,
+                                             nof_clones: int = 150,
+                                             binding_ratio: float = 0.05,
+                                             binding_fold_increase_range: list[float] = None,
+                                             use_clonotype_cov: bool = False,
+                                             simulate_neg_control: bool = False,
+                                             plot_data: bool = False,
+                                             rng_key: int = 42
+                                             ) -> Tuple[MuData, Optional[plt.Axes]]:
         """
         Given negative control mean and concentration parameters (estimated from real data) generate binding data for
         one pMHC with predefined positive fold-change.
@@ -403,10 +400,11 @@ class DextramerSimulator:
             binding_fold_increase_range: list of fold increase for pMHC binding cells
             use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
             simulate_neg_control: whether to simulate a negative control pMHC for each cell (default: False)
+            plot_data: boolean whether to plot simulated data (default: False)
             rng_key: random seed.
 
         Returns:
-            An Anndata object containing all generated count data and clonal information, size_factors, and binder status
+            An Anndata object containing all generated count data and clonal information, and binder status
         """
 
         np.random.seed(rng_key)
@@ -422,11 +420,10 @@ class DextramerSimulator:
         clonotype_eigs_param = params["clonotype_eigs_param"]
         cells_per_binder_param = params["cells_per_binder_param"]
         cells_per_nonbinder_param = params["cells_per_nonbinder_param"]
-        size_factor_param = params["size_factor_param"]
         concentration_param = params["concentration_param"]
 
         if binding_fold_increase_range is None:
-            binding_fold_increase_range = [200]  # 0.5, 1, 5, 10, 50, 100, 150,
+            binding_fold_increase_range = [0.5, 1, 5, 10, 50, 100, 150, 200]
 
         if use_clonotype_cov:
             # sample covariance matrix
@@ -447,55 +444,173 @@ class DextramerSimulator:
         cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone)[0]
         cells_per_clone = (np.random.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
-        d = {"x": [], "x_neg": [], "binder": [], "clone": [],
-             "size_factor": [], "fold_increase": [], "mean": [], "concentration": []}
+        d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": []}
 
         for i in range(nof_clones):
             is_binder = binder_assignment[i]
             n_cells = cells_per_clone[i]
-            size_factor = stats.lognorm.rvs(*size_factor_param, size=n_cells)
 
             if is_binder:
                 fold_change = np.random.choice(binding_fold_increase_range)
-                mean = size_factor * (neg_mean + fold_change * neg_mean)
+                mean = (neg_mean + fold_change * neg_mean)
                 concentration = stats.gamma.rvs(*concentration_param)
             else:
                 fold_change = 0
-                mean = size_factor * neg_mean
+                mean = neg_mean
+                # add some noise to neg_concentration
                 a = (0.001 - neg_concentration) / (neg_concentration / 3)
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3)
 
-            x = self.generate_nb_val(mean, concentration)
+            x = self.generate_nb_val(mean, concentration, size=n_cells)
 
             if simulate_neg_control:
-                mean = size_factor * neg_mean
-                x_neg = self.generate_nb_val(mean, neg_concentration)
-                d["x_neg"].extend(x_neg[0].tolist())
+                mean = neg_mean
+                x_neg = self.generate_nb_val(mean, neg_concentration, size=n_cells)
+                d["x_neg"].extend(x_neg.tolist())
 
-            d["x"].extend(x[0].tolist())
+            d["x"].extend(x.tolist())
             d["binder"].extend([is_binder] * n_cells)
             d["clone"].extend([i] * n_cells)
-            d["size_factor"].extend(size_factor)
             d["fold_increase"].extend([fold_change] * n_cells)
-            d["mean"].extend(mean)
-            d["concentration"].extend([concentration] * n_cells)
+
+        return (DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None),
+                self.__plot_simulated_data(d, plot_data))
+
+    def simulate_pmhc_data_from_sample(self,
+                                       total_cells: int = 5000,
+                                       nof_clones: int = 150,
+                                       binding_ratio: float = 0.05,
+                                       binding_fold_increase_range: list[float] = None,
+                                       use_clonotype_cov: bool = False,
+                                       simulate_neg_control: bool = False,
+                                       plot_data: bool = False,
+                                       rng_key: int = 42
+                                       ) -> Tuple[MuData, Optional[plt.Axes]]:
+        """
+        Given negative control samples and other parameters sampled from real world data, generate binding data for
+        one pMHC with predefined positive fold-change.
+
+        Args:
+            total_cells: number of total cell to generate
+            nof_clones: number of clones measured in experiments.
+            binding_ratio: ratio of binder vs non-binder
+            binding_fold_increase_range: list of fold increase for pMHC binding cells
+            use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
+            simulate_neg_control: whether to simulate a negative control pMHC for each cell (default: False)
+            plot_data: boolean whether to plot simulated data (default: False)
+            rng_key: random seed.
+
+        Returns:
+            An Anndata object containing all generated count data and clonal information, and binder status
+        """
+
+        if self.params is None:
+            raise RuntimeError("Please estimate real world parameters with `estimate_simulation_params`.")
+
+        np.random.seed(rng_key)
+
+        # params
+        neg_x = self.params["neg_x"]
+        clonotype_eig = self.params["clonotype_eigs"]
+        cells_per_binder = self.params["cells_per_binder"]
+        cells_per_nonbinder = self.params["cells_per_nonbinder"]
+
+        if binding_fold_increase_range is None:
+            binding_fold_increase_range = [0.5, 1, 5, 10, 50, 100, 150, 200]
+
+        d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": []}
+
+        if use_clonotype_cov:
+            # sample covariance matrix
+            eigs = np.random.choice(clonotype_eig, size=nof_clones)
+            cov = sample_cov_from_eigs(eigs, rng_key=rng_key)
+
+            p_clone = expit(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
+            binder_assignment = np.random.binomial(1, p_clone)
+        else:
+            binder_assignment = np.random.binomial(1, binding_ratio, size=nof_clones)
+
+        # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
+        # specified total cell count
+        total_le = total_cells - nof_clones
+        raw_cells_per_clone = np.array([np.random.choice(cells_per_binder)
+                                        if binder_assignment[i] else np.random.choice(cells_per_nonbinder)
+                                        for i in range(nof_clones)])
+        cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone)[0]
+        cells_per_clone = (np.random.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
+
+        for i in range(nof_clones):
+            is_binder = binder_assignment[i]
+            n_cells = cells_per_clone[i]
+            fold_change = np.random.choice(binding_fold_increase_range)
+            nx = np.random.choice(neg_x, size=n_cells)
+            x = nx + fold_change * nx if is_binder else nx
+
+            if simulate_neg_control:
+                d["x_neg"].extend(np.random.choice(neg_x, size=n_cells).tolist())
+
+            d["x"].extend(x.tolist())
+            d["binder"].extend([is_binder] * n_cells)
+            d["clone"].extend([i] * n_cells)
+            d["fold_increase"].extend([fold_change] * n_cells)
+
+        return (DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None),
+                self.__plot_simulated_data(d, plot_data))
+
+    @staticmethod
+    def __plot_simulated_data(d, plot_data):
+
+        if plot_data is None:
+            return None
+
+        fig_params = {'legend.fontsize': 'x-small',
+                      'figure.figsize': (8.27, 5.845),
+                      'figure.dpi': 100,
+                      'axes.labelsize': 'x-small',
+                      'axes.titlesize': 'x-small',
+                      'xtick.labelsize': 'x-small',
+                      'ytick.labelsize': 'x-small'
+                      }
+        plt.rcParams.update(fig_params)
+
+        fig, axs = plt.subplots(2, 2, layout='tight') #gridspec_kw={'height_ratios': [1, 1, 2, 0]}
+        if not len(d["x_neg"]):
+            del d["x_neg"]
+
+        df = pd.DataFrame.from_dict(d)
+
+        axs[0, 0].set_title("pMHC Dextramer")
+        sns.histplot(data=df, x="x", hue="binder", log_scale=True, ax=axs[0, 0])
+        if "x_neg" in d:
+            axs[0, 1].set_title("Negative Control")
+            sns.histplot(data=df, x="x_neg", log_scale=True, ax=axs[0, 1])
+        else:
+            axs[0, 1].axis('off')
+        axs[1, 0].set_title("Clonal distribution of Non-binder")
+        sns.histplot(data=df[df.binder == 0], x="x", hue="clone", log_scale=True, legend=False, ax=axs[1, 0])
+        axs[1, 1].set_title("Clonal distribution of Binder")
+        sns.histplot(data=df[df.binder == 1], x="x", hue="clone", log_scale=True, legend=False, ax=axs[1, 1])
+        return axs
+
+    @staticmethod
+    def __generate_mdata(d, simulate_neg_control, cov=None):
 
         if simulate_neg_control:
-            adata = ad.AnnData(np.array([d["x"], d["x_neg"]], dtype="float64").T)
+            adata = ad.AnnData(np.array([d["x"], d["x_neg"]], dtype="int64").T)
             adata.var_names = ["pmhc1", "neg_control"]
+            adata.var["feature_types"] = ["Antigen Capture", "Antigen Capture"]
         else:
-            adata = ad.AnnData(np.array([d["x"]]).T)
+            adata = ad.AnnData(np.array([d["x"]], dtype="int64").T)
             adata.var_names = ["pmhc1"]
-        adata.var["feature_types"] = ["Antigen Capture"]
-        adata.obs["size_factor"] = d["size_factor"]
+            adata.var["feature_types"] = ["Antigen Capture"]
+
         adata.obs["fold_increase"] = d["fold_increase"]
-        adata.obs["mean"] = d["mean"]
-        adata.obs["concentration"] = d["concentration"]
 
         adata_tcr = ad.AnnData()
         adata_tcr.obs["is_binder"] = d["binder"]
         adata_tcr.obs["clone_id"] = d["clone"]
-        if use_clonotype_cov:
+
+        if cov is not None:
             adata_tcr.uns["clone_cov"] = cov
 
         return md.MuData({"gex": adata, "airr": adata_tcr})
@@ -511,3 +626,5 @@ class DextramerSimulator:
             rng_key: an integer to initialize the random key generator.
         """
         return npd.NegativeBinomial2(mu, alpha).sample(jax.random.PRNGKey(rng_key), sample_shape=(size,))
+
+

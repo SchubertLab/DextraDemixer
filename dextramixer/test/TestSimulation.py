@@ -1,11 +1,14 @@
 import unittest
 
 import numpy as np
+import pandas as pd
 
 import scirpy as ir
 import scanpy as sc
 from mudata import MuData
 import muon as mu
+
+from matplotlib import pyplot as plt
 
 from dextramixer.utils import DextramerSimulator
 
@@ -75,15 +78,47 @@ class TestSimulation(unittest.TestCase):
         plt.show()
 
     def test_estimating_params_with_plot_filtered_individually(self):
-        from matplotlib import pyplot as plt
-
         sim = DextramerSimulator()
         ax = sim.estimate_simulation_params(self.mdata, neg_ctrl_key="negative_control",
                                             ir_dist_key="ir_dist_aa_full",
-                                            filter_extreme_values=[True, False, True, False, True],
+                                            filter_extreme_values=[True, True, False, True],
                                             plot_qc=True)
         plt.savefig("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
         plt.show()
 
     def test_simulating_params(self):
-        pass
+        sim = DextramerSimulator()
+        mdat, axs = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
+                                                             binding_ratio=0.05,
+                                                             nof_clones=50,
+                                                             binding_fold_increase_range=[500],
+                                                             simulate_neg_control=True,
+                                                             plot_data=True)
+
+        plt.show()
+
+    def test_simulating_params_nctrl(self):
+        sim = DextramerSimulator()
+        mdat, _ = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True)
+        print(mdat)
+
+    def test_simulating_params_cov(self):
+        sim = DextramerSimulator()
+        mdat, _ = sim.simulate_pmhc_data_from_distribution(use_clonotype_cov=True)
+        print(mdat)
+
+    def test_simulation_sample(self):
+        sim = DextramerSimulator()
+        sim.estimate_simulation_params(self.mdata,
+                                       neg_ctrl_key="negative_control",
+                                       ir_dist_key="ir_dist_aa_full",
+                                       filter_extreme_values=[True, True, False, True]
+                                       )
+        mdat, axs = sim.simulate_pmhc_data_from_sample(total_cells=5000,
+                                                       binding_ratio=0.05,
+                                                       nof_clones=50,
+                                                       binding_fold_increase_range=[500],
+                                                       simulate_neg_control=True,
+                                                       use_clonotype_cov=False, # TODO cov can be not psd! check how to fix
+                                                       plot_data=True)
+        plt.show()
