@@ -92,8 +92,8 @@ def t_cell_simulation(n_clones=3,
         mean_binder_range = [500, 510]
 
     np.random.seed(rng_key)
-    d = {"avidity": [], "binder": [], "clone": [], "size_factor": []}
-    d_neg = {"avidity": [], "binder": [], "clone": [], "size_factor": []}
+    d = {"avidity": [], "binder": [], "clone": []}
+    d_neg = {"avidity": [], "binder": [], "clone": []}
     binder_assignment = np.random.binomial(1, binding_ratio, size=n_clones)
 
     for i in range(n_clones):
@@ -112,18 +112,15 @@ def t_cell_simulation(n_clones=3,
 
         d["binder"].extend([is_binder] * n_cell)
         d["clone"].extend([i] * n_cell)
-        d["size_factor"].extend(np.ones(n_cell))
 
         d_neg["avidity"].extend(DextramerSimulator.generate_nb_val(mean_non_binder,
                                                                    shape_non_binder, size=n_cell).tolist())
         d_neg["binder"].extend([0] * n_cell)
         d_neg["clone"].extend([i] * n_cell)
-        d_neg["size_factor"].extend(np.ones(n_cell))
 
     adata = ad.AnnData(np.array([d["avidity"], d_neg["avidity"]], dtype="float64").T)
     adata.var_names = ["pmhc1", "neg_control"]
     adata.var["feature_types"] = ["Antigen Capture", "Antigen Capture"]
-    adata.obs["size_factor"] = d["size_factor"]
 
     adata_tcr = ad.AnnData()
     adata_tcr.obs["is_binder"] = d["binder"]
@@ -479,9 +476,11 @@ class DextramerSimulator:
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([fold_change] * n_cells)
 
-        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None),
-
-        return (mdat, DextramerSimulator.__plot_simulated_data(d)) if plot_data else mdat
+        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None)
+        if plot_data:
+            return mdat, DextramerSimulator.__plot_simulated_data(d)
+        else:
+            return mdat
 
     def simulate_pmhc_data_from_sample(self,
                                        total_cells: int = 5000,
@@ -562,8 +561,12 @@ class DextramerSimulator:
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([fold_change] * n_cells)
 
-        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None),
-        return (mdat, self.__plot_simulated_data(d)) if plot_data else mdat
+        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None)
+
+        if plot_data:
+            return mdat, self.__plot_simulated_data(d)
+        else:
+            return mdat
 
     @staticmethod
     def __plot_simulated_data(d):

@@ -89,7 +89,6 @@ class DextraMixer:
                               mdata: md.MuData,
                               pmhc_key: str,
                               gex_key: str = "gex",
-                              size_factor_key: str = None,
                               neg_ctrl_key: str = None,
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
@@ -102,8 +101,6 @@ class DextraMixer:
             mdata: A Mudata containing only dextramer counts and clonotype information
             pmhc_key: a string specifying the pMHC column in `gex_key` modality`s `X` which should be deconvolved
             gex_key: the MuData transcriptome module key
-            size_factor_key: the obs key to where size factors for each cell are stored in the gex Anndata. If `None`
-                             size factors will be calculated based on scanpy's `normalize_total` function
             neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
             ir_key: the MuData AIRR module key
             ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
@@ -117,17 +114,12 @@ class DextraMixer:
 
         x = gex[:, pmhc_key].X.reshape((N, ))
         x_neg = gex[:, neg_ctrl_key].X.reshape((N,)) if neg_ctrl_key else None
-        if size_factor_key is None:
-            _, size_factor = sc.pp.normalize_total(mdata["gex"], inplace=False).values()
-        else:
-            size_factor = gex.obs[size_factor_key].to_numpy()
 
-        size_factor = size_factor.reshape(x.shape[0], 1)
         c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
         sigma = air.uns[ir_cov_key] if ir_cov_key is not None else None
 
-        self.__check_parameters(x, x_neg, size_factor, c, sigma)
-        self.model.preprocess_model_data(x, size_factor, x_neg, c, sigma, self.mode, **kwargs)
+        self.__check_parameters(x, x_neg, c, sigma)
+        self.model.preprocess_model_data(x, x_neg, c, sigma, self.mode, **kwargs)
 
     @staticmethod
     def get_default_sampler_config() -> Dict[str, Union[int, float]]:
@@ -229,7 +221,7 @@ class DextraMixer:
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
 
-    def __check_parameters(self, x, neg_x, size_factor, c, sigma):
+    def __check_parameters(self, x, neg_x, c, sigma):
         """
         checks consistency of input data before initializing the model
         """
@@ -238,10 +230,6 @@ class DextraMixer:
         if self.mode == "C":
             if c is None:
                 raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
-
-        if size_factor.shape[0] != N:
-            raise ValueError(
-                f"`size_factor` and count data `x` require the same size but got {size_factor.shape[0]} and {N}")
 
         if c is not None:
             if c.shape[0] != N:
@@ -277,7 +265,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
-                              size_factor: Union[pd.Series, np.ndarray, Array],
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[np.ndarray, Array] = None,
@@ -293,7 +280,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
 
         self.data = {"x": jnp.array(x, dtype=int_dtype),
                      "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
-                     "size_factor": jnp.array(size_factor, dtype=float_dtype),
                      "clone": None if c is None else jnp.array(c, dtype=int_dtype),
                      "sigma": None if sigma is None else jnp.array(sigma, dtype=float_dtype),
                      }
@@ -433,8 +419,6 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         # data
         x = self.data["x"]
         x_neg = self.data["x_neg"]
-        size_factor = self.data["size_factor"].reshape(self.coords["sample_axis"].size, 1)
-        size_factor_neg = self.data["size_factor"].reshape((self.coords["sample_axis"].size,))
         clone = self.data["clone"]
         sigma = self.data["sigma"]
 
@@ -491,29 +475,29 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             with neg_sample_axis:
                 if self.mode == "H":
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0], concentration=alpha),
+                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha),
                                           obs=x_neg)
                 elif self.mode == "C":
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0],
+                                          npd.NegativeBinomial2(mean=q[0],
                                                                 concentration=alpha[clone]),
                                           obs=x_neg)
                 else:
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0], concentration=alpha[0]),
+                                          npd.NegativeBinomial2(mean= q[0], concentration=alpha[0]),
                                           obs=x_neg)
 
         with sample_axis as i:
 
             # target pMHC
             if self.mode == "C":
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=(size_factor * q),
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
                                                                          concentration=alpha[clone].reshape(
                                                                              (sample_axis.size, 1))
                                                                          )
                                                 )
             else:
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=size_factor * q,
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
                                                                          concentration=alpha))
 
             yhat = npy.sample("yhat", mixture, obs=x)
