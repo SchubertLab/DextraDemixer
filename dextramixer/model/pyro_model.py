@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import abc
+import warnings
 
-from typing import TYPE_CHECKING, Literal, Optional, Union, Dict
+from typing import TYPE_CHECKING, Literal, Optional, Union, Dict, Tuple
 
 import arviz as az
 import jax.lax
@@ -10,12 +11,13 @@ import numpy as np
 import pandas as pd
 
 import scanpy as sc
-# import scirpy as ir
-# from mudata import MuData
-from anndata import AnnData
+import scirpy as ir
+import mudata as md
+
 import jax
 from jax import random
 from jax.nn import logsumexp
+
 import jax.numpy as jnp
 
 import numpyro as npy
@@ -48,15 +50,22 @@ class DextraMixer:
        $c \in C$ belongs to either the clone-specific **Binding** or the **Non-Binding** component. The **Non-Binding**
        component represents unspecific epitope binding and assay noise.
     3) It is assumed that unspecific binding T cells and non-binding T cells exhibit lower read counts compared to
-       specifically binding T cell after appropriat normalization.
+       specifically binding T cell after appropriate normalization.
     4) T cells of a clonal group $c\in C$ are drawn from the same distribution.
 
     """
 
     def __init__(self, model_type: str = "mixturemodel", mode: str = "H"):
+        if mode.upper() not in ("H", "I", "C"):
+            raise ValueError(f"`mode` must be either of the three `I`=independent, `H`=hierarchical, "
+                             + f"`C`=clonotype-specific but was {mode}")
+
         self.sampler = None
         self.trace = None
         self.mode = mode.upper()
+
+        if model_type not in ADextraMixerModel.registry.keys():
+            raise warnings.warn(f"`model_type` {model_type} not supported using the standard model.")
         self.model = ADextraMixerModel.registry.get(model_type, DextraMixerMixtureModel)()
 
     @property
@@ -77,17 +86,40 @@ class DextraMixer:
         return [k for k in ADextraMixerModel.registry.keys()]
 
     def preprocess_model_data(self,
-                              x: Union[pd.Series, np.ndarray, Array],
-                              size_factor: Union[pd.Series, np.ndarray, Array],
-                              neg_x: Union[pd.Series, np.ndarray, Array] = None,
-                              size_factor_neg: Union[pd.Series, np.ndarray, Array] = None,
-                              c: Union[pd.Series, np.ndarray, Array] = None,
-                              c_neg: Union[pd.Series, np.ndarray, Array] = None,
-                              sigma: Union[pd.Series, np.ndarray, Array] = None,
+                              mdata: md.MuData,
+                              pmhc_key: str,
+                              gex_key: str = "gex",
+                              neg_ctrl_key: str = None,
+                              ir_key: str = "airr",
+                              ir_clone_key: str = None,
+                              ir_cov_key: str = None,
                               **kwargs):
+        """
+        Preprocesses the data and initializes the model
 
-        self.__check_parameters(x, neg_x, size_factor, size_factor_neg, c, c_neg, sigma)
-        self.model.preprocess_model_data(x, size_factor, neg_x, size_factor_neg, c, c_neg, sigma, self.mode, **kwargs)
+        Args:
+            mdata: A Mudata containing only dextramer counts and clonotype information
+            pmhc_key: a string specifying the pMHC column in `gex_key` modality`s `X` which should be deconvolved
+            gex_key: the MuData transcriptome module key
+            neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
+            ir_key: the MuData AIRR module key
+            ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
+            ir_cov_key: (Optional) the key in AIRR module's `.uns` that contains a full, symmetric and square distance matrix
+                         for all clonotype cluster
+            kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
+        """
+        gex = mdata.mod[gex_key]
+        air = mdata.mod[ir_key]
+        N = gex.shape[0]
+
+        x = gex[:, pmhc_key].X.reshape((N, ))
+        x_neg = gex[:, neg_ctrl_key].X.reshape((N,)) if neg_ctrl_key else None
+
+        c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
+        sigma = air.uns[ir_cov_key] if ir_cov_key is not None else None
+
+        self.__check_parameters(x, x_neg, c, sigma)
+        self.model.preprocess_model_data(x, x_neg, c, sigma, self.mode, **kwargs)
 
     @staticmethod
     def get_default_sampler_config() -> Dict[str, Union[int, float]]:
@@ -105,7 +137,7 @@ class DextraMixer:
         }
         return sampler_config
 
-    def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng: int = 3) -> az.InferenceData:
+    def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng_key: int = 3) -> az.InferenceData:
         """
         fits the mixture model with MCMC and returns the trace
         """
@@ -124,16 +156,37 @@ class DextraMixer:
             **sampling_config
         )
 
-        self.sampler.run(random.PRNGKey(rng))
+        self.sampler.run(random.PRNGKey(rng_key))
 
         return self.__make_arvis()
 
-    def predict_posterior_class(self, threshold: float = None, target_fdr: float = None):
+    def predict_posterior_class(self,
+                                threshold: float = None,
+                                target_fdr: float = None
+                                ) -> Tuple[Array, Array]:
+        """
+        Returns the binder assignments based on the inferred posterior class probabilities.
+        Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
+        If neither threshold nor target_fdr is provided the max posterior class probability will be used.
 
-        if threshold is None and target_fdr is None:
-            raise ValueError("Either a manual `threshold` or a `target_fdr` must be specified.")
+        Args:
+             threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
+                        probabilities
+            target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
+                        class probability
+        Returns:
+            A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
+            class assignment decision
+        """
+
         if threshold is not None and target_fdr is not None:
             raise ValueError("Please specify either a manual `threshold` or a `target_fdr` but not both.")
+
+        if threshold is not None and not (0 <= threshold <= 1):
+            raise ValueError(f"`threshold`must be in [0,1] but was {threshold}")
+
+        if target_fdr is not None and not (0 <= target_fdr <= 1):
+            raise ValueError(f"`target_fdr`must be in [0,1] but was {target_fdr}")
 
         # posterior probability of belonging to the binding class
         p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
@@ -152,24 +205,31 @@ class DextraMixer:
                 return 1., 0
 
             threshold, fdr_ = opt_thresh(p, target_fdr)
-        assignment = (p >= threshold).astype("int32")
+        if target_fdr is not None or threshold is not None:
+            assignment = (p >= threshold).astype("int32")
+        else:
+            p_ = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][...,]), axis=0)
+            assignment = jnp.argmax(p_, axis=1)
         return p, assignment
+
+    def summary(self):
+        if self.trace is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit()` first.")
+        return az.summary(self.trace, var_names=["~log_p"])
 
     def __make_arvis(self):
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
 
-    def __check_parameters(self, x, neg_x, size_factor, size_factor_neg, c, c_neg, sigma):
-
+    def __check_parameters(self, x, neg_x, c, sigma):
+        """
+        checks consistency of input data before initializing the model
+        """
         N = x.shape[0]
 
         if self.mode == "C":
             if c is None:
                 raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
-
-        if size_factor.shape[0] != N:
-            raise ValueError(
-                f"`size_factor` and count data `x` require the same size but got {size_factor.shape[0]} and {N}")
 
         if c is not None:
             if c.shape[0] != N:
@@ -178,21 +238,8 @@ class DextraMixer:
         if neg_x is not None:
             N_neg = neg_x.shape[0]
 
-            if size_factor_neg is None:
-                raise ValueError("If `neg_x` is given `size_factor_neg` must be given to.")
-
-            if size_factor_neg.shape[0] != N_neg:
-                raise ValueError(f"`size_factor_neg` and count data `neg_x` require the same size but got"
-                                 + f" {size_factor_neg.shape[0]} and {N_neg}")
-
-            if self.mode == "C":
-                if c_neg is None:
-                    raise ValueError("If `mode`= C a clonotype vector `c_neg` for the negative"
-                                     + "control samples must be specified.")
-                else:
-                    if c_neg.shape[0] != N_neg:
-                        raise ValueError(f"`c_neg` and count data `neg_x` require the same size but got "
-                                         + f"{c_neg.shape[0]} and {N_neg}")
+            if N_neg != N:
+                raise ValueError(f"x_neg must have the same size than x but got {N_neg} vs {N}.")
 
         if sigma is not None:
             if c is None:
@@ -201,7 +248,7 @@ class DextraMixer:
                 C_nof = len(np.unique(c))
                 if sigma.shape[0] != C_nof:
                     raise ValueError(f"Sigma must have shape ({C_nof},{C_nof}) and defined over clonotypes but has"
-                                      + f"{sigma.shape}")
+                                     + f"{sigma.shape}")
 
 
 class ADextraMixerModel(metaclass=RegisteredModel):
@@ -218,11 +265,8 @@ class ADextraMixerModel(metaclass=RegisteredModel):
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
-                              size_factor: Union[pd.Series, np.ndarray, Array],
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
-                              size_factor_neg: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
-                              c_neg: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[np.ndarray, Array] = None,
                               mode: str = "H",
                               **kwargs):
@@ -235,12 +279,8 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         K = 2
 
         self.data = {"x": jnp.array(x, dtype=int_dtype),
-                     "neg_x": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
-                     "size_factor": jnp.array(size_factor, dtype=float_dtype).reshape((N, 1)),
-                     "size_factor_neg": None if size_factor_neg is None else jnp.array(size_factor_neg,
-                                                                                       dtype=float_dtype),
+                     "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
                      "clone": None if c is None else jnp.array(c, dtype=int_dtype),
-                     "clone_neg": None if c_neg is None else jnp.array(c_neg, dtype=int_dtype),
                      "sigma": None if sigma is None else jnp.array(sigma, dtype=float_dtype),
                      }
 
@@ -256,7 +296,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
             C_nof = len(jnp.unique(self.data["clone"]))
             self.coords["clone_axis"] = npy.plate("clone_axis", C_nof, dim=-1)
 
-        if self.data["neg_x"] is not None:
+        if self.data["x_neg"] is not None:
             N_neg = neg_cont.shape[0]
             self.coords["neg_sample_axis"] = npy.plate("neg_sample_axis", N_neg, dim=-1)
 
@@ -346,7 +386,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
     def __init__(self):
         super().__init__()
         self._name = "mixturemodel"
-        self._version = "0.0.1"
+        self._version = "0.0.2"
 
     @staticmethod
     def get_default_model_config() -> Dict:
@@ -378,12 +418,9 @@ class DextraMixerMixtureModel(ADextraMixerModel):
 
         # data
         x = self.data["x"]
-        size_factor = self.data["size_factor"]
-        size_factor_neg = self.data["size_factor_neg"]
+        x_neg = self.data["x_neg"]
         clone = self.data["clone"]
-        clone_neg = self.data["clone_neg"]
         sigma = self.data["sigma"]
-        neg_x = self.data["neg_x"]
 
         # plates
         sample_axis = self.coords["sample_axis"]
@@ -391,7 +428,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         K = cluster_axis.size
         if clone is not None:
             clone_axis = self.coords["clone_axis"]
-        if neg_x is not None:
+        if x_neg is not None:
             neg_sample_axis = self.coords["neg_sample_axis"]
 
         # hyperprior parameters
@@ -434,31 +471,34 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                        npd.TransformedDistribution(npd.LogNormal(loc=mu_q, scale=sigma_q).expand((K,)),
                                                    npd.transforms.OrderedTransform()))
 
-        if neg_x is not None:
+        if x_neg is not None:
             with neg_sample_axis:
                 if self.mode == "H":
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0], concentration=alpha),
-                                          obs=neg_x)
+                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha),
+                                          obs=x_neg)
                 elif self.mode == "C":
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0],
-                                                                concentration=alpha[clone_neg]),
-                                          obs=neg_x)
+                                          npd.NegativeBinomial2(mean=q[0],
+                                                                concentration=alpha[clone]),
+                                          obs=x_neg)
                 else:
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=size_factor_neg * q[0], concentration=alpha[0]),
-                                          obs=neg_x)
+                                          npd.NegativeBinomial2(mean= q[0], concentration=alpha[0]),
+                                          obs=x_neg)
 
         with sample_axis as i:
+
+            # target pMHC
             if self.mode == "C":
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=size_factor[i] * q,
-                                                                         concentration=alpha[clone[i]].reshape(
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
+                                                                         concentration=alpha[clone].reshape(
                                                                              (sample_axis.size, 1))
                                                                          )
                                                 )
             else:
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=size_factor[i] * q, concentration=alpha))
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
+                                                                         concentration=alpha))
 
             yhat = npy.sample("yhat", mixture, obs=x)
 

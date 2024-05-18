@@ -1,2 +1,3 @@
-from .simulation import *
+from .simulation import DextramerSimulator
 from .utils import *
+from .registry import *
