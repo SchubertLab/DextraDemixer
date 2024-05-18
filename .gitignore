@@ -2,7 +2,8 @@
 /data
 /notebooks
 /papers
-/figures
+/manuscript
+
 
 # Editors
 .vscode/
