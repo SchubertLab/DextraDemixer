@@ -7,24 +7,62 @@ from numpy import ndarray, dtype, bool_
 from scipy.stats import ortho_group, random_correlation
 
 
-def dist_to_cov(d: jax.Array) -> jax.Array:
+def gower_centering(distance_matrix):
     """
-    This computes a covariance matrix from a squared-distance matrix using the centering method of Gower (1996).
+    Applies Gower's 1966 centering method to the distance matrix to obtain a covariance matrix.
 
-    see reference implementation: https://rdrr.io/cran/rwc/src/R/cov.from.dist.R
+    Parameters:
+        distance_matrix (jax.numpy.ndarray): Symmetric distance matrix.
 
-    Gower, J. C. (1966). Some distance properties of latent root and vector methods used in multivariate analysis.
-    Biometrika, 53(3-4), 325-338.
+    Returns:
+        jax.numpy.ndarray: Covariance matrix.
     """
-    if d.shape[0] != d.shape[1] or jnp.any(d != d.T):
-        raise ValueError(f"Distance matrix must be square and symmetric.")
+    n = distance_matrix.shape[0]
 
-    n = d.shape[0]
-    one = jnp.ones(shape=(n, 1))
-    sum_all = jnp.sum(d) / n ** 2
-    row_sum_matrix = jnp.matmul(jnp.mean(d, axis=0, keepdims=True).T, one.T)
-    col_sum_matrix = jnp.matmul(one, jnp.mean(d, axis=1, keepdims=True).T)
-    return 0.5 * (-d + row_sum_matrix + col_sum_matrix - sum_all)
+    # Compute the squared distance matrix
+    squared_distances = jnp.square(distance_matrix)
+
+    # Compute the row means, column means, and total mean of the squared distance matrix
+    row_means = jnp.mean(squared_distances, axis=1, keepdims=True)
+    col_means = jnp.mean(squared_distances, axis=0, keepdims=True)
+    total_mean = jnp.mean(squared_distances)
+
+    # Apply the Gower centering formula
+    return -0.5 * (squared_distances - row_means - col_means + total_mean)
+
+
+def nearest_psd(matrix, use_abs=False):
+    """
+    Adjusts a matrix to ensure it is positive semi-definite using JAX.
+
+    Parameters:
+        matrix (jax.numpy.ndarray): Input matrix.
+        use_abs (bool): specify if eigenvalues are adjusted by taking the absolut values or setting negative values to 0
+                        (default False)
+    Returns:
+        jax.numpy.ndarray: Adjusted positive semi-definite matrix.
+    """
+    eigenvalues, eigenvectors = jnp.linalg.eigh(matrix)
+    # Set negative eigenvalues to zero or abs
+    if use_abs:
+        eigenvalues = jnp.abs(eigenvalues)
+    else:
+        eigenvalues = jnp.where(eigenvalues < 0, 0, eigenvalues)
+    return eigenvectors @ jnp.diag(eigenvalues) @ eigenvectors.T
+
+
+def dist_to_cov_psd(d, use_abs=False):
+    """
+    Converts a symmetric distance matrix into a symmetric positive semi-definite covariance matrix using JAX.
+
+    Parameters:
+        d (jax.numpy.ndarray): Symmetric distance matrix.
+        use_abs (bool): specify if eigenvalues are adjusted by taking the absolut values or setting negative values to 0
+                        (default False)
+    Returns:
+        jax.numpy.ndarray: Symmetric positive semi-definite covariance matrix.
+    """
+    return nearest_psd(gower_centering(d), use_abs)
 
 
 def sim_to_dist(s: jax.Array) -> jax.Array:
@@ -60,7 +98,8 @@ def sample_cov_from_eigs(eigs: jax.Array, rng_key: int = 42) -> ndarray[Any, dty
     Returns:
         a covariance matrix of size nxn
     """
-    S = np.diag(eigs)
+    eigs = jnp.where(eigs < 0, 0, eigs)
+    S = jnp.diag(eigs)
     Q = sample_orthogonal_mtx(eigs.shape[0], rng_key=rng_key)
     return Q.T @ S @ Q
 

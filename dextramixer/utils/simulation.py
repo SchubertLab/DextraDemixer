@@ -21,7 +21,8 @@ from scipy.special import expit
 
 import matplotlib.pyplot as plt
 
-from dextramixer.utils.utils import sample_cov_from_eigs, dist_to_cov, remove_outliers, convert_neg_binom_params
+from dextramixer.utils.utils import sample_cov_from_eigs, remove_outliers, convert_neg_binom_params, \
+    dist_to_cov_psd
 
 jax.config.update("jax_enable_x64", True)
 
@@ -144,14 +145,14 @@ class DextramerSimulator:
     @staticmethod
     def default_params():
         default_params = {
-            "neg_mean": 4.710658073425293,
-            "neg_concentration": 0.393927070346017,
-            #"size_factor_param": (0.42792255, -262.7462615966805, 1361.486),
-            "cells_per_binder_param": [0.005516163158815324, 3559.0, 10.0],
-            "cells_per_nonbinder_param": [0.450069425326169, 1874.0, 1.0],
-            "concentration_param": (0.6017693693535755, 0.09382864854673992, 3.0634293748626753),
-            "clonotype_eigs_param": (-155.18652967415233, 532.7534635778651),
+            'neg_mean': 4.7223404255316,
+            'neg_concentration': 0.3939270703460169,
+            'cells_per_nonbinder_param': [0.4350238944807278, 3773.0, 1.0],
+            'cells_per_binder_param': [0.005349189822663033, 3451.0, 11.0],
+            'concentration_param': (0.6018940224585299, 0.09382864854673992, 3.063191246241674),
+            'clonotype_eigs_param': (487.50569698738985, 808.522508860638)
         }
+
         return default_params
 
     def estimate_simulation_params(self,
@@ -205,14 +206,14 @@ class DextramerSimulator:
 
         if isinstance(filter_extreme_values, bool):
             filter_extreme_values = [filter_extreme_values] * 5
-        if isinstance(filter_extreme_values, collections.abc.Collection) and len(filter_extreme_values) < 4:
-            raise ValueError("`filter_extreme_values` must have a length of at least four.")
+        if isinstance(filter_extreme_values, collections.abc.Collection) and len(filter_extreme_values) < 5:
+            raise ValueError("`filter_extreme_values` must have a length of at least five.")
 
         if isinstance(iq_range, numbers.Number) and not isinstance(iq_range, bool):
             iq_range = [iq_range] * 5
 
-        if isinstance(iq_range, collections.abc.Collection) and len(iq_range) < 4:
-            raise ValueError("`iq_range` must have a length of at least four.")
+        if isinstance(iq_range, collections.abc.Collection) and len(iq_range) < 5:
+            raise ValueError("`iq_range` must have a length of at least five.")
 
         dist_param = {}
         param = {}
@@ -235,14 +236,17 @@ class DextramerSimulator:
         param["neg_x"] = neg_x
 
         # fit clonotype size distribution
-        clone_size = __remove_extreme_values(mdata.mod[ir_key].obs.groupby("clone_id", dropna=False).size(),
-                                             filter_extreme_values[i], iq_range[i])
+        clone_size = mdata.mod[ir_key].obs.groupby("clone_id", dropna=False).size()
         q80_clone_size = np.quantile(clone_size, 0.8)
         rv = stats.boltzmann
         bounds_low = [boltzmann_boundary, boltzmann_boundary, (1, 1)]
         bounds_high = [boltzmann_boundary, boltzmann_boundary, (q80_clone_size, q80_clone_size)]
-        res_low = stats.fit(rv, clone_size[clone_size <= q80_clone_size], bounds_low)
-        res_high = stats.fit(rv, clone_size[clone_size > q80_clone_size], bounds_high)
+        clone_size_high = __remove_extreme_values(clone_size[clone_size > q80_clone_size], filter_extreme_values[i],
+                                                  iq_range[i])
+        clone_size_low = __remove_extreme_values(clone_size[clone_size <= q80_clone_size], filter_extreme_values[i],
+                                                 iq_range[i])
+        res_low = stats.fit(rv, clone_size_low, bounds_low)
+        res_high = stats.fit(rv, clone_size_high, bounds_high)
 
         if not res_low.success:
             warnings.warn("Estimation of boltzmann parameters on the lower 80-quantile of clone sizes failed. Please "
@@ -253,15 +257,15 @@ class DextramerSimulator:
 
         dist_param["cells_per_nonbinder_param"] = list(res_low.params)
         dist_param["cells_per_binder_param"] = list(res_high.params)
-        param["cells_per_nonbinder"] = clone_size[clone_size <= q80_clone_size]
-        param["cells_per_binder"] = clone_size[clone_size > q80_clone_size]
+        param["cells_per_nonbinder"] = clone_size_low
+        param["cells_per_binder"] = clone_size_high
 
         # fit inv dispersion distribution
         invdisp = []
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
             for c, g in mdata.mod[ir_key].obs.groupby("clone_id", dropna=False):
-                if g.shape[0] < 15: #at least 15 cells to fit neg_binom model
+                if g.shape[0] < 15:  #at least 15 cells to fit neg_binom model
                     continue
                 m = mdata.mod["gex"][g.index]
                 for j in m.var.gene_ids:
@@ -279,8 +283,10 @@ class DextramerSimulator:
         # fit prior for covariance matrix
         dist = mdata.mod[ir_key].uns[ir_dist_key]
 
-        cov = dist_to_cov(dist)
-        eigs = __remove_extreme_values(np.real(np.linalg.eigvals(cov)), filter_extreme_values[i], iq_range[i])
+        cov = dist_to_cov_psd(dist)
+        eigs = np.real(np.linalg.eigvals(cov))
+        eigs = np.where(eigs < 0, 0, eigs)
+        eigs = __remove_extreme_values(eigs, filter_extreme_values[i], iq_range[i])
         dist_param["clonotype_eigs_param"] = stats.semicircular.fit(eigs)
         param["clonotype_eigs"] = eigs
 
@@ -289,9 +295,9 @@ class DextramerSimulator:
 
         # QC plot
         if plot_qc:
-            return self.__qc_plot(neg_x, clone_size, q80_clone_size, invdisp, dist, cov, eigs, rng_key)
+            return self.__qc_plot(neg_x, clone_size_low, clone_size_high, invdisp, dist, cov, eigs, rng_key)
 
-    def __qc_plot(self, neg_x, clone_size, q80_clone_size, invdisp, dist, cov, eigs, rng_key):
+    def __qc_plot(self, neg_x, clone_size_low, clone_size_high, invdisp, dist, cov, eigs, rng_key):
         """
         Plots QQ plots of fitted theoretical distribution against empirical distribution
         """
@@ -325,9 +331,9 @@ class DextramerSimulator:
         sns.histplot(stats.nbinom.rvs(*negbinom_params, size=sample_size), log_scale=True, legend=False, ax=axs[0, 2])
         axs[0, 2].title.set_text("Fitted negative control distribution")
 
-        sns.histplot(clone_size[clone_size > q80_clone_size], log_scale=True, legend=False, ax=axs[1, 0])
+        sns.histplot(clone_size_high, log_scale=True, legend=False, ax=axs[1, 0])
         axs[1, 0].title.set_text("Empirical clone size distribution $>$ q80")
-        stats.probplot(clone_size[clone_size > q80_clone_size], dist=stats.boltzmann,
+        stats.probplot(clone_size_high, dist=stats.boltzmann,
                        sparams=params["cells_per_binder_param"], plot=axs[1, 1], rvalue=True)
         axs[1, 1].get_children()[2].set_fontsize("x-small")
         axs[1, 1].title.set_text("Discrete Boltzmann fitted clone size")
@@ -336,9 +342,9 @@ class DextramerSimulator:
                      log_scale=True, legend=False, ax=axs[1, 2])
         axs[1, 2].title.set_text("Fitted clone size distribution")
 
-        sns.histplot(clone_size[clone_size <= q80_clone_size], log_scale=True, legend=False, ax=axs[2, 0])
+        sns.histplot(clone_size_low, log_scale=True, legend=False, ax=axs[2, 0])
         axs[2, 0].title.set_text("Empirical clone size distribution $\leq$ q80")
-        stats.probplot(clone_size[clone_size <= q80_clone_size], dist=stats.boltzmann,
+        stats.probplot(clone_size_low, dist=stats.boltzmann,
                        sparams=params["cells_per_nonbinder_param"], plot=axs[2, 1], rvalue=True)
         axs[2, 1].get_children()[2].set_fontsize("x-small")
         axs[2, 1].title.set_text("Discrete Boltzmann fitted clone size")
@@ -361,7 +367,7 @@ class DextramerSimulator:
         axs[4, 0].title.set_text("Empirical covariance \n eigenvalue distribution")
         sns.histplot(eigs, log_scale=True, ax=axs[4, 0])
         stats.probplot(eigs, dist="semicircular", sparams=params["clonotype_eigs_param"], plot=axs[4, 1], rvalue=True)
-        axs[4, 1].title.set_text("Semicircle fitted eigenvalues")
+        axs[4, 1].title.set_text("Wigner semicircle fitted eigenvalues")
         axs[4, 1].get_children()[2].set_fontsize("x-small")
         axs[4, 1].get_lines()[0].set_color(blue)
         axs[4, 2].title.set_text("Fitted eigenvalue distribution")
@@ -372,7 +378,7 @@ class DextramerSimulator:
         sns.heatmap(dist, square=True, ax=axs[5, 0], cbar_kws={"shrink": 0.5})
         axs[5, 1].title.set_text("Covariance matrix \n between clonotypes")
         sns.heatmap(cov, square=True, ax=axs[5, 1], cbar_kws={"shrink": 0.5})
-        eigs = stats.semicircular.rvs(*params["clonotype_eigs_param"], size=len(clone_size))
+        eigs = stats.semicircular.rvs(*params["clonotype_eigs_param"], size=len(clone_size_low)+len(clone_size_high))
         cov_est = sample_cov_from_eigs(eigs, rng_key=rng_key)
         axs[5, 2].title.set_text("Eigenvalue simulated \n covariance matrix")
         sns.heatmap(cov_est, square=True, ax=axs[5, 2], cbar_kws={"shrink": 0.5})
@@ -388,7 +394,7 @@ class DextramerSimulator:
                                              simulate_neg_control: bool = False,
                                              plot_data: bool = False,
                                              rng_key: int = 42
-                                             ) -> Tuple[MuData, Optional[plt.Axes]]:
+                                             ) -> Union[Tuple[MuData, Any], MuData]:
         """
         Given negative control mean and concentration parameters (estimated from real data) generate binding data for
         one pMHC with predefined positive fold-change.
@@ -473,8 +479,9 @@ class DextramerSimulator:
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([fold_change] * n_cells)
 
-        return (DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None),
-                self.__plot_simulated_data(d, plot_data))
+        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None),
+
+        return (mdat, DextramerSimulator.__plot_simulated_data(d)) if plot_data else mdat
 
     def simulate_pmhc_data_from_sample(self,
                                        total_cells: int = 5000,
@@ -485,7 +492,7 @@ class DextramerSimulator:
                                        simulate_neg_control: bool = False,
                                        plot_data: bool = False,
                                        rng_key: int = 42
-                                       ) -> Tuple[MuData, Optional[plt.Axes]]:
+                                       ) -> Union[Tuple[MuData, Any], MuData]:
         """
         Given negative control samples and other parameters sampled from real world data, generate binding data for
         one pMHC with predefined positive fold-change.
@@ -522,7 +529,8 @@ class DextramerSimulator:
 
         if use_clonotype_cov:
             # sample covariance matrix
-            eigs = np.random.choice(clonotype_eig, size=nof_clones)
+            eigs = np.random.choice(clonotype_eig, size=nof_clones, replace=False)
+            eigs = np.where(eigs < 0, 0, eigs)
             cov = sample_cov_from_eigs(eigs, rng_key=rng_key)
 
             p_clone = expit(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
@@ -554,14 +562,11 @@ class DextramerSimulator:
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([fold_change] * n_cells)
 
-        return (DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None),
-                self.__plot_simulated_data(d, plot_data))
+        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None),
+        return (mdat, self.__plot_simulated_data(d)) if plot_data else mdat
 
     @staticmethod
-    def __plot_simulated_data(d, plot_data):
-
-        if plot_data is None:
-            return None
+    def __plot_simulated_data(d):
 
         fig_params = {'legend.fontsize': 'x-small',
                       'figure.figsize': (8.27, 5.845),
@@ -573,7 +578,7 @@ class DextramerSimulator:
                       }
         plt.rcParams.update(fig_params)
 
-        fig, axs = plt.subplots(2, 2, layout='tight') #gridspec_kw={'height_ratios': [1, 1, 2, 0]}
+        fig, axs = plt.subplots(2, 2, layout='tight')  #gridspec_kw={'height_ratios': [1, 1, 2, 0]}
         if not len(d["x_neg"]):
             del d["x_neg"]
 
@@ -593,7 +598,7 @@ class DextramerSimulator:
         return axs
 
     @staticmethod
-    def __generate_mdata(d, simulate_neg_control, cov=None):
+    def __generate_mdata(d, simulate_neg_control, cov=None) -> MuData:
 
         if simulate_neg_control:
             adata = ad.AnnData(np.array([d["x"], d["x_neg"]], dtype="int64").T)
@@ -626,5 +631,3 @@ class DextramerSimulator:
             rng_key: an integer to initialize the random key generator.
         """
         return npd.NegativeBinomial2(mu, alpha).sample(jax.random.PRNGKey(rng_key), sample_shape=(size,))
-
-
