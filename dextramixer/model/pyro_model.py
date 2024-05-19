@@ -24,6 +24,7 @@ import numpyro as npy
 import numpyro.distributions as npd
 from numpyro.infer import HMC, MCMC, NUTS, initialization
 
+from dextramixer.model import ApMHCDeconvolution
 from dextramixer.utils import RegisteredModel
 
 if TYPE_CHECKING:
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 jax.config.update("jax_enable_x64", True)
 
 
-class DextraMixer:
+class DextraMixer(ApMHCDeconvolution):
     """
     This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
     data with increasing usage of information
@@ -56,6 +57,8 @@ class DextraMixer:
     """
 
     def __init__(self, model_type: str = "mixturemodel", mode: str = "H"):
+        super().__init__()
+
         if mode.upper() not in ("H", "I", "C"):
             raise ValueError(f"`mode` must be either of the three `I`=independent, `H`=hierarchical, "
                              + f"`C`=clonotype-specific but was {mode}")
@@ -118,7 +121,11 @@ class DextraMixer:
         c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
         sigma = air.uns[ir_cov_key] if ir_cov_key is not None else None
 
-        self.__check_parameters(x, x_neg, c, sigma)
+        if self.mode == "C":
+            if c is None:
+                raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
+
+        self._check_parameters(x, x_neg, c, sigma)
         self.model.preprocess_model_data(x, x_neg, c, sigma, self.mode, **kwargs)
 
     @staticmethod
@@ -178,35 +185,14 @@ class DextraMixer:
             A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
             class assignment decision
         """
-
-        if threshold is not None and target_fdr is not None:
-            raise ValueError("Please specify either a manual `threshold` or a `target_fdr` but not both.")
-
-        if threshold is not None and not (0 <= threshold <= 1):
-            raise ValueError(f"`threshold`must be in [0,1] but was {threshold}")
-
-        if target_fdr is not None and not (0 <= target_fdr <= 1):
-            raise ValueError(f"`target_fdr`must be in [0,1] but was {target_fdr}")
+        if self.sampler is None:
+            raise RuntimeError("Model has not been fit yet. Please call first `fit`.")
 
         # posterior probability of belonging to the binding class
         p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
 
-        if target_fdr is not None:
-            # Direct posterior probability approach cf. Newton et al.(2004)
-            def opt_thresh(p_, alpha):
-
-                incs = p_.copy()
-                incs = incs[::-1].sort()
-
-                for c in jnp.unique(incs):
-                    fdr = jnp.mean(1 - incs[incs >= c])
-                    if fdr < alpha:
-                        return c, fdr
-                return 1., 0
-
-            threshold, fdr_ = opt_thresh(p, target_fdr)
         if target_fdr is not None or threshold is not None:
-            assignment = (p >= threshold).astype("int32")
+            assignment = self._predict_posterior_class(p, threshold, target_fdr)
         else:
             p_ = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][...,]), axis=0)
             assignment = jnp.argmax(p_, axis=1)
@@ -220,35 +206,6 @@ class DextraMixer:
     def __make_arvis(self):
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
-
-    def __check_parameters(self, x, neg_x, c, sigma):
-        """
-        checks consistency of input data before initializing the model
-        """
-        N = x.shape[0]
-
-        if self.mode == "C":
-            if c is None:
-                raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
-
-        if c is not None:
-            if c.shape[0] != N:
-                raise ValueError(f"`c` and count data `x` require the same size but got {c.shape[0]} and {N}")
-
-        if neg_x is not None:
-            N_neg = neg_x.shape[0]
-
-            if N_neg != N:
-                raise ValueError(f"x_neg must have the same size than x but got {N_neg} vs {N}.")
-
-        if sigma is not None:
-            if c is None:
-                raise ValueError("If `sigma` is given, clonality vector `c` must be given as well")
-            else:
-                C_nof = len(np.unique(c))
-                if sigma.shape[0] != C_nof:
-                    raise ValueError(f"Sigma must have shape ({C_nof},{C_nof}) and defined over clonotypes but has"
-                                     + f"{sigma.shape}")
 
 
 class ADextraMixerModel(metaclass=RegisteredModel):
