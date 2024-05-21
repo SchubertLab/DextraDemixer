@@ -13,17 +13,17 @@ from dextramixer.utils.simulation import t_cell_simulation
 class MyTestCase(unittest.TestCase):
 
     def setUp(self):
-        # self.mdata = t_cell_simulation(n_clones=10,
-        #                                mean_binder_range=[350, 550],
-        #                                shape_binder_range=[300, 500],
-        #                                n_cells_per_binder=[50, 100],
-        #                                mean_non_binder=50,
-        #                                shape_non_binder=10,
-        #                                n_cells_per_non_binder=[50, 100],
-        #                                binding_ratio=0.5,
-        #                                rng_key=443)
-        #
-        # self.binder = self.mdata.mod["airr"].obs["is_binder"].to_numpy()
+        self.mdata = t_cell_simulation(n_clones=10,
+                                       mean_binder_range=[350, 550],
+                                       shape_binder_range=[300, 500],
+                                       n_cells_per_binder=[50, 100],
+                                       mean_non_binder=50,
+                                       shape_non_binder=10,
+                                       n_cells_per_non_binder=[50, 100],
+                                       binding_ratio=0.5,
+                                       rng_key=443)
+
+        self.binder = self.mdata.mod["airr"].obs["is_binder"].to_numpy()
         self.mdata = mu.read("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
 
 
