@@ -45,8 +45,8 @@ class BEAMT(ApMHCDeconvolution):
         gex = mdata.mod[gex_key]
         N = gex.shape[0]
 
-        x = gex[:, pmhc_key].X.reshape((N,))
-        x_neg = gex[:, neg_ctrl_key].X.reshape((N,))
+        x = gex[:, pmhc_key].X.toarray().reshape((N,))
+        x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((N,))
 
         self._check_parameters(x, x_neg, None, None)
 

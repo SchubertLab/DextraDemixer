@@ -115,8 +115,8 @@ class DextraMixer(ApMHCDeconvolution):
         air = mdata.mod[ir_key]
         N = gex.shape[0]
 
-        x = gex[:, pmhc_key].X.reshape((N, ))
-        x_neg = gex[:, neg_ctrl_key].X.reshape((N,)) if neg_ctrl_key else None
+        x = gex[:, pmhc_key].X.toarray().reshape((N, ))
+        x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((N,)) if neg_ctrl_key else None
 
         c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
         sigma = air.uns[ir_cov_key] if ir_cov_key is not None else None
