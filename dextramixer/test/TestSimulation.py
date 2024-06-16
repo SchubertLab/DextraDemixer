@@ -50,14 +50,15 @@ class TestSimulation(unittest.TestCase):
         # self.mdata.mod["airr"].uns["ir_dist_aa_full"] = dist - 1
         # self.mdata.write("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
         self.mdata = mu.read("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
-
-        print(self.mdata)
+        #print(self.mdata)
+        pass
 
     def test_estimating_params(self):
         sim = DextramerSimulator()
         sim.estimate_simulation_params(self.mdata, neg_ctrl_key="negative_control", ir_dist_key="ir_dist_aa_full")
         print(DextramerSimulator.default_params())
         print(sim.dist_params)
+        #print(sim.params)
 
     def test_estimating_params_with_plot(self):
         from matplotlib import pyplot as plt
@@ -93,7 +94,8 @@ class TestSimulation(unittest.TestCase):
         mdat, axs = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
                                                              binding_ratio=0.1,
                                                              nof_clones=50,
-                                                             binding_fold_increase_range=[200],
+                                                             binding_fold_increase_range=[10],
+                                                             variance_fold_increase_range=[1.2],
                                                              simulate_neg_control=True,
                                                              plot_data=True)
 
@@ -103,6 +105,15 @@ class TestSimulation(unittest.TestCase):
         sim = DextramerSimulator()
         mdat, _ = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True)
         print(mdat)
+
+    def test_simulating_params_write_read(self):
+        sim = DextramerSimulator()
+        mdat = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True, use_clonotype_cov=True,
+)
+
+        mdat.write("test.h5mu")
+        mdat2 = mu.read("test.h5mu")
+        print(mdat2)
 
     def test_simulating_params_cov(self):
         sim = DextramerSimulator()

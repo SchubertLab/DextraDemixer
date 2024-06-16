@@ -1,0 +1,63 @@
+cell_list = [1000]
+clone_list = [5]
+p_list = [0.5]
+cov_list = [0, 1]
+mean_fold_increase = [200.0] #[2, 5, 10, 25, 50, 100, 200, 400]
+var_fold_increase = [1.2] #[1.2, 1.5, 2, 5, 10, 15, 20]
+reps = 1
+
+
+rule all:
+    input:
+        "results/aggregated_results.csv"
+
+rule run_simulation:
+    input:
+        # No input files required for this script
+    output:
+        expand(["simulation/sim_ncell{cell}_nclone{clone}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu",
+                "simulation/sim_ncell{cell}_nclone{clone}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.pdf"],
+                cell="{cell}",
+                clone="{clone}",
+                p="{p}",
+                cov="{cov}",
+                mean="{mean}",
+                var="{var}",
+                i="{i}")
+    params:
+        reps=reps
+    conda:
+        "environment.yaml"
+    shell:
+        "python create_data_mean_variance_fold_increase.py {wildcards.cell} {wildcards.clone} {wildcards.p} {wildcards.cov} {wildcards.mean} {wildcards.var} {params.reps}"
+
+rule run_dextramixer:
+    input:
+       "simulation/sim_ncell{cell}_nclone{clone}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu"
+    output:
+        "prediction/dextramixer_ncell{cell}_nclone{clone}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.pred.csv"
+    conda:
+        "environment.yaml"
+    shell:
+        "python run_dextramixer.py {input} {output}"
+
+
+rule run_BEAMT:
+    input:
+        "simulation/sim_ncell{cell}_nclone{clone}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu"
+    output:
+        "prediction/beamt_ncell{cell}_nclone{clone}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.pred.csv"
+    conda:
+        "environment.yaml"
+    shell:
+        "python run_BEAMT.py {input} {output}"
+
+rule aggregate_results:
+    input:
+        directory="prediction"
+    output:
+        "results/aggregated_results.csv"
+    conda:
+        "environment"
+    shell:
+        "python aggregate_results.py {input.directory} {output}"
