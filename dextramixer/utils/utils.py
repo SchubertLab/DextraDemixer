@@ -31,7 +31,7 @@ def gower_centering(distance_matrix):
     return -0.5 * (squared_distances - row_means - col_means + total_mean)
 
 
-def nearest_psd(matrix, use_abs=False):
+def nearest_psd(matrix, thresh=0.0, use_abs=False):
     """
     Adjusts a matrix to ensure it is positive semi-definite using JAX.
 
@@ -42,20 +42,23 @@ def nearest_psd(matrix, use_abs=False):
     Returns:
         jax.numpy.ndarray: Adjusted positive semi-definite matrix.
     """
+    matrix = (matrix + matrix.T) / 2
+
     eigenvalues, eigenvectors = jnp.linalg.eigh(matrix)
     # Set negative eigenvalues to zero or abs
     if use_abs:
         eigenvalues = jnp.abs(eigenvalues)
     else:
-        eigenvalues = jnp.where(eigenvalues < 0, 0, eigenvalues)
+        eigenvalues = jnp.where(eigenvalues < thresh, 1e-10, eigenvalues)
     return eigenvectors @ jnp.diag(eigenvalues) @ eigenvectors.T
 
 
 def dist_to_cov_psd(d, use_abs=False):
     """
-    Converts a symmetric distance matrix into a symmetric positive semi-definite covariance matrix using JAX.
+    Converts a symmetric distance matrix into a symmetric positive semi-definite covariance matrix using Gower's
+    centering method.
 
-    Parameters:
+    Args:
         d (jax.numpy.ndarray): Symmetric distance matrix.
         use_abs (bool): specify if eigenvalues are adjusted by taking the absolut values or setting negative values to 0
                         (default False)
@@ -63,6 +66,44 @@ def dist_to_cov_psd(d, use_abs=False):
         jax.numpy.ndarray: Symmetric positive semi-definite covariance matrix.
     """
     return nearest_psd(gower_centering(d), use_abs)
+
+
+def normalize_distance_matrix(D):
+    min_val = jnp.min(D)
+    max_val = jnp.max(D)
+    return (D - min_val) / (max_val - min_val)
+
+
+def dist_to_sim(d, normalize=True, sigma=None, epsilon=None):
+    """"
+    Converts a symmetric distance matrix into a symmetric positive semi-definite similarity matrix using an RBF Kernel:
+
+    Kij = exp(- Dij^2/(2*sigma^2))
+
+    Args:
+        d (jax.numpy.ndarray): Symmetric distance matrix.
+        normalize (bool: indicating whether  Min-Max normalize should be applied
+        sigma (float): the hyperparameter of the RBF Kernel, if None then the median of the non-zero elements will be used
+        epsilon(float): a small float 1e-6 that is added to the diagonal of the similarity matrix to stabilize it
+    Returns:
+        jax.numpy.ndarray: Symmetric positive semi-definite covariance matrix.
+    """
+    distance_matrix = jnp.array(d).astype("float64")
+    if normalize:
+        distance_matrix = normalize_distance_matrix(distance_matrix)
+
+    if distance_matrix.shape[0] != distance_matrix.shape[1]:
+        raise ValueError("Distance matrix must be square")
+    if not jnp.allclose(distance_matrix, distance_matrix.T):
+        raise ValueError("Distance matrix must be symmetric")
+
+    if sigma is None:
+        sigma = jnp.median(distance_matrix[jnp.nonzero(distance_matrix)])
+
+    K = jnp.exp(-distance_matrix ** 2 / (2 * sigma ** 2))
+    if epsilon is not None:
+        K += epsilon * jnp.eye(K.shape[0])
+    return nearest_psd(K)
 
 
 def sim_to_dist(s: jax.Array) -> jax.Array:
@@ -104,8 +145,29 @@ def sample_cov_from_eigs(eigs: jax.Array, rng_key: int = 42) -> ndarray[Any, dty
     return Q.T @ S @ Q
 
 
+def generate_sim_from_ltridist(ltrdist, normalize=False, sigma=None):
+    """
+    generates a symmetric similarity matrix given a lower triangular matrix of distances
+
+    """
+    N = jnp.int32((jnp.sqrt(8 * jnp.size(ltrdist) + 1) + 1) / 2)
+
+    # Reshape flat array into lower triangular matrix
+
+    tril_indices = jnp.tril_indices(N, -1)
+
+    # Create the full distance matrix by mirroring the lower triangle
+    distance_matrix = jnp.zeros((N, N))
+    distance_matrix = distance_matrix.at[tril_indices].set(ltrdist)
+    distance_matrix = distance_matrix.at[(tril_indices[1], tril_indices[0])].set(ltrdist)
+
+    sim = dist_to_sim(distance_matrix, normalize=normalize, sigma=sigma)
+
+    return sim
+
+
 def sample_corr_from_eigen(eigs: jax.Array, rng_key: int = 42) -> jax.Array:
-    return random_correlation.rvs(dim=eigs, random_state=rng_key)
+    return random_correlation.rvs(eigs, random_state=rng_key)
 
 
 def remove_outliers(sr, iq_range=0.8):
@@ -127,3 +189,16 @@ def convert_neg_binom_params(mu, disp):
     n = mu * p / (1 - p)
     return n, p
 
+
+def convert_to_variance(mu, disp):
+    """
+    converts mean and dispersion of negative binomial to variance
+    """
+    return mu + disp*mu**2
+
+
+def convert_to_invdispersion(mu, var):
+    """
+    converts mu and variance to inverse dispersion param of negative binomial
+    """
+    return 1/((var - mu)/mu**2)

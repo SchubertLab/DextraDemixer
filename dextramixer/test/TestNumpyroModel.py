@@ -1,4 +1,6 @@
 import unittest
+
+import muon as mu
 import pandas as pd
 import numpy as np
 import arviz as az
@@ -8,7 +10,7 @@ import jax.numpy as jnp
 from matplotlib import pyplot as plt
 
 from dextramixer.model import DextraMixer
-from dextramixer.utils import DextramerSimulator
+from dextramixer.utils import DextramerSimulator, dist_to_sim
 from dextramixer.utils.simulation import t_cell_simulation
 
 
@@ -258,6 +260,54 @@ class MyTestCase(unittest.TestCase):
         p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
         N = len(self.binder)
         accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_ture_data_cov(self):
+        mdat = mu.read("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+
+        mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
+        #print(mdat)
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(mdat, "CMV", neg_ctrl_key="negative_control",
+                                    ir_cov_key="clone_cov",
+                                    ir_clone_key="clone_id")
+        trace = mixer.fit(sampler_config={"nuts": {"dense_mass": True}})
+        print(mixer.summary())
+        #print(mdat.mod["airr"].obs.is_binder)
+        return True
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        N = len(mdat.mod["airr"].obs.is_binder)
+        accuracy = (mdat.mod["airr"].obs.is_binder == assignment).sum() / N
+        print("Accuracy", accuracy)
+
+    def test_simulated_data_cov(self):
+        sim = DextramerSimulator()
+        mdat, axis = sim.simulate_pmhc_data_from_distribution(total_cells=3000,
+                                                              nof_clones=100,
+                                                              simulate_neg_control=True,
+                                                              use_clonotype_cov=True,
+                                                              binding_fold_increase_range=[100],
+                                                              variance_fold_increase_range=[1.2],
+                                                              plot_data=True)
+
+        plt.show()
+        binder = mdat.mod["airr"].obs["is_binder"]
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(mdat, "pmhc1", neg_ctrl_key="neg_control",
+                                    ir_cov_key="clone_cov",
+                                    ir_clone_key="clone_id")
+        trace = mixer.fit()
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class()
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
         print("Accuracy", accuracy)
 
 

@@ -343,11 +343,13 @@ class DextraMixerMixtureModel(ADextraMixerModel):
     def __init__(self):
         super().__init__()
         self._name = "mixturemodel"
-        self._version = "0.0.2"
+        self._version = "0.0.3"
 
     @staticmethod
     def get_default_model_config() -> Dict:
         model_config = {
+            "mu_w_mean_prior": 0.0,
+            "mu_w_var_prior": 10.0,
             "mu_q_mean_prior": 0.0,
             "mu_q_var_prior": 10.0,
             "sigma_q_var_prior": 10.0,
@@ -364,8 +366,8 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         return self._version
 
     def model(  # type: ignore
-            self,
-            **kwargs):
+              self,
+              **kwargs):
 
         if self.coords is None:
             raise RuntimeError("Model was not properly initialized. Please call `build_model` first")
@@ -389,6 +391,8 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             neg_sample_axis = self.coords["neg_sample_axis"]
 
         # hyperprior parameters
+        mu_w_mean_prior = model_config.get("mu_w_mean_prior", 0.0)
+        mu_w_var_prior = model_config.get("mu_w_var_prior", 10.0)
         mu_q_mean_prior = model_config.get("mu_q_mean_prior", 0.0)
         mu_q_var_prior = model_config.get("mu_q_var_prior", 10.0)
         sigma_q_var_prior = model_config.get("sigma_q_var_prior", 10.0)
@@ -412,9 +416,20 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         # cluster probability prior
         if clone is not None:
             if sigma is not None:
-                w_raw = npy.sample("w_raw", npd.TransformedDistribution(
-                    npd.MultivariateNormal(covariance_matrix=sigma),
-                    npd.transforms.SigmoidTransform()))
+                c_nof = clone_axis.size
+
+                # non-centered multivariat parametrization
+                mu_w = npy.sample("mu_w", npd.Normal(loc=mu_w_mean_prior, scale=mu_w_var_prior))
+                gamma_w = npy.sample("gamma_w", npd.Normal(loc=jnp.zeros(c_nof), scale=jnp.ones(c_nof)))
+                L = jnp.linalg.cholesky(sigma)
+                w_base = mu_w + jnp.dot(L, gamma_w)
+
+                # probit link
+                w_raw = jax.scipy.special.ndtr(w_base)
+
+                # logit link TODO: test whether probit or logit has inference benefits
+                # w_raw = jax.scipy.special.expit(w_base)
+
                 w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
             else:
                 with clone_axis:
