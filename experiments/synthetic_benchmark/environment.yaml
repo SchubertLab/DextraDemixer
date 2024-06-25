@@ -19,3 +19,4 @@ dependencies:
       - muon>=0.1.6
       - scanpy>=1.9.8
       - scirpy>=0.13.0
+      - sklearn
