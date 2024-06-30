@@ -52,6 +52,9 @@ class ApMHCDeconvolution:
         if target_fdr is not None and not (0 <= target_fdr <= 1):
             raise ValueError(f"`target_fdr`must be in [0,1] but was {target_fdr}")
 
+        if threshold is None and target_fdr is None:
+            threshold = 0.5
+
         # posterior probability of belonging to the binding class
         if target_fdr is not None:
             # Direct posterior probability approach cf. Newton et al.(2004)

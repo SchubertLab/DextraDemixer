@@ -1,11 +1,5 @@
 import unittest
 
-import numpy as np
-import pandas as pd
-
-import scirpy as ir
-import scanpy as sc
-from mudata import MuData
 import muon as mu
 
 from matplotlib import pyplot as plt

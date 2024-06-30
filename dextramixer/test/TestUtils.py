@@ -1,5 +1,4 @@
 import unittest
-import muon as mu
 
 from dextramixer.utils import *
 

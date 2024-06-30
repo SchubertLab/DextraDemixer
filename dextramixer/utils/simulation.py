@@ -13,7 +13,6 @@ import anndata as ad
 import mudata as md
 import numpyro as npy
 import numpyro.distributions as npd
-import statsmodels
 import statsmodels.formula.api as smf
 from mudata import MuData
 
@@ -25,8 +24,6 @@ import matplotlib.pyplot as plt
 from dextramixer.utils.utils import remove_outliers, convert_neg_binom_params, \
     convert_to_invdispersion, convert_to_variance, dist_to_sim, generate_sim_from_ltridist, \
     normalize_distance_matrix
-
-jax.config.update("jax_enable_x64", True)
 
 
 def generate_nb_val(mu, alpha, size):
