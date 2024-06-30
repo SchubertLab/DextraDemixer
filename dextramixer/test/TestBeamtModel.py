@@ -3,9 +3,7 @@ import unittest
 import numpy as np
 import muon as mu
 import pandas as pd
-import numpyro as npy
 
-from dextramixer.model import DextraMixer
 from dextramixer.model.BEAMT import BEAMT
 from dextramixer.utils.simulation import t_cell_simulation
 

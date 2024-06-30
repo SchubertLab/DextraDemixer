@@ -1,8 +1,6 @@
 import unittest
 
 import muon as mu
-import pandas as pd
-import numpy as np
 import arviz as az
 import numpyro as npy
 
@@ -35,6 +33,178 @@ class MyTestCase(unittest.TestCase):
 
     def test_model_registration(self):
         print(DextraMixer.available_methods())
+
+    def test_svi_model_H(self):
+        sim = DextramerSimulator()
+        mdat, axis = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                              nof_clones=10,
+                                                              simulate_neg_control=False,
+                                                              use_clonotype_cov=True,
+                                                              binding_fold_increase_range=[100],
+                                                              variance_fold_increase_range=[1.2],
+                                                              plot_data=True)
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+
+        plt.show()
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(mdat, "pmhc1")
+        trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
+        print()
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
+        print("Accuracy", accuracy)
+
+    def test_svi_model_I(self):
+        sim = DextramerSimulator()
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                        nof_clones=10,
+                                                        simulate_neg_control=False,
+                                                        use_clonotype_cov=True,
+                                                        binding_fold_increase_range=[100],
+                                                        variance_fold_increase_range=[1.2],
+                                                        plot_data=False)
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+
+        plt.show()
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(mdat, "pmhc1")
+        trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
+        print()
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
+        print("Accuracy", accuracy)
+
+    def test_svi_model_C(self):
+        sim = DextramerSimulator()
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                        nof_clones=10,
+                                                        simulate_neg_control=False,
+                                                        use_clonotype_cov=True,
+                                                        binding_fold_increase_range=[100],
+                                                        variance_fold_increase_range=[1.2],
+                                                        plot_data=False)
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+
+        plt.show()
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id")
+        trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
+        print()
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
+        print("Accuracy", accuracy)
+
+    def test_svi_model_C_C(self):
+        sim = DextramerSimulator()
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                        nof_clones=10,
+                                                        simulate_neg_control=True,
+                                                        use_clonotype_cov=True,
+                                                        binding_fold_increase_range=[100],
+                                                        variance_fold_increase_range=[1.2],
+                                                        plot_data=False)
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+
+        plt.show()
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id")
+        trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
+        print()
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
+        print("Accuracy", accuracy)
+
+    def test_svi_model_C_neg_control(self):
+        sim = DextramerSimulator()
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                        nof_clones=10,
+                                                        simulate_neg_control=True,
+                                                        use_clonotype_cov=True,
+                                                        binding_fold_increase_range=[100],
+                                                        variance_fold_increase_range=[1.2],
+                                                        plot_data=False)
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+
+        plt.show()
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id", neg_ctrl_key="neg_control")
+        trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
+        print()
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
+        print("Accuracy", accuracy)
+
+    def test_svi_model_C_ir_cov(self):
+        sim = DextramerSimulator()
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                        nof_clones=10,
+                                                        simulate_neg_control=True,
+                                                        use_clonotype_cov=True,
+                                                        binding_fold_increase_range=[100],
+                                                        variance_fold_increase_range=[1.2],
+                                                        plot_data=False)
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+        c_nof = mdat.mod["airr"].uns["clone_cov"].shape[0]
+        mdat.mod["airr"].uns["clone_cov"] = jnp.eye(c_nof)
+        plt.show()
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(mdat, "pmhc1",
+                                    ir_cov_key="clone_cov",
+                                    ir_clone_key="clone_id")
+        trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)  # AutoDelta works others dont
+        print()
+        print(mixer.summary())
+        print(trace.losses)
+
+        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
+        print("Accuracy", accuracy)
 
     @unittest.SkipTest
     def test_GPU_Metal(self):

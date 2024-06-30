@@ -1,8 +1,11 @@
+from collections import defaultdict
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
+from jax import pure_callback
 from numpy import ndarray, dtype, bool_
 from scipy.stats import ortho_group, random_correlation
 
@@ -202,3 +205,22 @@ def convert_to_invdispersion(mu, var):
     converts mu and variance to inverse dispersion param of negative binomial
     """
     return 1/((var - mu)/mu**2)
+
+
+def hook_optax(optimizer):
+    """
+    Helper function to collect gradient norms during training
+    """
+    gradient_norms = defaultdict(list)
+
+    def append_grad(grad):
+        for name, g in grad.items():
+            gradient_norms[name].append(float(jnp.linalg.norm(g)))
+        return grad
+
+    def update_fn(grads, state, params=None):
+        grads = pure_callback(append_grad, grads, grads)
+        return optimizer.update(grads, state, params=params)
+
+    return optax.GradientTransformation(optimizer.init, update_fn), gradient_norms
+

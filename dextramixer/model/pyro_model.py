@@ -3,18 +3,16 @@ from __future__ import annotations
 import abc
 import warnings
 
-from typing import TYPE_CHECKING, Literal, Optional, Union, Dict, Tuple
+from typing import TYPE_CHECKING, Union, Dict, Tuple
 
 import arviz as az
-import jax.lax
+
 import numpy as np
 import pandas as pd
-
-import scanpy as sc
-import scirpy as ir
 import mudata as md
 
 import jax
+import jax.lax
 from jax import random
 from jax.nn import logsumexp
 
@@ -22,16 +20,12 @@ import jax.numpy as jnp
 
 import numpyro as npy
 import numpyro.distributions as npd
-from numpyro.infer import HMC, MCMC, NUTS, initialization
 
 from dextramixer.model import ApMHCDeconvolution
 from dextramixer.utils import RegisteredModel
 
 if TYPE_CHECKING:
-    from jax._src.prng import PRNGKeyArray
     from jax._src.typing import Array
-
-jax.config.update("jax_enable_x64", True)
 
 
 class DextraMixer(ApMHCDeconvolution):
@@ -65,6 +59,10 @@ class DextraMixer(ApMHCDeconvolution):
 
         self.sampler = None
         self.trace = None
+        self.is_svi = None
+        self.svi_result = None
+        self.rng_key = None
+        self.guide = None
         self.mode = mode.upper()
 
         if model_type not in ADextraMixerModel.registry.keys():
@@ -115,7 +113,7 @@ class DextraMixer(ApMHCDeconvolution):
         air = mdata.mod[ir_key]
         N = gex.shape[0]
 
-        x = gex[:, pmhc_key].X.toarray().reshape((N, ))
+        x = gex[:, pmhc_key].X.toarray().reshape((N,))
         x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((N,)) if neg_ctrl_key else None
 
         c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
@@ -129,33 +127,45 @@ class DextraMixer(ApMHCDeconvolution):
         self.model.preprocess_model_data(x, x_neg, c, sigma, self.mode, **kwargs)
 
     @staticmethod
-    def get_default_sampler_config() -> Dict[str, Union[int, float]]:
-        """
-        """
+    def get_default_sampler_config():
+
         sampler_config = {
-            "num_samples": 1000,
-            "num_warmup": 1000,
-            "num_chains": 4,
-            "progress_bar": False,
-            "nuts": {
-                "target_accept_prob": 0.9,
-                "max_tree_depth": 15
+            "mcmc": {
+                "num_samples": 1000,
+                "num_warmup": 1000,
+                "num_chains": 4,
+                "progress_bar": False,
+                "nuts": {
+                    "target_accept_prob": 0.9,
+                    "max_tree_depth": 15
+                }
+            },
+            "svi": {
+                "maxiter": 1000,
+                "progress_bar": False,
+                "adam": {
+                    "step_size": 0.01
+                },
+                "tracer": {
+                    "num_particles": 1,
+                }
             }
         }
+
         return sampler_config
 
     def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng_key: int = 3) -> az.InferenceData:
         """
         fits the mixture model with MCMC and returns the trace
         """
-        if self.model is None:
+        if self.model.data is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
         if sampler_config is None:
-            sampler_config = self.get_default_sampler_config()
+            sampler_config = self.get_default_sampler_config()["mcmc"]
 
-        nuts_config = {**self.get_default_sampler_config()["nuts"], **sampler_config.get("nuts", {})}
-        sampling_config = {**self.get_default_sampler_config(), **sampler_config}
+        nuts_config = {**self.get_default_sampler_config()["mcmc"]["nuts"], **sampler_config.get("nuts", {})}
+        sampling_config = {**self.get_default_sampler_config()["mcmc"], **sampler_config}
         sampling_config.pop("nuts", None)
 
         self.sampler = npy.infer.MCMC(
@@ -166,6 +176,43 @@ class DextraMixer(ApMHCDeconvolution):
         self.sampler.run(random.PRNGKey(rng_key))
 
         return self.__make_arvis()
+
+    def fit_svi(self, guide=npy.infer.autoguide.AutoMultivariateNormal, svi_config: Dict[str, Union[int, float]] = None,
+                rng_key: int = 0) -> az.InferenceData:
+        """
+        Implements stochastic variational inference
+
+        guide: The guide to use for variational inference. If None, self.model object will be checked for a guide function
+        svi_config: configuration for optimizer (Adam) and posterior samples
+        rng_key: integer seed to initialize numpyros RNG-Key store
+        """
+
+        if self.model.data is None:
+            raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
+
+        self.is_svi = True
+        self.rng_key = rng_key
+
+        if svi_config is None:
+            svi_config = self.get_default_sampler_config()["svi"]
+
+        adam_config = {**self.get_default_sampler_config()["svi"]["adam"], **svi_config.get("adam", {})}
+        tracer_config = {**self.get_default_sampler_config()["svi"]["tracer"], **svi_config.get("tracer", {})}
+        svi_config = {**self.get_default_sampler_config()["svi"], **svi_config}
+        svi_config.pop("adam", None)
+        svi_config.pop("tracer", None)
+
+        # check for custom guide in self.model otherwise use autoguide
+        if callable(getattr(self.model, "guide", None)):
+            self.guide = self.model.guide
+        else:
+            self.guide = guide(self.model.model)
+
+        optimizer = npy.optim.ClippedAdam(**adam_config)
+        svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.Trace_ELBO(**tracer_config))
+        self.svi_result = svi.run(random.PRNGKey(rng_key), svi_config.get("num_steps", 1000))  # rng_key
+
+        return self.svi_result
 
     def predict_posterior_class(self,
                                 threshold: float = None,
@@ -185,23 +232,37 @@ class DextraMixer(ApMHCDeconvolution):
             A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
             class assignment decision
         """
-        if self.sampler is None:
-            raise RuntimeError("Model has not been fit yet. Please call first `fit`.")
+        if self.sampler is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
 
         # posterior probability of belonging to the binding class
-        p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
+        if self.is_svi:
+            predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
+                                              num_samples=500)
+            samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key
+            p = jnp.exp(jnp.mean(samples["log_p"], axis=0))[:, 1]
 
-        if target_fdr is not None or threshold is not None:
-            assignment = self._predict_posterior_class(p, threshold, target_fdr)
         else:
-            p_ = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][...,]), axis=0)
-            assignment = jnp.argmax(p_, axis=1)
+            p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
+
+        assignment = self._predict_posterior_class(p, threshold, target_fdr)
+
         return p, assignment
 
     def summary(self):
-        if self.trace is None:
-            raise RuntimeError("Model has not been fit yet. Please call `fit()` first.")
-        return az.summary(self.trace, var_names=["~log_p"])
+        if self.trace is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
+
+        if self.is_svi:
+            posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
+                                                            sample_shape=(500,))
+
+            # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
+            posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
+            inference_data = az.from_dict(posterior=posterior_samples_np)
+            return az.summary(inference_data, var_names=["~log_p"])
+        else:
+            return az.summary(self.trace, var_names=["~log_p"])
 
     def __make_arvis(self):
         self.trace = az.from_numpyro(self.sampler)
@@ -218,7 +279,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         self._name = "Abstract"
         self._version = "0.0.0"
         self._data = None
-        self._coords = None
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
@@ -232,9 +292,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         float_dtype = "float64"
         int_dtype = "int32"
 
-        N = x.shape[0]
-        K = 2
-
         self.data = {"x": jnp.array(x, dtype=int_dtype),
                      "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
                      "clone": None if c is None else jnp.array(c, dtype=int_dtype),
@@ -242,20 +299,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
                      }
 
         self.mode = mode
-
-        # set coord axis
-        self.coords = {
-            "sample_axis": npy.plate("sample_axis", N, dim=-1),
-            "cluster_axis": npy.plate("cluster_axis", K, dim=-1),
-        }
-
-        if self.data["clone"] is not None:
-            C_nof = len(jnp.unique(self.data["clone"]))
-            self.coords["clone_axis"] = npy.plate("clone_axis", C_nof, dim=-1)
-
-        if self.data["x_neg"] is not None:
-            N_neg = neg_cont.shape[0]
-            self.coords["neg_sample_axis"] = npy.plate("neg_sample_axis", N_neg, dim=-1)
 
     @abc.abstractmethod
     def model(self, **kwargs):
@@ -275,14 +318,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
     @abc.abstractmethod
     def version(self) -> str:
         return self._version
-
-    @property
-    def coords(self) -> Dict:
-        return self._coords
-
-    @coords.setter
-    def coords(self, value):
-        self._coords = value
 
     @property
     def data(self) -> Dict:
@@ -366,29 +401,24 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         return self._version
 
     def model(  # type: ignore
-              self,
-              **kwargs):
+            self,
+            **kwargs):
 
-        if self.coords is None:
-            raise RuntimeError("Model was not properly initialized. Please call `build_model` first")
+        if self.data is None:
+            raise RuntimeError("Model was not properly initialized. Please call `preprocess_model_data` first")
 
         model_config = {**DextraMixerMixtureModel.get_default_model_config(), **kwargs["model_config"]} if (
                 "model_config" in kwargs) else DextraMixerMixtureModel.get_default_model_config()
 
-        # data
         x = self.data["x"]
         x_neg = self.data["x_neg"]
         clone = self.data["clone"]
         sigma = self.data["sigma"]
 
         # plates
-        sample_axis = self.coords["sample_axis"]
-        cluster_axis = self.coords["cluster_axis"]
-        K = cluster_axis.size
-        if clone is not None:
-            clone_axis = self.coords["clone_axis"]
-        if x_neg is not None:
-            neg_sample_axis = self.coords["neg_sample_axis"]
+        N_sample = x.shape[0]
+        c_nof = np.unique(clone).size if clone is not None else 0
+        K = 2
 
         # hyperprior parameters
         mu_w_mean_prior = model_config.get("mu_w_mean_prior", 0.0)
@@ -406,33 +436,27 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         if self.mode == "H":
             alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
         elif self.mode == "C":
-            with clone_axis:
+            with npy.plate("clone_axis", c_nof):
                 alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
         else:
-            with cluster_axis:
+            with npy.plate("cluster_axis", K):
                 alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
+
         npy.factor("power_law", 1 / jnp.sqrt(alpha))  # according to stan standard prior
 
         # cluster probability prior
         if clone is not None:
             if sigma is not None:
-                c_nof = clone_axis.size
-
                 # non-centered multivariat parametrization
-                mu_w = npy.sample("mu_w", npd.Normal(loc=mu_w_mean_prior, scale=mu_w_var_prior))
+                mu_w = npy.sample("mu_w", npd.Normal(model_config["mu_w_mean_prior"], model_config["mu_w_var_prior"]))
                 gamma_w = npy.sample("gamma_w", npd.Normal(loc=jnp.zeros(c_nof), scale=jnp.ones(c_nof)))
                 L = jnp.linalg.cholesky(sigma)
-                w_base = mu_w + jnp.dot(L, gamma_w)
 
-                # probit link
-                w_raw = jax.scipy.special.ndtr(w_base)
-
-                # logit link TODO: test whether probit or logit has inference benefits
-                # w_raw = jax.scipy.special.expit(w_base)
+                w_raw = jax.scipy.special.ndtr(mu_w + jnp.dot(L, gamma_w))
 
                 w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
             else:
-                with clone_axis:
+                with npy.plate("clone_axis", c_nof):
                     w = npy.sample("w", npd.Dirichlet(jnp.ones(K)))
             z = npd.Categorical(probs=w[clone])
         else:
@@ -443,8 +467,8 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                        npd.TransformedDistribution(npd.LogNormal(loc=mu_q, scale=sigma_q).expand((K,)),
                                                    npd.transforms.OrderedTransform()))
 
-        if x_neg is not None:
-            with neg_sample_axis:
+        with npy.plate("sample_axis", N_sample):
+            if x_neg is not None:
                 if self.mode == "H":
                     yhat_neg = npy.sample("yhat_neg",
                                           npd.NegativeBinomial2(mean=q[0], concentration=alpha),
@@ -456,16 +480,14 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                                           obs=x_neg)
                 else:
                     yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean= q[0], concentration=alpha[0]),
+                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha[0]),
                                           obs=x_neg)
-
-        with sample_axis as i:
 
             # target pMHC
             if self.mode == "C":
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
                                                                          concentration=alpha[clone].reshape(
-                                                                             (sample_axis.size, 1))
+                                                                             (N_sample, 1))
                                                                          )
                                                 )
             else:

@@ -94,6 +94,7 @@ setup(
             'mudata>=0.2.3'
             'scanpy>=1.9.8',
             'scirpy>=0.13.0',
+            'optax>=0.2.2'
             ],
 
 )

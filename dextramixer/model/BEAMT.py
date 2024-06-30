@@ -1,24 +1,16 @@
 from __future__ import annotations
 
-import warnings
+from typing import TYPE_CHECKING, Tuple
 
-from typing import TYPE_CHECKING, Literal, Optional, Union, Dict, Tuple
-
-import scanpy as sc
-import scirpy as ir
 import mudata as md
 
 import jax.lax
 import jax
-import jax.numpy as jnp
 
 from dextramixer.model import ApMHCDeconvolution
 
 if TYPE_CHECKING:
-    from jax._src.prng import PRNGKeyArray
     from jax._src.typing import Array
-
-jax.config.update("jax_enable_x64", True)
 
 
 class BEAMT(ApMHCDeconvolution):
