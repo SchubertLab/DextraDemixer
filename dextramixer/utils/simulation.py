@@ -4,6 +4,7 @@ import warnings
 from typing import Union, Tuple, Optional, Any
 
 import jax
+import scipy.special
 
 import seaborn as sns
 import numpy as np
@@ -141,12 +142,11 @@ class DextramerSimulator:
     @staticmethod
     def default_params():
         default_params = {
-            'neg_mean': 4.7223404255316,
-            'neg_concentration': 0.3939270703460169,
-            'cells_per_nonbinder_param': [0.4350238944807278, 3773.0, 1.0],
-            'cells_per_binder_param': [0.005349189822663033, 3451.0, 11.0],
+            'neg_mean': 2.471916508538899,
+            'neg_concentration': 0.7342967361574478,
+            'cells_per_clonotype': [0.2550112909684161, 2267.0, 1.0],
             'concentration_param': (0.6018940224585299, 0.09382864854673992, 3.063191246241674),
-            'clonotype_dist_param': (1.3302992269048928, 2.1670839185775645, 0, 1)
+            'clonotype_dist_param': (1.3302992164770606, 2.1670838467235023, 0, 1)
         }
 
         return default_params
@@ -201,15 +201,15 @@ class DextramerSimulator:
                              "data.")
 
         if isinstance(filter_extreme_values, bool):
-            filter_extreme_values = [filter_extreme_values] * 5
-        if isinstance(filter_extreme_values, collections.abc.Collection) and len(filter_extreme_values) < 5:
-            raise ValueError("`filter_extreme_values` must have a length of at least five.")
+            filter_extreme_values = [filter_extreme_values] * 4
+        if isinstance(filter_extreme_values, collections.abc.Collection) and len(filter_extreme_values) < 4:
+            raise ValueError("`filter_extreme_values` must have a length of at least four.")
 
         if isinstance(iq_range, numbers.Number) and not isinstance(iq_range, bool):
-            iq_range = [iq_range] * 5
+            iq_range = [iq_range] * 4
 
-        if isinstance(iq_range, collections.abc.Collection) and len(iq_range) < 5:
-            raise ValueError("`iq_range` must have a length of at least five.")
+        if isinstance(iq_range, collections.abc.Collection) and len(iq_range) < 4:
+            raise ValueError("`iq_range` must have a length of at least four.")
 
         dist_param = {}
         param = {}
@@ -233,28 +233,16 @@ class DextramerSimulator:
 
         # fit clonotype size distribution
         clone_size = mdata.mod[ir_key].obs.groupby("clone_id", dropna=False).size()
-        q80_clone_size = np.quantile(clone_size, 0.8)
         rv = stats.boltzmann
-        bounds_low = [boltzmann_boundary, boltzmann_boundary, (1, 1)]
-        bounds_high = [boltzmann_boundary, boltzmann_boundary, (q80_clone_size, q80_clone_size)]
-        clone_size_high = __remove_extreme_values(clone_size[clone_size > q80_clone_size], filter_extreme_values[i],
-                                                  iq_range[i])
-        clone_size_low = __remove_extreme_values(clone_size[clone_size <= q80_clone_size], filter_extreme_values[i],
-                                                 iq_range[i])
-        res_low = stats.fit(rv, clone_size_low, bounds_low)
-        res_high = stats.fit(rv, clone_size_high, bounds_high)
+        bounds = [(0, 10000), (1, np.max(clone_size)), (1, 1)]
+        clone_size = __remove_extreme_values(clone_size, filter_extreme_values[i], iq_range[i])
+        res = stats.fit(rv, clone_size, bounds)
 
-        if not res_low.success:
-            warnings.warn("Estimation of boltzmann parameters on the lower 80-quantile of clone sizes failed. Please "
-                          "adjust boundary conditions of the parameters")
-        if not res_high.success:
-            warnings.warn("Estimation of boltzmann parameters on the upper 80-quantile of clone sizes failed. Please "
+        if not res.success:
+            warnings.warn("Estimation of boltzmann parameters of clone sizes failed. Please "
                           "adjust boundary conditions of the parameters")
 
-        dist_param["cells_per_nonbinder_param"] = list(res_low.params)
-        dist_param["cells_per_binder_param"] = list(res_high.params)
-        param["cells_per_nonbinder"] = clone_size_low.tolist()
-        param["cells_per_binder"] = clone_size_high.tolist()
+        dist_param["cells_per_clonotype"] = list(res.params)
 
         # fit inv dispersion distribution
         invdisp = []
@@ -296,9 +284,9 @@ class DextramerSimulator:
 
         # QC plot
         if plot_qc:
-            return self.__qc_plot(neg_x, clone_size_low, clone_size_high, invdisp, dist_norm, cov, dist_flat, rng_key)
+            return self.__qc_plot(neg_x, clone_size, invdisp, dist_norm, cov, dist_flat, rng_key)
 
-    def __qc_plot(self, neg_x, clone_size_low, clone_size_high, invdisp, dist, cov, dist_flat, rng_key):
+    def __qc_plot(self, neg_x, clone_size, invdisp, dist, cov, dist_flat, rng_key):
         """
         Plots QQ plots of fitted theoretical distribution against empirical distribution
         """
@@ -321,7 +309,7 @@ class DextramerSimulator:
         blue = sns.color_palette("tab10", 10)[0]
         sample_size = 5000
 
-        fig, axs = plt.subplots(6, 3, layout='tight', gridspec_kw={'height_ratios': [1, 1, 1, 1, 1, 2]})
+        fig, axs = plt.subplots(5, 3, layout='tight', gridspec_kw={'height_ratios': [1, 1, 1, 1, 2]})
 
         sns.histplot(neg_x, log_scale=True, legend=False, ax=axs[0, 0])
         negbinom_params = convert_neg_binom_params(params["neg_mean"], 1 / params["neg_concentration"])
@@ -333,59 +321,48 @@ class DextramerSimulator:
         sns.histplot(stats.nbinom.rvs(*negbinom_params, size=sample_size), log_scale=True, legend=False, ax=axs[0, 2])
         axs[0, 2].title.set_text("Fitted negative control distribution")
 
-        sns.histplot(clone_size_high, log_scale=True, legend=False, ax=axs[1, 0])
-        axs[1, 0].title.set_text("Empirical clone size distribution $>$ q80")
-        stats.probplot(clone_size_high, dist=stats.boltzmann,
-                       sparams=params["cells_per_binder_param"], plot=axs[1, 1], rvalue=True)
+        sns.histplot(clone_size, log_scale=True, legend=False, ax=axs[1, 0])
+        axs[1, 0].title.set_text("Empirical clone size distribution")
+        stats.probplot(clone_size, dist=stats.boltzmann,
+                       sparams=params["cells_per_clonotype"], plot=axs[1, 1], rvalue=True)
         axs[1, 1].get_children()[2].set_fontsize("x-small")
         axs[1, 1].title.set_text("Discrete Boltzmann fitted clone size")
         axs[1, 1].get_lines()[0].set_color(blue)
-        sns.histplot(stats.boltzmann.rvs(*params["cells_per_binder_param"], size=sample_size),
+        sns.histplot(stats.boltzmann.rvs(*params["cells_per_clonotype"], size=sample_size),
                      log_scale=True, legend=False, ax=axs[1, 2])
         axs[1, 2].title.set_text("Fitted clone size distribution")
 
-        sns.histplot(clone_size_low, log_scale=True, legend=False, ax=axs[2, 0])
-        axs[2, 0].title.set_text("Empirical clone size distribution $\leq$ q80")
-        stats.probplot(clone_size_low, dist=stats.boltzmann,
-                       sparams=params["cells_per_nonbinder_param"], plot=axs[2, 1], rvalue=True)
-        axs[2, 1].get_children()[2].set_fontsize("x-small")
-        axs[2, 1].title.set_text("Discrete Boltzmann fitted clone size")
-        axs[2, 1].get_lines()[0].set_color(blue)
-        sns.histplot(stats.boltzmann.rvs(*params["cells_per_nonbinder_param"], size=sample_size),
-                     log_scale=True, legend=False, ax=axs[2, 2])
-        axs[2, 2].title.set_text("Fitted clone size distribution")
-
-        sns.histplot(x=invdisp, log_scale=False, legend=False, ax=axs[3, 0])
-        axs[3, 0].title.set_text("Empirical inverse dispersion \n distribution of clonotypes")
+        sns.histplot(x=invdisp, log_scale=False, legend=False, ax=axs[2, 0])
+        axs[2, 0].title.set_text("Empirical inverse dispersion \n distribution of clonotypes")
         stats.probplot(invdisp, dist=stats.gamma,
-                       sparams=params["concentration_param"], plot=axs[3, 1], rvalue=True)
-        axs[3, 1].title.set_text("Gamma fitted inverse dispersion \n of clonotypes")
+                       sparams=params["concentration_param"], plot=axs[2, 1], rvalue=True)
+        axs[2, 1].title.set_text("Gamma fitted inverse dispersion \n of clonotypes")
+        axs[2, 1].get_children()[2].set_fontsize("x-small")
+        axs[2, 1].get_lines()[0].set_color(blue)
+        axs[2, 2].title.set_text("Fitted inverse dispersion \n distribution of clonotypes ")
+        sns.histplot(stats.gamma.rvs(*params["concentration_param"], size=sample_size),
+                     log_scale=False, legend=False, ax=axs[2, 2])
+
+        axs[3, 0].title.set_text("Empirical clonotype \n distance distribution")
+        sns.histplot(dist_flat, log_scale=False, ax=axs[3, 0])
+        stats.probplot(dist_flat, dist="beta", sparams=params["clonotype_dist_param"], plot=axs[3, 1], rvalue=True)
+        axs[3, 1].title.set_text("Beta fitted normalized distances")
         axs[3, 1].get_children()[2].set_fontsize("x-small")
         axs[3, 1].get_lines()[0].set_color(blue)
-        axs[3, 2].title.set_text("Fitted inverse dispersion \n distribution of clonotypes ")
-        sns.histplot(stats.gamma.rvs(*params["concentration_param"], size=sample_size),
+        axs[3, 2].title.set_text("Fitted distance distribution")
+        sns.histplot(stats.beta.rvs(*params["clonotype_dist_param"], size=sample_size),
                      log_scale=False, legend=False, ax=axs[3, 2])
 
-        axs[4, 0].title.set_text("Empirical clonotype \n distance distribution")
-        sns.histplot(dist_flat, log_scale=False, ax=axs[4, 0])
-        stats.probplot(dist_flat, dist="beta", sparams=params["clonotype_dist_param"], plot=axs[4, 1], rvalue=True)
-        axs[4, 1].title.set_text("Beta fitted normalized distances")
-        axs[4, 1].get_children()[2].set_fontsize("x-small")
-        axs[4, 1].get_lines()[0].set_color(blue)
-        axs[4, 2].title.set_text("Fitted distance distribution")
-        sns.histplot(stats.beta.rvs(*params["clonotype_dist_param"], size=sample_size),
-                     log_scale=False, legend=False, ax=axs[4, 2])
-
-        axs[5, 0].title.set_text("Distance matrix \n between clonotypes")
-        sns.heatmap(dist, square=True, ax=axs[5, 0], cbar_kws={"shrink": 0.5})
-        axs[5, 1].title.set_text("Covariance matrix \n between clonotypes")
-        sns.heatmap(cov, square=True, ax=axs[5, 1], cbar_kws={"shrink": 0.5})
-        c = len(clone_size_low)+len(clone_size_high)
+        axs[4, 0].title.set_text("Distance matrix \n between clonotypes")
+        sns.heatmap(dist, square=True, ax=axs[4, 0], cbar_kws={"shrink": 0.5})
+        axs[4, 1].title.set_text("Covariance matrix \n between clonotypes")
+        sns.heatmap(cov, square=True, ax=axs[4, 1], cbar_kws={"shrink": 0.5})
+        c = len(clone_size)
 
         d = stats.beta(*params["clonotype_dist_param"]).rvs(size=int(c*(c-1)/2))
         cov_est = generate_sim_from_ltridist(d)
-        axs[5, 2].title.set_text("Distance simulated \n covariance matrix")
-        sns.heatmap(cov_est, square=True, ax=axs[5, 2], cbar_kws={"shrink": 0.5})
+        axs[4, 2].title.set_text("Distance simulated \n covariance matrix")
+        sns.heatmap(cov_est, square=True, ax=axs[4, 2], cbar_kws={"shrink": 0.5})
 
         return axs
 
@@ -395,6 +372,7 @@ class DextramerSimulator:
                                              binding_ratio: float = 0.05,
                                              binding_fold_increase_range: list[float] = None,
                                              variance_fold_increase_range: list[float] = None,
+                                             p_binding_outlier=0.0,
                                              use_clonotype_cov: bool = False,
                                              simulate_neg_control: bool = False,
                                              plot_data: bool = False,
@@ -412,6 +390,7 @@ class DextramerSimulator:
             variance_fold_increase_range: list of fold increase of the variance to the mean of a negative binomial
                                           (i.e. variance_fold_increase_range=[1] => mean = var).
                                           If not specified estimated inverdispersion of clonotypes will be used.
+            p_binding_outlier: the probability of a cell of binding clonotype to have low (noise-level) counts
             use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
             simulate_neg_control: whether to simulate a negative control pMHC for each cell (default: False)
             plot_data: boolean whether to plot simulated data (default: False)
@@ -436,8 +415,7 @@ class DextramerSimulator:
         neg_mean = params["neg_mean"]
         neg_concentration = params["neg_concentration"]
         clonotype_dist_param = params["clonotype_dist_param"]
-        cells_per_binder_param = params["cells_per_binder_param"]
-        cells_per_nonbinder_param = params["cells_per_nonbinder_param"]
+        cells_per_clonotype = params["cells_per_clonotype"]
         concentration_param = params["concentration_param"]
 
         if binding_fold_increase_range is None:
@@ -448,7 +426,7 @@ class DextramerSimulator:
             ltridist = stats.beta.rvs(*clonotype_dist_param, size=int(nof_clones*(nof_clones-1)/2))
             cov = generate_sim_from_ltridist(ltridist, normalize=False)
 
-            p_clone = expit(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
+            p_clone = scipy.special.ndtr(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
             binder_assignment = np.random.binomial(1, p_clone)
         else:
             binder_assignment = np.random.binomial(1, binding_ratio, size=nof_clones)
@@ -456,13 +434,11 @@ class DextramerSimulator:
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
         total_le = total_cells - nof_clones
-        raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_binder_param)
-                                        if binder_assignment[i] else stats.boltzmann.rvs(*cells_per_nonbinder_param)
-                                        for i in range(nof_clones)])
+        raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_clonotype) for _ in range(nof_clones)])
         cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone)[0]
         cells_per_clone = (np.random.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
-        d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": []}
+        d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
 
         for i in range(nof_clones):
             is_binder = int(binder_assignment[i])
@@ -483,6 +459,19 @@ class DextramerSimulator:
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3)
 
             x = self.generate_nb_val(mean, concentration, size=n_cells)
+
+            if p_binding_outlier > 0 and is_binder:
+                outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells)
+                outlier_idx = np.where(outlier)
+
+                a = (0.001 - neg_concentration) / (neg_concentration / 3)
+                concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3)
+
+                x = x.at[outlier_idx].set(self.generate_nb_val(mean, concentration, size=np.sum(outlier)))
+
+                d["outlier"].extend(outlier.tolist())
+            else:
+                d["outlier"].extend([0]*n_cells)
 
             if simulate_neg_control:
                 mean = neg_mean

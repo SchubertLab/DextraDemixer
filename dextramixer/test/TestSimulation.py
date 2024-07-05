@@ -77,7 +77,7 @@ class TestSimulation(unittest.TestCase):
         sim = DextramerSimulator()
         ax = sim.estimate_simulation_params(self.mdata, neg_ctrl_key="negative_control",
                                             ir_dist_key="ir_dist_aa_full",
-                                            filter_extreme_values=[True, True, False, False, True],
+                                            filter_extreme_values=[True, True, False, True],
                                             plot_qc=True)
         print(sim.dist_params)
         plt.savefig("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
@@ -87,8 +87,9 @@ class TestSimulation(unittest.TestCase):
         sim = DextramerSimulator()
         mdat, axs = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
                                                              binding_ratio=0.1,
-                                                             nof_clones=50,
-                                                             binding_fold_increase_range=[10],
+                                                             nof_clones=100,
+                                                             p_binding_outlier=0.1,
+                                                             binding_fold_increase_range=[100],
                                                              variance_fold_increase_range=[1.2],
                                                              simulate_neg_control=True,
                                                              plot_data=True)

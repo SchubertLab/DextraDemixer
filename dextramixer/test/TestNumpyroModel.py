@@ -178,9 +178,10 @@ class MyTestCase(unittest.TestCase):
     def test_svi_model_C_ir_cov(self):
         sim = DextramerSimulator()
         mdat = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
-                                                        nof_clones=700,
+                                                        nof_clones=100,
                                                         simulate_neg_control=True,
                                                         use_clonotype_cov=True,
+                                                        p_binding_outlier=0.01,
                                                         binding_fold_increase_range=[100],
                                                         variance_fold_increase_range=[1.2],
                                                         plot_data=False, rng_key=4554)
@@ -237,9 +238,10 @@ class MyTestCase(unittest.TestCase):
         sim = DextramerSimulator()
         mdata = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
                                                          nof_clones=50,
-                                                         binding_ratio=0.05,
                                                          simulate_neg_control=True,
-                                                         binding_fold_increase_range=[500],
+                                                         p_binding_outlier=0.01,
+                                                         binding_fold_increase_range=[100],
+                                                         variance_fold_increase_range=[1.2],
                                                          plot_data=False)
 
         binder = mdata.mod["airr"].obs["is_binder"]
