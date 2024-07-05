@@ -177,7 +177,7 @@ class DextraMixer(ApMHCDeconvolution):
 
         return self.__make_arvis()
 
-    def fit_svi(self, guide=npy.infer.autoguide.AutoMultivariateNormal, svi_config: Dict[str, Union[int, float]] = None,
+    def fit_svi(self, guide=npy.infer.autoguide.AutoNormal, svi_config: Dict[str, Union[int, float]] = None,
                 rng_key: int = 0) -> az.InferenceData:
         """
         Implements stochastic variational inference
@@ -211,6 +211,22 @@ class DextraMixer(ApMHCDeconvolution):
         optimizer = npy.optim.ClippedAdam(**adam_config)
         svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.Trace_ELBO(**tracer_config))
         self.svi_result = svi.run(random.PRNGKey(rng_key), svi_config.get("num_steps", 1000))  # rng_key
+
+        # DEBUG
+        # svi_state = svi.init(random.PRNGKey(0), model_config={})
+        # # Optimization loop
+        # num_iterations = svi_config.get("num_steps", 1000)
+        # for i in range(num_iterations):
+        #     svi_state_tmp, loss = svi.update(svi_state, model_config={})
+        #     if jnp.isnan(loss):
+        #         print(f'NaN encountered at iteration {i}')
+        #         break
+        #     svi_state = svi_state_tmp
+        # self.svi_result = svi_state
+        # # Get the learned parameters
+        # params = svi.get_params(svi_state)
+        # print("Learned parameters:", params)
+        # DEBUG end
 
         return self.svi_result
 
@@ -289,7 +305,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
                               **kwargs):
         """
         """
-        float_dtype = "float64"
+        float_dtype = "float32"
         int_dtype = "int32"
 
         self.data = {"x": jnp.array(x, dtype=int_dtype),
@@ -448,12 +464,13 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         if clone is not None:
             if sigma is not None:
                 # non-centered multivariat parametrization
-                mu_w = npy.sample("mu_w", npd.Normal(model_config["mu_w_mean_prior"], model_config["mu_w_var_prior"]))
+                mu_w = npy.sample("mu_w", npd.Normal(mu_w_mean_prior, mu_w_var_prior))
                 gamma_w = npy.sample("gamma_w", npd.Normal(loc=jnp.zeros(c_nof), scale=jnp.ones(c_nof)))
                 L = jnp.linalg.cholesky(sigma)
 
-                w_raw = jax.scipy.special.ndtr(mu_w + jnp.dot(L, gamma_w))
+                w_raw = jax.scipy.special.ndtr(jnp.clip(mu_w + jnp.dot(L, gamma_w), -5, 5))
 
+                #w_raw = jax.scipy.special.expit(mu_w + jnp.dot(L, gamma_w))
                 w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
             else:
                 with npy.plate("clone_axis", c_nof):

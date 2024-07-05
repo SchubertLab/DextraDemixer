@@ -1,5 +1,6 @@
 import unittest
 
+import jax
 import muon as mu
 import arviz as az
 import numpyro as npy
@@ -176,20 +177,20 @@ class MyTestCase(unittest.TestCase):
 
     def test_svi_model_C_ir_cov(self):
         sim = DextramerSimulator()
-        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
-                                                        nof_clones=10,
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
+                                                        nof_clones=700,
                                                         simulate_neg_control=True,
                                                         use_clonotype_cov=True,
                                                         binding_fold_increase_range=[100],
                                                         variance_fold_increase_range=[1.2],
-                                                        plot_data=False)
+                                                        plot_data=False, rng_key=4554)
 
         binder = mdat.mod["airr"].obs["is_binder"]
         c_nof = mdat.mod["airr"].uns["clone_cov"].shape[0]
         mdat.mod["airr"].uns["clone_cov"] = jnp.eye(c_nof)
         plt.show()
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(mdat, "pmhc1",
                                     ir_cov_key="clone_cov",
                                     ir_clone_key="clone_id")
