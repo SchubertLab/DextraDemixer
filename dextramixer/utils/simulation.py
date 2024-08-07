@@ -157,7 +157,6 @@ class DextramerSimulator:
                                    gex_key: str = "gex",
                                    ir_key: str = "airr",
                                    ir_dist_key: str = "dist",
-                                   boltzmann_boundary: Tuple[int, int] = (0, 10000),
                                    filter_extreme_values: Union[bool, list[bool]] = False,
                                    iq_range: Union[float, list[float]] = 0.8,
                                    plot_qc: bool = False,
@@ -175,8 +174,6 @@ class DextramerSimulator:
             ir_key: the MuData AIRR module key
             ir_dist_key: the key in AIRR module's '.uns' that contains a full, symmetric and square distance matrix
                          for all clonotype cluster
-            boltzmann_boundary: a tuple of floats representing the boundary conditions of a discrete Boltzmann
-                                distribution
             filter_extreme_values: boolean or list of booleans indicating whether extreme values should be filtered
                                    before fitting the theoretical distributions. If a list is provided, at least five
                                    booleans, one per fitted category of distributions, must be provided.
@@ -424,9 +421,9 @@ class DextramerSimulator:
         if use_clonotype_cov:
             # sample covariance matrix
             ltridist = stats.beta.rvs(*clonotype_dist_param, size=int(nof_clones*(nof_clones-1)/2))
-            cov = generate_sim_from_ltridist(ltridist, normalize=False)
+            cov = generate_sim_from_ltridist(ltridist, normalize=False, epsilon=0)
 
-            p_clone = scipy.special.ndtr(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
+            p_clone = expit(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
             binder_assignment = np.random.binomial(1, p_clone)
         else:
             binder_assignment = np.random.binomial(1, binding_ratio, size=nof_clones)
@@ -435,7 +432,7 @@ class DextramerSimulator:
         # specified total cell count
         total_le = total_cells - nof_clones
         raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_clonotype) for _ in range(nof_clones)])
-        cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone)[0]
+        cells_per_clone_p = raw_cells_per_clone/raw_cells_per_clone.sum()
         cells_per_clone = (np.random.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
         d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}

@@ -52,7 +52,7 @@ def nearest_psd(matrix, thresh=0.0, use_abs=False):
     if use_abs:
         eigenvalues = jnp.abs(eigenvalues)
     else:
-        eigenvalues = jnp.where(eigenvalues < thresh, 1e-10, eigenvalues)
+        eigenvalues = jnp.where(eigenvalues < thresh, 1e-6, eigenvalues)
     return eigenvectors @ jnp.diag(eigenvalues) @ eigenvectors.T
 
 
@@ -91,7 +91,7 @@ def dist_to_sim(d, normalize=True, sigma=None, epsilon=None):
     Returns:
         jax.numpy.ndarray: Symmetric positive semi-definite covariance matrix.
     """
-    distance_matrix = jnp.array(d).astype("float64")
+    distance_matrix = jnp.array(d)
     if normalize:
         distance_matrix = normalize_distance_matrix(distance_matrix)
 
@@ -104,9 +104,11 @@ def dist_to_sim(d, normalize=True, sigma=None, epsilon=None):
         sigma = jnp.median(distance_matrix[jnp.nonzero(distance_matrix)])
 
     K = jnp.exp(-distance_matrix ** 2 / (2 * sigma ** 2))
+
     if epsilon is not None:
         K += epsilon * jnp.eye(K.shape[0])
-    return nearest_psd(K)
+    K=nearest_psd(K)
+    return K
 
 
 def sim_to_dist(s: jax.Array) -> jax.Array:
@@ -116,7 +118,7 @@ def sim_to_dist(s: jax.Array) -> jax.Array:
     if s.shape[0] != s.shape[1] or jnp.any(s != s.T):
         raise ValueError(f"Similarity matrix must be square and symmetric.")
 
-    EPS = jnp.finfo("float64").eps
+    EPS = jnp.finfo("float32").eps
     return - jnp.log((EPS + s) / (EPS + jnp.max(s)))
 
 
@@ -142,13 +144,13 @@ def sample_cov_from_eigs(eigs: jax.Array, rng_key: int = 42) -> ndarray[Any, dty
     Returns:
         a covariance matrix of size nxn
     """
-    eigs = jnp.where(eigs < 0, 0, eigs)
+    eigs = jnp.where(eigs < 0, 1e-8, eigs)
     S = jnp.diag(eigs)
     Q = sample_orthogonal_mtx(eigs.shape[0], rng_key=rng_key)
     return Q.T @ S @ Q
 
 
-def generate_sim_from_ltridist(ltrdist, normalize=False, sigma=None):
+def generate_sim_from_ltridist(ltrdist, normalize=False, sigma=None, epsilon=0.0):
     """
     generates a symmetric similarity matrix given a lower triangular matrix of distances
 
@@ -163,8 +165,7 @@ def generate_sim_from_ltridist(ltrdist, normalize=False, sigma=None):
     distance_matrix = jnp.zeros((N, N))
     distance_matrix = distance_matrix.at[tril_indices].set(ltrdist)
     distance_matrix = distance_matrix.at[(tril_indices[1], tril_indices[0])].set(ltrdist)
-
-    sim = dist_to_sim(distance_matrix, normalize=normalize, sigma=sigma)
+    sim = dist_to_sim(distance_matrix, normalize=normalize, sigma=sigma, epsilon=epsilon)
 
     return sim
 

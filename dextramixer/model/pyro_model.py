@@ -467,9 +467,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
                 mu_w = npy.sample("mu_w", npd.Normal(mu_w_mean_prior, mu_w_var_prior))
                 gamma_w = npy.sample("gamma_w", npd.Normal(loc=jnp.zeros(c_nof), scale=jnp.ones(c_nof)))
                 L = jnp.linalg.cholesky(sigma)
-
                 w_raw = jax.scipy.special.ndtr(jnp.clip(mu_w + jnp.dot(L, gamma_w), -5, 5))
-
                 #w_raw = jax.scipy.special.expit(mu_w + jnp.dot(L, gamma_w))
                 w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
             else:

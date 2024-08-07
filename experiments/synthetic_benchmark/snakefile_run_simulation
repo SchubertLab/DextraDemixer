@@ -1,0 +1,61 @@
+from snakemake.utils import min_version
+min_version("6.0")
+
+# Configuration
+cell_list = [5000]
+clone_list = [100]
+p_list = [0.1]
+cov_list = [0, 1]
+p_outlier_list = [0.0]
+mean_fold_increase = [2, 5, 10, 25, 50, 100]
+var_fold_increase = [1.2, 1.5, 2, 5, 10,  20]
+reps = 20
+tools = ["dextramixer", "beamt"]
+
+
+rule all:
+    input:
+        "results/aggregated_results.csv"
+
+rule run_simulation:
+    output:
+        h5mu = "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu",
+        pdf = "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.pdf"
+    params:
+        reps = reps
+    conda:
+        "environment.yaml"
+    shell:
+        "python create_data_mean_variance_fold_increase.py {output.h5mu} {output.pdf} "
+        "{wildcards.cell} {wildcards.clone} {wildcards.po} {wildcards.p} {wildcards.cov} "
+        "{wildcards.mean} {wildcards.var} {params.reps}"
+
+rule run_tool:
+    input:
+        "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu"
+    output:
+        "prediction/{tool}_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.pred.csv"
+    conda:
+        "environment.yaml"
+    shell:
+        "python run_{wildcards.tool}.py {input} {output}"
+
+rule aggregate_results:
+    input:
+        expand("prediction/{tool}_{sim_name}.pred.csv",
+               tool=tools,
+               sim_name=[f"ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}"
+                         for cell in cell_list
+                         for clone in clone_list
+                         for po in p_outlier_list
+                         for p in p_list
+                         for cov in cov_list
+                         for mean in mean_fold_increase
+                         for var in var_fold_increase
+                         for i in range(reps)])
+    output:
+        "results/aggregated_results.csv"
+    conda:
+        "environment.yaml"
+    shell:
+        "python aggregate_results.py prediction {output}"
