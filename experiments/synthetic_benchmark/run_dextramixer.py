@@ -2,10 +2,10 @@ import itertools
 import sys
 import os
 
-sys.path.append("../")
+sys.path.append("../../")
 
 import itertools as itr
-
+import numpyro
 import pandas as pd
 
 from dextramixer.model import DextraMixer
@@ -13,7 +13,7 @@ import muon as mu
 
 
 def main(f_in, f_out_csv):
-
+    numpyro.set_host_device_count(4)
     base_path = os.path.basename(f_out_csv)
 
     mdata = mu.read(f_in)
@@ -21,10 +21,11 @@ def main(f_in, f_out_csv):
     N = len(true_binder)
 
     d = {"model": [], "thresh": [], "p": [], "assignment": [], "true_binder": []}
-    for m, neg_ctrl, ir_clone, ir_cov in itr.product(["I", "H", "C"],
+    for m, neg_ctrl, ir_clone, ir_cov, svi in itr.product(["I", "H", "C"],
                                                      [None, "neg_control"],
                                                      [None, "clone_id"],
-                                                     [None, "clone_cov"]):
+                                                     [None, "clone_cov"],
+                                                     [True]):
 
         if "_cov1_" not in f_in and ir_cov is not None and ir_clone is not None:
             continue
@@ -35,14 +36,20 @@ def main(f_in, f_out_csv):
         if m == "C" and ir_clone is None:
             continue
 
+        model_config = f"dextramixer_svi_{int(svi)}_mode_{m}_negctrl_{int(neg_ctrl is not None)}_clone_{int(ir_clone is not None)}_cov_{int(ir_cov is not None)}"
+
+        print(model_config)
+
         mixer = DextraMixer(model_type="mixturemodel", mode=m)
         mixer.preprocess_model_data(mdata, "pmhc1",
                                     neg_ctrl_key=neg_ctrl,
                                     ir_clone_key=ir_clone,
                                     ir_cov_key=ir_cov)
-        trace = mixer.fit()
+        if svi:
+            trace = mixer.fit_svi()
+        else:
+            trace = mixer.fit()
 
-        model_config = f"dextramixer_mode_{m}_negctrl_{int(neg_ctrl is not None)}_clone_{int(ir_clone is not None)}_cov_{int(ir_cov is not None)}"
         # trace.to_netcdf(filename=os.path.join(base_path, "dextramier_"+model_config+"{}.ncdf"))
 
         p_thr, assignment_thr = mixer.predict_posterior_class(threshold=0.5)
