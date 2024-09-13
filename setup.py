@@ -72,26 +72,20 @@ setup(
 
     },
 
-    data_files=[
-            ('docs', ['CHANGELOG.md']),
-            ],
-
     #package_data is a lie: http://stackoverflow.com/questions/7522250/how-to-include-package-data-with-setuptools-distribute
 
     # Run-time dependencies.
     install_requires=[
-            'numpy>=1.25.2',
-            'scipy>=1.11.4'
+            'arviz>=0.18.0',
+            'numpy<2,>=1.25.2',
+            'scipy>=1.11.4',
             'pandas>=2.1.4',
-            #'pymc>=5.6.1',
             'statsmodels>=0.14.1',
             'matplotlib>=3.8.3',
             'jax>=0.4.26',
-            'jax-lib>=0.4.26',
-            'jax-metal>=0.0.7; platform_system=="darwin"'
-            'numpyro>=0.14.0'
-            'arviz>=0.17.1',
-            'mudata>=0.2.3'
+            'jaxlib>=0.4.26',
+            'numpyro>=0.14.0',
+            'mudata>=0.2.3',
             'scanpy>=1.9.8',
             'scirpy>=0.13.0',
             'optax>=0.2.2'
