@@ -3,10 +3,14 @@ import sys
 import os
 import re
 
+import numpy as np
 import pandas as pd
+import tqdm
 
 from sklearn.metrics import classification_report, roc_auc_score, matthews_corrcoef, confusion_matrix
 
+import warnings
+warnings.filterwarnings("error")
 
 def parse_filename(filename):
     # Remove the extension from the filename
@@ -35,12 +39,14 @@ def parse_filename(filename):
 
 
 def main(f_in_dir, f_out):
-    d = {"model":[], "threshold":[], "rep":[], "ncell":[], "nclone":[], "pbinder":[], "meaninc":[], "varinc":[],
+    d = {"model":[], "threshold":[], "rep":[], "ncell":[], "nclone":[], "pbinder":[], "cov":[], "meaninc":[], "varinc":[],
          "wprecision":[], "wrecall":[], "wf1":[], "acc":[], "wauc":[], "mcc":[], "tpr":[], "fdr":[], }
 
-    for f in glob.glob(os.path.join(f_in_dir, "*")):
-        print("file:", f, os.path.basename(f))
-        print()
+    errors = {"file":[], "model":[]}
+    files = glob.glob(os.path.join(f_in_dir, "*"))
+    for f in tqdm.tqdm(files):
+        #print("file:", f, os.path.basename(f))
+        #print()
         model_name, sim_params = parse_filename(os.path.basename(f))
 
         df = pd.read_csv(f)
@@ -50,15 +56,18 @@ def main(f_in_dir, f_out):
             y_pred = group["assignment"]
             p_pred = group["p"]
 
-            cr = classification_report(y_true, y_pred, output_dict=True, labels=[0,1])
-            print()
-            print(cr)
-            print()
+            if np.isnan(p_pred).any():
+                errors["file"].append(f)
+                errors["model"].append(name[0])
+                continue
+
+            cr = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
+
             auc = roc_auc_score(y_true, p_pred, average="weighted")
             mcc = matthews_corrcoef(y_true, y_pred)
             tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
             tpr = tp / (tp + fn)
-            fdr = fp / (tp + fp)
+            fdr = 1 - cr["weighted avg"]["precision"]
 
             d["model"].append(name[0])
             d["threshold"].append(name[1])
@@ -66,6 +75,7 @@ def main(f_in_dir, f_out):
             d["ncell"].append(sim_params.get("ncell", None))
             d["nclone"].append(sim_params.get("nclone", None))
             d["pbinder"].append(sim_params.get("pbinder", None))
+            d["cov"].append(sim_params.get("cov", None))
             d["meaninc"].append(sim_params.get("meaninc", None))
             d["varinc"].append(sim_params.get("varinc", None))
 
@@ -81,6 +91,8 @@ def main(f_in_dir, f_out):
     df = pd.DataFrame.from_dict(d)
     df.to_csv(f_out)
 
+    df_error = pd.DataFrame.from_dict(errors)
+    df_error.to_csv(f_out+".errors")
 
 if __name__ == "__main__":
     f_in_dir = sys.argv[1]
