@@ -91,30 +91,32 @@ def t_cell_simulation(n_clones=3,
     if mean_binder_range is None:
         mean_binder_range = [500, 510]
 
-    np.random.seed(rng_key)
+    rng = np.random.RandomState(seed=rng_key)
     d = {"avidity": [], "binder": [], "clone": []}
     d_neg = {"avidity": [], "binder": [], "clone": []}
-    binder_assignment = np.random.binomial(1, binding_ratio, size=n_clones)
+    binder_assignment = rng.binomial(1, binding_ratio, size=n_clones)
 
     for i in range(n_clones):
         is_binder = binder_assignment[i]
 
         if is_binder:
-            n_cell = np.random.randint(*n_cells_per_binder, size=1)[0]
-            mean = np.random.uniform(*mean_binder_range, size=1)[0]
-            shape = np.random.uniform(*shape_binder_range, size=1)[0]
-            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean, shape, size=n_cell).tolist())
+            n_cell = rng.randint(*n_cells_per_binder, size=1)[0]
+            mean = rng.uniform(*mean_binder_range, size=1)[0]
+            shape = rng.uniform(*shape_binder_range, size=1)[0]
+            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean, shape, size=n_cell, rng_key=rng_key).tolist())
 
         else:
-            n_cell = np.random.randint(*n_cells_per_non_binder, size=1)[0]
+            n_cell = rng.randint(*n_cells_per_non_binder, size=1)[0]
             d["avidity"].extend(
-                DextramerSimulator.generate_nb_val(mean_non_binder, shape_non_binder, size=n_cell).tolist())
+                DextramerSimulator.generate_nb_val(mean_non_binder, shape_non_binder, size=n_cell,
+                                                   rng_key=rng_key).tolist())
 
         d["binder"].extend([is_binder] * n_cell)
         d["clone"].extend([i] * n_cell)
 
         d_neg["avidity"].extend(DextramerSimulator.generate_nb_val(mean_non_binder,
-                                                                   shape_non_binder, size=n_cell).tolist())
+                                                                   shape_non_binder, size=n_cell,
+                                                                   rng_key=rng_key).tolist())
         d_neg["binder"].extend([0] * n_cell)
         d_neg["clone"].extend([i] * n_cell)
 
@@ -185,7 +187,7 @@ class DextramerSimulator:
         Returns:
             (Optional) Matplotlib.Axis array if `plot_qc` = True
         """
-        np.random.seed(rng_key)
+        rng = np.random.RandomState(seed=rng_key)
         i = 0
 
         def __remove_extreme_values(x, is_filter, iqr):
@@ -287,7 +289,7 @@ class DextramerSimulator:
         """
         Plots QQ plots of fitted theoretical distribution against empirical distribution
         """
-        np.random.seed(rng_key)
+        rng = np.random.RandomState(seed=rng_key)
 
         if self.dist_params is not None:
             params = {**DextramerSimulator.default_params(), **self.dist_params}
@@ -315,7 +317,8 @@ class DextramerSimulator:
         axs[0, 1].get_children()[2].set_fontsize("x-small")
         axs[0, 1].title.set_text("Negative Binomial fitted negative control")
         axs[0, 1].get_lines()[0].set_color(blue)
-        sns.histplot(stats.nbinom.rvs(*negbinom_params, size=sample_size), log_scale=True, legend=False, ax=axs[0, 2])
+        sns.histplot(stats.nbinom.rvs(*negbinom_params, size=sample_size, random_state=rng), log_scale=True,
+                     legend=False, ax=axs[0, 2])
         axs[0, 2].title.set_text("Fitted negative control distribution")
 
         sns.histplot(clone_size, log_scale=True, legend=False, ax=axs[1, 0])
@@ -325,7 +328,7 @@ class DextramerSimulator:
         axs[1, 1].get_children()[2].set_fontsize("x-small")
         axs[1, 1].title.set_text("Discrete Boltzmann fitted clone size")
         axs[1, 1].get_lines()[0].set_color(blue)
-        sns.histplot(stats.boltzmann.rvs(*params["cells_per_clonotype"], size=sample_size),
+        sns.histplot(stats.boltzmann.rvs(*params["cells_per_clonotype"], size=sample_size, random_state=rng),
                      log_scale=True, legend=False, ax=axs[1, 2])
         axs[1, 2].title.set_text("Fitted clone size distribution")
 
@@ -337,7 +340,7 @@ class DextramerSimulator:
         axs[2, 1].get_children()[2].set_fontsize("x-small")
         axs[2, 1].get_lines()[0].set_color(blue)
         axs[2, 2].title.set_text("Fitted inverse dispersion \n distribution of clonotypes ")
-        sns.histplot(stats.gamma.rvs(*params["concentration_param"], size=sample_size),
+        sns.histplot(stats.gamma.rvs(*params["concentration_param"], size=sample_size, random_state=rng),
                      log_scale=False, legend=False, ax=axs[2, 2])
 
         axs[3, 0].title.set_text("Empirical clonotype \n distance distribution")
@@ -347,7 +350,7 @@ class DextramerSimulator:
         axs[3, 1].get_children()[2].set_fontsize("x-small")
         axs[3, 1].get_lines()[0].set_color(blue)
         axs[3, 2].title.set_text("Fitted distance distribution")
-        sns.histplot(stats.beta.rvs(*params["clonotype_dist_param"], size=sample_size),
+        sns.histplot(stats.beta.rvs(*params["clonotype_dist_param"], size=sample_size, random_state=rng),
                      log_scale=False, legend=False, ax=axs[3, 2])
 
         axs[4, 0].title.set_text("Distance matrix \n between clonotypes")
@@ -356,7 +359,7 @@ class DextramerSimulator:
         sns.heatmap(cov, square=True, ax=axs[4, 1], cbar_kws={"shrink": 0.5})
         c = len(clone_size)
 
-        d = stats.beta(*params["clonotype_dist_param"]).rvs(size=int(c*(c-1)/2))
+        d = stats.beta(*params["clonotype_dist_param"]).rvs(size=int(c*(c-1)/2), random_state=rng)
         cov_est = generate_sim_from_ltridist(d)
         axs[4, 2].title.set_text("Distance simulated \n covariance matrix")
         sns.heatmap(cov_est, square=True, ax=axs[4, 2], cbar_kws={"shrink": 0.5})
@@ -396,8 +399,7 @@ class DextramerSimulator:
         Returns:
             An Anndata object containing all generated count data and clonal information, and binder status
         """
-
-        np.random.seed(rng_key)
+        rng = np.random.RandomState(seed=rng_key)
 
         if self.dist_params is not None:
             params = {**DextramerSimulator.default_params(), **self.dist_params}
@@ -420,20 +422,20 @@ class DextramerSimulator:
 
         if use_clonotype_cov:
             # sample covariance matrix
-            ltridist = stats.beta.rvs(*clonotype_dist_param, size=int(nof_clones*(nof_clones-1)/2))
+            ltridist = stats.beta.rvs(*clonotype_dist_param, size=int(nof_clones*(nof_clones-1)/2), random_state=rng)
             cov = generate_sim_from_ltridist(ltridist, normalize=False, epsilon=0)
 
-            p_clone = expit(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
-            binder_assignment = np.random.binomial(1, p_clone)
+            p_clone = expit(rng.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
+            binder_assignment = rng.binomial(1, p_clone)
         else:
-            binder_assignment = np.random.binomial(1, binding_ratio, size=nof_clones)
+            binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
 
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
         total_le = total_cells - nof_clones
-        raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_clonotype) for _ in range(nof_clones)])
+        raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_clonotype,random_state=rng) for _ in range(nof_clones)])
         cells_per_clone_p = raw_cells_per_clone/raw_cells_per_clone.sum()
-        cells_per_clone = (np.random.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
+        cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
         d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
 
@@ -442,29 +444,32 @@ class DextramerSimulator:
             n_cells = cells_per_clone[i]
 
             if is_binder:
-                fold_change = float(np.random.choice(binding_fold_increase_range))
+                fold_change = float(rng.choice(binding_fold_increase_range))
                 mean = fold_change * neg_mean
                 if variance_fold_increase_range is None:
-                    concentration = stats.gamma.rvs(*concentration_param)
+                    concentration = stats.gamma.rvs(*concentration_param, random_state=rng)
                 else:
-                    concentration = convert_to_invdispersion(mean, mean*np.random.choice(variance_fold_increase_range))
+                    concentration = convert_to_invdispersion(mean, mean*rng.choice(variance_fold_increase_range))
             else:
                 fold_change = 0.0
                 mean = neg_mean
                 # add some noise to neg_concentration
                 a = (0.001 - neg_concentration) / (neg_concentration / 3)
-                concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3)
+                concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
+                                                    random_state=rng)
 
-            x = self.generate_nb_val(mean, concentration, size=n_cells)
+            x = self.generate_nb_val(mean, concentration, size=n_cells, rng_key=rng_key)
 
             if p_binding_outlier > 0 and is_binder:
-                outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells)
+                outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells, random_state=rng)
                 outlier_idx = np.where(outlier)
 
                 a = (0.001 - neg_concentration) / (neg_concentration / 3)
-                concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3)
+                concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
+                                                    random_state=rng)
 
-                x = x.at[outlier_idx].set(self.generate_nb_val(mean, concentration, size=np.sum(outlier)))
+                x = x.at[outlier_idx].set(self.generate_nb_val(mean, concentration, size=np.sum(outlier),
+                                                               rng_key=rng_key))
 
                 d["outlier"].extend(outlier.tolist())
             else:
@@ -472,7 +477,7 @@ class DextramerSimulator:
 
             if simulate_neg_control:
                 mean = neg_mean
-                x_neg = self.generate_nb_val(mean, neg_concentration, size=n_cells)
+                x_neg = self.generate_nb_val(mean, neg_concentration, size=n_cells, rng_key=rng_key)
                 d["x_neg"].extend(x_neg.tolist())
 
             d["x"].extend(x.tolist())
@@ -517,7 +522,7 @@ class DextramerSimulator:
         if self.params is None:
             raise RuntimeError("Please estimate real world parameters with `estimate_simulation_params`.")
 
-        np.random.seed(rng_key)
+        rng = np.random.RandomState(seed=rng_key)
 
         # params
         neg_x = self.params["neg_x"]
@@ -532,33 +537,33 @@ class DextramerSimulator:
 
         if use_clonotype_cov:
             # sample covariance matrix
-            ltridist = np.random.choice(clonotype_dist, size=int(nof_clones * (nof_clones - 1) / 2), replace=False)
+            ltridist = rng.choice(clonotype_dist, size=int(nof_clones * (nof_clones - 1) / 2), replace=False)
             ltridist = np.where(ltridist < 0, 1e-10, ltridist)
             cov = generate_sim_from_ltridist(ltridist, normalize=False)
 
-            p_clone = expit(np.random.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
-            binder_assignment = np.random.binomial(1, p_clone)
+            p_clone = expit(rng.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
+            binder_assignment = rng.binomial(1, p_clone)
         else:
-            binder_assignment = np.random.binomial(1, binding_ratio, size=nof_clones)
+            binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
 
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
         total_le = total_cells - nof_clones
-        raw_cells_per_clone = np.array([np.random.choice(cells_per_binder)
-                                        if binder_assignment[i] else np.random.choice(cells_per_nonbinder)
+        raw_cells_per_clone = np.array([rng.choice(cells_per_binder)
+                                        if binder_assignment[i] else rng.choice(cells_per_nonbinder)
                                         for i in range(nof_clones)])
-        cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone)[0]
-        cells_per_clone = (np.random.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
+        cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone, random_state=rng)[0]
+        cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
         for i in range(nof_clones):
             is_binder = binder_assignment[i]
             n_cells = cells_per_clone[i]
-            fold_change = np.random.choice(binding_fold_increase_range)
-            nx = np.random.choice(neg_x, size=n_cells)
+            fold_change = rng.choice(binding_fold_increase_range)
+            nx = rng.choice(neg_x, size=n_cells)
             x = fold_change*nx if is_binder else nx
 
             if simulate_neg_control:
-                d["x_neg"].extend(np.random.choice(neg_x, size=n_cells).tolist())
+                d["x_neg"].extend(rng.choice(neg_x, size=n_cells).tolist())
 
             d["x"].extend(x.tolist())
             d["binder"].extend([is_binder] * n_cells)

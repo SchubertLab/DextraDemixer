@@ -132,7 +132,8 @@ def sample_orthogonal_mtx(n: int, rng_key: int = 42) -> np.ndarray:
     Returns:
         A nxn orthonormal matrix
     """
-    return ortho_group.rvs(dim=n, random_state=rng_key)
+    rng = np.random.RandomState(seed=rng_key)
+    return ortho_group.rvs(dim=n, random_state=rng)
 
 
 def sample_cov_from_eigs(eigs: jax.Array, rng_key: int = 42) -> ndarray[Any, dtype[bool_]]:
@@ -171,7 +172,8 @@ def generate_sim_from_ltridist(ltrdist, normalize=False, sigma=None, epsilon=0.0
 
 
 def sample_corr_from_eigen(eigs: jax.Array, rng_key: int = 42) -> jax.Array:
-    return random_correlation.rvs(eigs, random_state=rng_key)
+    rng = np.random.RandomState(seed=rng_key)
+    return random_correlation.rvs(eigs, random_state=rng)
 
 
 def remove_outliers(sr, iq_range=0.8):
