@@ -92,9 +92,56 @@ class TestSimulation(unittest.TestCase):
                                                              binding_fold_increase_range=[100],
                                                              variance_fold_increase_range=[1.2],
                                                              simulate_neg_control=True,
-                                                             plot_data=True)
+                                                             plot_data=True,
+                                                             rng_key=3443)
 
         plt.show()
+
+    def test_random_seed_eq(self):
+        sim = DextramerSimulator()
+        mdat1 = sim.simulate_pmhc_data_from_distribution(total_cells=100,
+                                                         binding_ratio=0.1,
+                                                         nof_clones=5,
+                                                         p_binding_outlier=0.1,
+                                                         binding_fold_increase_range=[100],
+                                                         variance_fold_increase_range=[1.2],
+                                                         simulate_neg_control=True,
+                                                         rng_key=3443)
+
+        mdat2 = sim.simulate_pmhc_data_from_distribution(total_cells=100,
+                                                         binding_ratio=0.1,
+                                                         nof_clones=5,
+                                                         p_binding_outlier=0.1,
+                                                         binding_fold_increase_range=[100],
+                                                         variance_fold_increase_range=[1.2],
+                                                         simulate_neg_control=True,
+                                                         rng_key=3443)
+
+        self.assertTrue((mdat1.mod["gex"].X == mdat2.mod["gex"].X).all())
+        self.assertTrue(mdat1.obs.equals(mdat2.obs))
+
+    def test_random_seed_neq(self):
+        sim = DextramerSimulator()
+        mdat1 = sim.simulate_pmhc_data_from_distribution(total_cells=100,
+                                                         binding_ratio=0.1,
+                                                         nof_clones=5,
+                                                         p_binding_outlier=0.1,
+                                                         binding_fold_increase_range=[100],
+                                                         variance_fold_increase_range=[1.2],
+                                                         simulate_neg_control=True,
+                                                         rng_key=3443)
+
+        mdat2 = sim.simulate_pmhc_data_from_distribution(total_cells=100,
+                                                         binding_ratio=0.1,
+                                                         nof_clones=5,
+                                                         p_binding_outlier=0.1,
+                                                         binding_fold_increase_range=[100],
+                                                         variance_fold_increase_range=[1.2],
+                                                         simulate_neg_control=True,
+                                                         rng_key=58673628)
+
+        self.assertFalse((mdat1.mod["gex"].X == mdat2.mod["gex"].X).all())
+        self.assertFalse(mdat1.obs.equals(mdat2.obs))
 
     def test_simulating_params_nctrl(self):
         sim = DextramerSimulator()
@@ -104,7 +151,7 @@ class TestSimulation(unittest.TestCase):
     def test_simulating_params_write_read(self):
         sim = DextramerSimulator()
         mdat = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True, use_clonotype_cov=True,
-)
+                                                        )
 
         mdat.write("test.h5mu")
         mdat2 = mu.read("test.h5mu")
