@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Tuple
 
 import mudata as md
 
+from jax import lax
 import jax.numpy as jnp
 
 if TYPE_CHECKING:
@@ -57,19 +58,25 @@ class ApMHCDeconvolution:
 
         # posterior probability of belonging to the binding class
         if target_fdr is not None:
-            # Direct posterior probability approach cf. Newton et al.(2004)
-            def opt_thresh(p_, alpha):
+            N = p.shape[0]
 
-                incs = p_.copy()
-                incs = incs[::-1].sort()
+            # Calculate the local FDR (1 - p)
+            lfdr = 1 - p
 
-                for c in jnp.unique(incs):
-                    fdr = jnp.mean(1 - incs[incs >= c])
-                    if fdr < alpha:
-                        return c, fdr
-                return 1., 0
+            sorted_indices = jnp.argsort(p)[::-1]
+            sorted_p = p[sorted_indices]
+            sorted_lfdr = lfdr[sorted_indices]
 
-            threshold, fdr_ = opt_thresh(p, target_fdr)
+            cumulative_lfdr = jnp.cumsum(sorted_lfdr)
+            cumulative_count = jnp.arange(1, N + 1)
+
+            # Estimated FDR for each possible threshold
+            estimated_fdr = cumulative_lfdr / cumulative_count
+
+            # Find the largest index k such that estimated_fdr[k] <= target_fdr
+            valid_thresholds = estimated_fdr <= target_fdr
+            max_k = jnp.max(jnp.where(valid_thresholds, jnp.arange(N), -1))
+            threshold = lax.cond(max_k >= 0, lambda: sorted_p[max_k], lambda: 1.0)
 
         assignment = (p >= threshold).astype("int32")
         return assignment

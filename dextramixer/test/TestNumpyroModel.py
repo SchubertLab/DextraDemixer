@@ -8,6 +8,8 @@ import numpyro as npy
 import jax.numpy as jnp
 from matplotlib import pyplot as plt
 
+from sklearn.metrics import confusion_matrix
+
 from dextramixer.model import DextraMixer
 from dextramixer.utils import DextramerSimulator, dist_to_sim
 from dextramixer.utils.simulation import t_cell_simulation
@@ -298,6 +300,25 @@ class MyTestCase(unittest.TestCase):
         N = len(self.binder)
         accuracy = (self.binder == assignment).sum() / N
         print("Accuracy", accuracy)
+
+    def test_simple_mixture_model_ppc_fdr(self):
+        npy.set_platform("cpu")
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        target_fdr = 0.1
+        p, assignment = mixer.predict_posterior_class(target_fdr=target_fdr)
+        N = len(self.binder)
+
+        tn, fp, fn, tp = confusion_matrix(self.binder, assignment).ravel()
+        tpr = tp / (tp + fn)
+        fdr = fp / (tp + fp)
+
+        accuracy = (self.binder == assignment).sum() / N
+        print("Accuracy", accuracy, "FDR", fdr, tpr)
+        self.assertAlmostEquals(target_fdr, ((fdr*10**2)//1)/(10**2))
 
     def test_simple_mixture_model_I(self):
         mixer = DextraMixer(model_type="mixturemodel", mode="I")
