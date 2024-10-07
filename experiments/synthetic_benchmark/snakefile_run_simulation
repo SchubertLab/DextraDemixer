@@ -5,12 +5,12 @@ min_version("6.0")
 cell_list = [5000]
 clone_list = [100]
 p_list = [0.1]
-cov_list = [0, 1]
+cov_list = [0]
 p_outlier_list = [0.0]
-mean_fold_increase = [2, 5, 10, 25, 50, 100]
-var_fold_increase = [1.2, 1.5, 2, 5, 10,  20]
-reps = 20
-tools = ["dextramixer", "beamt"]
+mean_fold_increase = [2, 5, 10, 50]
+var_fold_increase = [1.2, 2, 10]
+reps = 3
+tools = ["dextramixer", "dextramixerkmeans", "beamt"]
 
 
 rule all:
