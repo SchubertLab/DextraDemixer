@@ -4,6 +4,7 @@ import os
 import re
 
 import pandas as pd
+import numpy as np
 
 from sklearn.metrics import classification_report, roc_auc_score, matthews_corrcoef, confusion_matrix
 
@@ -35,7 +36,7 @@ def parse_filename(filename):
 
 
 def main(f_in_dir, f_out):
-    d = {"model":[], "threshold":[], "rep":[], "ncell":[], "nclone":[], "pbinder":[], "meaninc":[], "varinc":[],
+    d = {"model":[], "threshold":[], "rep":[], "ncell":[], "nclone":[], "pbinder":[], "cov":[], "meaninc":[], "varinc":[],
          "wprecision":[], "wrecall":[], "wf1":[], "acc":[], "wauc":[], "mcc":[], "tpr":[], "fdr":[], }
 
     for f in glob.glob(os.path.join(f_in_dir, "*")):
@@ -43,12 +44,18 @@ def main(f_in_dir, f_out):
         print()
         model_name, sim_params = parse_filename(os.path.basename(f))
 
+        errors = {"file": [], "model": []}
         df = pd.read_csv(f)
         for name, group in df.groupby(["model", "thresh"]):
 
             y_true = group["true_binder"]
             y_pred = group["assignment"]
             p_pred = group["p"]
+
+            if np.isnan(p_pred).any():
+                errors["file"].append(f)
+                errors["model"].append(name[0])
+                continue
 
             cr = classification_report(y_true, y_pred, output_dict=True, labels=[0,1])
             print()
@@ -66,6 +73,7 @@ def main(f_in_dir, f_out):
             d["ncell"].append(sim_params.get("ncell", None))
             d["nclone"].append(sim_params.get("nclone", None))
             d["pbinder"].append(sim_params.get("pbinder", None))
+            d["cov"].append(sim_params.get("cov", None))
             d["meaninc"].append(sim_params.get("meaninc", None))
             d["varinc"].append(sim_params.get("varinc", None))
 
@@ -80,6 +88,9 @@ def main(f_in_dir, f_out):
 
     df = pd.DataFrame.from_dict(d)
     df.to_csv(f_out)
+
+    df_error = pd.DataFrame.from_dict(errors)
+    df_error.to_csv(f_out+".errors")
 
 
 if __name__ == "__main__":

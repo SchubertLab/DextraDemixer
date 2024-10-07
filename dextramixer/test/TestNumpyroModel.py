@@ -264,7 +264,7 @@ class MyTestCase(unittest.TestCase):
         trace = mixer.fit(sampler_config={
             "num_samples": 500,
             "num_chains": 4,
-            "progress_bar": False,
+            "progress_bar": True,
             "nuts": {
                 "target_accept_prob": 0.95,
                 "max_tree_depth": 10
@@ -318,7 +318,7 @@ class MyTestCase(unittest.TestCase):
 
         accuracy = (self.binder == assignment).sum() / N
         print("Accuracy", accuracy, "FDR", fdr, tpr)
-        self.assertAlmostEquals(target_fdr, ((fdr*10**2)//1)/(10**2))
+        self.assertAlmostEquals(target_fdr, ((fdr * 10 ** 2) // 1) / (10 ** 2))
 
     def test_simple_mixture_model_I(self):
         mixer = DextraMixer(model_type="mixturemodel", mode="I")
@@ -494,6 +494,65 @@ class MyTestCase(unittest.TestCase):
                                     ir_cov_key="clone_cov",
                                     ir_clone_key="clone_id")
         trace = mixer.fit()
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class()
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
+        print("Accuracy", accuracy)
+
+    def test_kmean_initialization(self):
+
+        sim = DextramerSimulator()
+
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                        nof_clones=10,
+                                                        binding_ratio=0.1,
+                                                        simulate_neg_control=True,
+                                                        use_clonotype_cov=False,
+                                                        binding_fold_increase_range=[2],
+                                                        variance_fold_increase_range=[1.2],
+                                                        plot_data=False,
+                                                        rng_key=112)
+
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+
+        mixer = DextraMixer(model_type="mixturemodelkmeans", mode="H")
+
+        mixer.preprocess_model_data(mdat,
+                                    "pmhc1",
+                                    #ir_cov_key="clone_cov",
+                                    neg_ctrl_key="neg_control",
+                                    ir_clone_key="clone_id"
+                                    )
+
+        trace = mixer.fit(rng_key=1)
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class()
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        print(list(binder))
+        print(assignment.tolist())
+        print(p.tolist())
+        print("Accuracy", accuracy)
+
+        print("Random initialization")
+
+        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+
+        mixer.preprocess_model_data(mdat,
+                                    "pmhc1",
+                                    #ir_cov_key="clone_cov",
+                                    neg_ctrl_key="neg_control",
+                                    ir_clone_key="clone_id"
+                                    )
+
+        trace = mixer.fit_svi(rng_key=1)
         print(mixer.summary())
 
         p, assignment = mixer.predict_posterior_class()

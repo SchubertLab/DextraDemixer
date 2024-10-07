@@ -21,6 +21,9 @@ import jax.numpy as jnp
 import numpyro as npy
 import numpyro.distributions as npd
 
+import statsmodels.formula.api as smf
+from sklearn.cluster import KMeans
+
 from dextramixer.model import ApMHCDeconvolution
 from dextramixer.utils import RegisteredModel
 
@@ -177,13 +180,14 @@ class DextraMixer(ApMHCDeconvolution):
 
         return self.__make_arvis()
 
-    def fit_svi(self, guide=npy.infer.autoguide.AutoNormal, svi_config: Dict[str, Union[int, float]] = None,
-                rng_key: int = 0) -> az.InferenceData:
+    def fit_svi(self, guide=npy.infer.autoguide.AutoNormal,  svi_config: Dict[str, Union[int, float]] = None,
+                nof_inits: int = 100, rng_key: int = 0) -> az.InferenceData:
         """
         Implements stochastic variational inference
 
         guide: The guide to use for variational inference. If None, self.model object will be checked for a guide function
         svi_config: configuration for optimizer (Adam) and posterior samples
+        nof_inits: number of initialization tried with different seeds to find gut init values
         rng_key: integer seed to initialize numpyros RNG-Key store
         """
 
@@ -209,24 +213,22 @@ class DextraMixer(ApMHCDeconvolution):
             self.guide = guide(self.model.model)
 
         optimizer = npy.optim.ClippedAdam(**adam_config)
-        svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.Trace_ELBO(**tracer_config))
-        self.svi_result = svi.run(random.PRNGKey(rng_key), svi_config.get("num_steps", 1000))  # rng_key
+        svi = npy.infer.SVI(self.model.model, self.guide,  optimizer, loss=npy.infer.Trace_ELBO(**tracer_config))
 
-        # DEBUG
-        # svi_state = svi.init(random.PRNGKey(0), model_config={})
-        # # Optimization loop
-        # num_iterations = svi_config.get("num_steps", 1000)
-        # for i in range(num_iterations):
-        #     svi_state_tmp, loss = svi.update(svi_state, model_config={})
-        #     if jnp.isnan(loss):
-        #         print(f'NaN encountered at iteration {i}')
-        #         break
-        #     svi_state = svi_state_tmp
-        # self.svi_result = svi_state
-        # # Get the learned parameters
-        # params = svi.get_params(svi_state)
-        # print("Learned parameters:", params)
-        # DEBUG end
+        # find good random initialization
+        def _init_seed(rng_key):
+            rng_key, subkey = random.split(rng_key)
+            seed = random.randint(subkey, (1,), 0, int(1e8)).item()
+            rng_seed = random.PRNGKey(seed)
+            init_state = svi.init(rng_seed)
+            initial_loss = svi.evaluate(init_state, )
+            return initial_loss, seed
+
+        best_loss, best_seed = min(_init_seed(random.PRNGKey(rng_key)) for _ in range(nof_inits))
+        # DEBUG print("best loss:", best_loss, " best_seed:", best_seed)
+        self.svi_result = svi.run(rng_key=random.PRNGKey(best_seed),
+                                  num_steps=svi_config.get("num_steps", 1000),
+                                  stable_update=True)
 
         return self.svi_result
 
@@ -295,6 +297,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         self._name = "Abstract"
         self._version = "0.0.0"
         self._data = None
+        self._kmeans_dict = None
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
@@ -316,13 +319,124 @@ class ADextraMixerModel(metaclass=RegisteredModel):
 
         self.mode = mode
 
+    def _init_kmeans(self, scale_factor=1.0) -> Dict:
+        """
+        Initialize KMeans with 2 clusters and compute all necessary prior parameters
+        for mu_q, sigma_q, alpha, and tau priors.
+
+        This method calculates the following priors:
+        - mu_q_mean_prior: Mean of each cluster (KMeans cluster centers)
+        - mu_q_var_prior: Variance of each cluster (spread of the cluster points)
+        - alpha_var_prior: Dispersion (or precision) for each cluster
+        - tau_concentration_prior: Proportion of each cluster in the dataset
+
+        returns: Dict with params estimates and  k-mean labels,
+        """
+        x = self.data["x"]
+        clone = self.data.get("clone", None)
+        sigma = self.data.get("sigma", None)
+        n_clusters = 2  # KMeans with 2 clusters
+
+        # Perform KMeans clustering
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0, n_init="auto").fit(x.reshape(-1, 1))
+        labels = kmeans.labels_
+
+        # Initialize lists for cluster attributes
+        cluster_means = []
+        cluster_variances = []
+        cluster_dispersions = []
+
+        kmeans_dict = {}
+
+        # Calculate parameters for each cluster
+        for cluster_id in range(n_clusters):
+            cluster_points = x[labels == cluster_id]
+
+            # Calculate mean (mu_q_mean_prior)
+            cluster_mean = np.mean(cluster_points)
+            cluster_means.append(cluster_mean)
+
+            # Calculate variance (mu_q_var_prior), using unbiased variance estimator
+            cluster_variance = np.var(cluster_points, ddof=1)
+            cluster_variances.append(cluster_variance)
+
+            # Fit Negative Binomial to calculate dispersion (alpha_var_prior)
+            try:
+                nbfit = smf.negativebinomial("nbdata ~ 1",
+                                             data=pd.DataFrame({"nbdata": cluster_points})).fit(disp=False)
+                cluster_dispersion = 1 / nbfit.params.iloc[1]
+            except np.linalg.LinAlgError:
+                cluster_dispersion = 10
+            cluster_dispersions.append(cluster_dispersion)
+
+        # Calculate cluster proportions (tau_concentration_prior)
+        cluster_counts = np.bincount(labels, minlength=2)
+        cluster_proportions = cluster_counts / len(labels)
+
+        # Sort clusters by mean for consistency
+        sorted_indices = np.argsort(cluster_means)
+        cluster_means = np.array(cluster_means)[sorted_indices]
+        cluster_variances = np.array(cluster_variances)[sorted_indices]
+        cluster_dispersions = np.array(cluster_dispersions)[sorted_indices]
+        cluster_proportions = np.array(cluster_proportions)[sorted_indices]
+
+        if clone is not None and sigma is not None:
+            p1 = cluster_proportions[1]
+            log_odds_p1 = np.log(p1 / (1 - p1))
+
+            kmeans_dict.update({"mu_w_mean_prior": log_odds_p1,
+                                "mu_w_var_prior": jnp.clip(scale_factor * np.std(cluster_proportions),
+                                                           0.1, 10.0)})
+
+        # Set mode-specific parameters (mode "C" for cloneotypes)
+        if clone is not None:
+            unique_clones = jnp.unique(clone)
+            clone_dispersions = []
+            clone_proportions = []
+
+            for unique_clone in unique_clones:
+                clone_points = x[clone == unique_clone]
+                clone_labels = labels[clone == unique_clone]
+
+                # Clone-specific proportions
+                clone_cluster_counts = np.bincount(clone_labels, minlength=2)[sorted_indices]
+                clone_proportions.append(clone_cluster_counts / len(clone_points))
+
+                if self.mode == "C":
+
+                    # Clone-specific dispersion
+                    try:
+                        nbfit = smf.negativebinomial("nbdata ~ 1",
+                                                     data=pd.DataFrame({"nbdata": clone_points})).fit(disp=False)
+                        clone_dispersion = 1 / nbfit.params.iloc[1]
+                    except np.linalg.LinAlgError:
+                        clone_dispersion = 10
+                    clone_dispersions.append(clone_dispersion)
+
+            # Update cluster dispersions and proportions with clone-specific values
+            if self.mode == "C":
+                cluster_dispersions = np.array(clone_dispersions)
+
+            cluster_proportions = np.array(clone_proportions)
+
+        # Update model configuration with calculated priors
+        kmeans_dict.update({
+            "z": labels,
+            "mu_q_mean_prior": cluster_means,  # Mean for each cluster
+            "mu_q_var_prior": np.sqrt(cluster_variances),  # Standard deviation for each cluster
+            "alpha_var_prior": jnp.min(cluster_dispersions) if self.mode == "H" else cluster_dispersions,
+            "cluster_proportion": cluster_proportions,
+            "tau_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
+        })
+
+        return kmeans_dict
+
     @abc.abstractmethod
     def model(self, **kwargs):
         raise NotImplementedError
 
-    @staticmethod
     @abc.abstractmethod
-    def get_default_model_config() -> Dict:
+    def get_default_model_config(self) -> Dict:
         return {}
 
     @property
@@ -395,10 +509,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         super().__init__()
         self._name = "mixturemodel"
         self._version = "0.0.3"
-
-    @staticmethod
-    def get_default_model_config() -> Dict:
-        model_config = {
+        self._model_config = {
             "mu_w_mean_prior": 0.0,
             "mu_w_var_prior": 10.0,
             "mu_q_mean_prior": 0.0,
@@ -406,7 +517,9 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             "sigma_q_var_prior": 10.0,
             "alpha_var_prior": 10.0,
         }
-        return model_config
+
+    def get_default_model_config(self) -> Dict:
+        return self._model_config
 
     @property
     def name(self) -> str:
@@ -423,8 +536,8 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         if self.data is None:
             raise RuntimeError("Model was not properly initialized. Please call `preprocess_model_data` first")
 
-        model_config = {**DextraMixerMixtureModel.get_default_model_config(), **kwargs["model_config"]} if (
-                "model_config" in kwargs) else DextraMixerMixtureModel.get_default_model_config()
+        model_config = {**self.get_default_model_config(), **kwargs["model_config"]} if (
+                "model_config" in kwargs) else self.get_default_model_config()
 
         x = self.data["x"]
         x_neg = self.data["x_neg"]
@@ -448,17 +561,18 @@ class DextraMixerMixtureModel(ADextraMixerModel):
         mu_q = npy.sample("mu_q", npd.Normal(mu_q_mean_prior, mu_q_var_prior))
         sigma_q = npy.sample("sigma_q", npd.HalfCauchy(sigma_q_var_prior))
 
-        # shape prior
+        #shape prior
         if self.mode == "H":
-            alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
+            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
+                                                                    npd.transforms.PowerTransform(-2.0)))
         elif self.mode == "C":
             with npy.plate("clone_axis", c_nof):
-                alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
+                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
+                                                                        npd.transforms.PowerTransform(-2.0)))
         else:
             with npy.plate("cluster_axis", K):
-                alpha = npy.sample("alpha", npd.HalfCauchy(alpha_var_prior))
-
-        npy.factor("power_law", 1 / jnp.sqrt(alpha))  # according to stan standard prior
+                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
+                                                                        npd.transforms.PowerTransform(-2.0)))
 
         # cluster probability prior
         if clone is not None:
@@ -512,5 +626,137 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             yhat = npy.sample("yhat", mixture, obs=x)
 
             # Until here, where we can track the membership probability of each sample
+            log_probs = mixture.component_log_probs(yhat)
+            p = npy.deterministic("log_p", log_probs - logsumexp(log_probs, axis=-1, keepdims=True))
+
+
+class DextraMixerKmeansModel(ADextraMixerModel):
+    """
+    Dextramixer version who is initialized and prior parametrized by K-means++ results
+    Thus model does not rely on hyperpriors and is a bit simpler
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._name = "mixturemodelkmeans"
+        self._version = "0.0.1"
+        self._model_config = {
+            "mu_w_mean_prior": 0.0,
+            "mu_w_var_prior": 10.0,
+            "mu_q_mean_prior": 0.0,
+            "mu_q_var_prior": 10.0,
+            "sigma_q_var_prior": 10.0,
+            "alpha_var_prior": 10.0,
+        }
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def version(self) -> str:
+        return self._version
+
+    def preprocess_model_data(self,
+                              x: Union[pd.Series, np.ndarray, Array],
+                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
+                              c: Union[pd.Series, np.ndarray, Array] = None,
+                              sigma: Union[np.ndarray, Array] = None,
+                              mode: str = "H",
+                              scale_factor: float = 1.0,
+                              **kwargs):
+
+        super().preprocess_model_data(x, neg_cont, c, sigma, mode, **kwargs)
+        self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor)
+        self._model_config.update(self._kmeans_dict)
+
+    def get_default_model_config(self) -> Dict:
+        return self._model_config
+
+    def model(self, **kwargs):
+        """
+        Define the probabilistic model based on the preprocessed data and KMeans initialization.
+        """
+        if self.data is None:
+            raise RuntimeError("Model was not properly initialized. Please call `preprocess_model_data` first.")
+
+        model_config = {**self.get_default_model_config(), **kwargs.get("model_config", {})}
+
+        x = self.data["x"]
+        x_neg = self.data["x_neg"]
+        clone = self.data["clone"]
+        sigma = self.data["sigma"]
+        N_sample = x.shape[0]
+        c_nof = np.unique(clone).size if clone is not None else 0
+        K = 2
+
+        # Extract hyperpriors
+        mu_w_mean_prior = model_config["mu_w_mean_prior"]
+        mu_w_var_prior = model_config["mu_w_var_prior"]
+        mu_q_mean_prior = model_config["mu_q_mean_prior"]
+        mu_q_var_prior = model_config["mu_q_var_prior"]
+        alpha_var_prior = model_config["alpha_var_prior"]
+        tau_concentration_prior = model_config["tau_concentration_prior"]
+
+        #alpha_var_prior = 1.0
+        if self.mode == "H":
+            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
+                                                                    npd.transforms.PowerTransform(-2.0)))
+        elif self.mode == "C":
+            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
+                                                                    npd.transforms.PowerTransform(-2.0)))
+        else:
+            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
+                                                                    npd.transforms.PowerTransform(-2.0)))
+
+        # Cluster probability prior
+        if clone is not None:
+            if sigma is not None:
+                mu_w = npy.sample("mu_w", npd.Normal(mu_w_mean_prior, mu_w_var_prior))
+                gamma_w = npy.sample("gamma_w", npd.Normal(loc=jnp.zeros(c_nof), scale=jnp.ones(c_nof)))
+                L = jnp.linalg.cholesky(sigma)
+                w_raw = jax.scipy.special.ndtr(jnp.clip(mu_w + jnp.dot(L, gamma_w), -5, 5))
+                w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
+            else:
+                w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
+            z = npd.Categorical(probs=w[clone])
+        else:
+            w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
+            z = npd.Categorical(probs=w)
+
+        q = npy.sample("q", npd.TransformedDistribution(npd.LogNormal(loc=mu_q_mean_prior, scale=mu_q_var_prior),
+                                                        npd.transforms.OrderedTransform()))
+
+        # Sample from the mixture model
+        with npy.plate("sample_axis", N_sample):
+            if x_neg is not None:
+                if self.mode == "H":
+                    yhat_neg = npy.sample("yhat_neg",
+                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha),
+                                          obs=x_neg)
+                elif self.mode == "C":
+                    yhat_neg = npy.sample("yhat_neg",
+                                          npd.NegativeBinomial2(mean=q[0],
+                                                                concentration=alpha[clone]),
+                                          obs=x_neg)
+                else:
+                    yhat_neg = npy.sample("yhat_neg",
+                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha[0]),
+                                          obs=x_neg)
+
+            # target pMHC
+            if self.mode == "C":
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
+                                                                         concentration=alpha[clone].reshape(
+                                                                             (N_sample, 1))
+                                                                         )
+                                                )
+            else:
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
+                                                                         concentration=alpha))
+
+            yhat = npy.sample("yhat", mixture, obs=x)
+
+            # Membership probability of each sample
             log_probs = mixture.component_log_probs(yhat)
             p = npy.deterministic("log_p", log_probs - logsumexp(log_probs, axis=-1, keepdims=True))
