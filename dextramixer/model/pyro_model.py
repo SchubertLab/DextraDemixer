@@ -18,10 +18,13 @@ from jax.nn import logsumexp
 
 import jax.numpy as jnp
 
+from optax import exponential_decay
+
 import numpyro as npy
 import numpyro.distributions as npd
 
 import statsmodels.formula.api as smf
+from numpyro.infer.svi import SVIRunResult
 from sklearn.cluster import KMeans
 
 from dextramixer.model import ApMHCDeconvolution
@@ -147,10 +150,13 @@ class DextraMixer(ApMHCDeconvolution):
                 "maxiter": 1000,
                 "progress_bar": False,
                 "adam": {
-                    "step_size": 0.01
+                    "init_value": 5e-3,
+                    "transition_steps": 500,
+                    "decay_rate": 0.1,
+                    "end_value": 1e-7
                 },
                 "tracer": {
-                    "num_particles": 1,
+                    "num_particles": 10,
                 }
             }
         }
@@ -212,7 +218,9 @@ class DextraMixer(ApMHCDeconvolution):
         else:
             self.guide = guide(self.model.model)
 
-        optimizer = npy.optim.ClippedAdam(**adam_config)
+        adam_config["transition_steps"] = svi_config.get("maxiter", 1000) // 2
+
+        optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config))
         svi = npy.infer.SVI(self.model.model, self.guide,  optimizer, loss=npy.infer.Trace_ELBO(**tracer_config))
 
         # find good random initialization
@@ -225,12 +233,48 @@ class DextraMixer(ApMHCDeconvolution):
             return initial_loss, seed
 
         best_loss, best_seed = min(_init_seed(random.PRNGKey(rng_key)) for _ in range(nof_inits))
-        # DEBUG print("best loss:", best_loss, " best_seed:", best_seed)
-        self.svi_result = svi.run(rng_key=random.PRNGKey(best_seed),
-                                  num_steps=svi_config.get("num_steps", 1000),
-                                  stable_update=True)
+        # DEBUG
+        #print("best loss:", best_loss, " best_seed:", best_seed)
 
-        return self.svi_result
+        self.svi_result = svi.run(rng_key=random.PRNGKey(best_seed),
+                                  num_steps=svi_config.get("maxiter", 1000),
+                                  stable_update=True,
+                                  disable_progbar=svi_config.get("progress_bar", False))
+
+
+        # # manually optimization loop:
+        # best_loss = float("inf")
+        # best_params = None
+        # all_losses = []
+        #
+        # svi_state = svi.init(rng_key=random.PRNGKey(best_seed))
+        # for step in range(svi_config.get("maxiter", 1000)):
+        #     svi_state, loss = svi.update(svi_state)
+        #     params = svi.get_params(svi_state)
+        #     all_losses.append(loss)
+        #
+        #     if loss < best_loss:
+        #         best_loss = loss
+        #         best_params = params
+        #
+        #     # Print the learning rate and loss every 500 steps
+        #     if step % 500 == 0:
+        #         print(f"Step {step}, Current Loss: {loss}")
+        #
+        # print("Best Loss: ", best_loss)
+        # print("Best params: ", best_params)
+        # print("Last params: ", params)
+        #
+        # self.svi_result = SVIRunResult(params=best_params, losses=jnp.array(all_losses), state=svi_state)
+
+        posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
+                                                        sample_shape=(500,))
+
+        # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
+        posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
+        inference_data = az.from_dict(posterior=posterior_samples_np)
+
+        return inference_data
 
     def predict_posterior_class(self,
                                 threshold: float = None,
