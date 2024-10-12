@@ -508,42 +508,20 @@ class MyTestCase(unittest.TestCase):
 
         sim = DextramerSimulator()
 
-        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
-                                                        nof_clones=10,
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
+                                                        nof_clones=100,
                                                         binding_ratio=0.1,
                                                         simulate_neg_control=True,
                                                         use_clonotype_cov=False,
                                                         binding_fold_increase_range=[2],
                                                         variance_fold_increase_range=[1.2],
                                                         plot_data=False,
-                                                        rng_key=112)
+                                                        rng_key=756204)
 
 
         binder = mdat.mod["airr"].obs["is_binder"]
 
-        mixer = DextraMixer(model_type="mixturemodelkmeans", mode="H")
-
-        mixer.preprocess_model_data(mdat,
-                                    "pmhc1",
-                                    #ir_cov_key="clone_cov",
-                                    neg_ctrl_key="neg_control",
-                                    ir_clone_key="clone_id"
-                                    )
-
-        trace = mixer.fit(rng_key=1)
-        print(mixer.summary())
-
-        p, assignment = mixer.predict_posterior_class()
-        N = len(binder)
-        accuracy = (binder == assignment).sum() / N
-        print(list(binder))
-        print(assignment.tolist())
-        print(p.tolist())
-        print("Accuracy", accuracy)
-
-        print("Random initialization")
-
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraMixer(model_type="mixturemodelkmeans", mode="I")
 
         mixer.preprocess_model_data(mdat,
                                     "pmhc1",
@@ -558,9 +536,31 @@ class MyTestCase(unittest.TestCase):
         p, assignment = mixer.predict_posterior_class()
         N = len(binder)
         accuracy = (binder == assignment).sum() / N
-        print(list(binder))
-        print(assignment.tolist())
-        print(p.tolist())
+       # print(list(binder))
+        #print(assignment.tolist())
+        #print(p.tolist())
+        print("Accuracy", accuracy)
+
+        print("Random initialization")
+
+        mixer = DextraMixer(model_type="mixturemodelkmeans", mode="I")
+
+        mixer.preprocess_model_data(mdat,
+                                    "pmhc1",
+                                    #ir_cov_key="clone_cov",
+                                    neg_ctrl_key="neg_control",
+                                    ir_clone_key="clone_id"
+                                    )
+
+        trace = mixer.fit_svi(use_minimal_loss=False, rng_key=1)
+        print(mixer.summary())
+
+        p, assignment = mixer.predict_posterior_class()
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+        #print(list(binder))
+        #print(assignment.tolist())
+        #print(p.tolist())
         print("Accuracy", accuracy)
 
 

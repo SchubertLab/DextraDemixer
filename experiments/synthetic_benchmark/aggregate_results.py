@@ -40,8 +40,6 @@ def main(f_in_dir, f_out):
          "wprecision":[], "wrecall":[], "wf1":[], "acc":[], "wauc":[], "mcc":[], "tpr":[], "fdr":[], }
 
     for f in glob.glob(os.path.join(f_in_dir, "*")):
-        print("file:", f, os.path.basename(f))
-        print()
         model_name, sim_params = parse_filename(os.path.basename(f))
 
         errors = {"file": [], "model": []}
@@ -58,9 +56,6 @@ def main(f_in_dir, f_out):
                 continue
 
             cr = classification_report(y_true, y_pred, output_dict=True, labels=[0,1])
-            print()
-            print(cr)
-            print()
             auc = roc_auc_score(y_true, p_pred, average="weighted")
             mcc = matthews_corrcoef(y_true, y_pred)
             tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()

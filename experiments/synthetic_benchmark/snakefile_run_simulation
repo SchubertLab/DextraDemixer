@@ -18,6 +18,8 @@ rule all:
         "results/aggregated_results.csv"
 
 rule run_simulation:
+    input:
+        # No input files required for this script
     output:
         h5mu = "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu",
         pdf = "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.pdf"
