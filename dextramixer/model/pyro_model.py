@@ -8,17 +8,19 @@ from typing import TYPE_CHECKING, Union, Dict, Tuple
 import arviz as az
 
 import numpy as np
+import optax
 import pandas as pd
 import mudata as md
 
 import jax
 import jax.lax
-from jax import random
+from jax import random, jit, lax
 from jax.nn import logsumexp
 
 import jax.numpy as jnp
+from numpyro.distributions import kl_divergence
 
-from optax import exponential_decay
+from optax import exponential_decay, linear_schedule
 
 import numpyro as npy
 import numpyro.distributions as npd
@@ -26,6 +28,7 @@ import numpyro.distributions as npd
 import statsmodels.formula.api as smf
 from numpyro.infer.svi import SVIRunResult
 from sklearn.cluster import KMeans
+import tqdm
 
 from dextramixer.model import ApMHCDeconvolution
 from dextramixer.utils import RegisteredModel
@@ -147,12 +150,12 @@ class DextraMixer(ApMHCDeconvolution):
                 }
             },
             "svi": {
-                "maxiter": 1000,
-                "progress_bar": False,
+                "maxiter": 5000,
+                "progress_bar": True,
                 "adam": {
-                    "init_value": 5e-3,
-                    "transition_steps": 500,
-                    "decay_rate": 0.1,
+                    "init_value": 1e-2,
+                    "transition_steps": 1000,
+                    "decay_rate": 0.99,
                     "end_value": 1e-7
                 },
                 "tracer": {
@@ -186,14 +189,15 @@ class DextraMixer(ApMHCDeconvolution):
 
         return self.__make_arvis()
 
-    def fit_svi(self, guide=npy.infer.autoguide.AutoNormal,  svi_config: Dict[str, Union[int, float]] = None,
-                nof_inits: int = 100, rng_key: int = 0) -> az.InferenceData:
+    def fit_svi(self, guide=npy.infer.autoguide.AutoNormal, svi_config: Dict[str, Union[int, float]] = None,
+                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 0) -> az.InferenceData:
         """
         Implements stochastic variational inference
 
         guide: The guide to use for variational inference. If None, self.model object will be checked for a guide function
         svi_config: configuration for optimizer (Adam) and posterior samples
-        nof_inits: number of initialization tried with different seeds to find gut init values
+        nof_inits: number of initializations tried with different seeds to find gut init values
+        use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
         rng_key: integer seed to initialize numpyros RNG-Key store
         """
 
@@ -221,7 +225,7 @@ class DextraMixer(ApMHCDeconvolution):
         adam_config["transition_steps"] = svi_config.get("maxiter", 1000) // 2
 
         optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config))
-        svi = npy.infer.SVI(self.model.model, self.guide,  optimizer, loss=npy.infer.Trace_ELBO(**tracer_config))
+        svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.TraceGraph_ELBO(**tracer_config))
 
         # find good random initialization
         def _init_seed(rng_key):
@@ -233,39 +237,48 @@ class DextraMixer(ApMHCDeconvolution):
             return initial_loss, seed
 
         best_loss, best_seed = min(_init_seed(random.PRNGKey(rng_key)) for _ in range(nof_inits))
+
         # DEBUG
         #print("best loss:", best_loss, " best_seed:", best_seed)
 
-        self.svi_result = svi.run(rng_key=random.PRNGKey(best_seed),
-                                  num_steps=svi_config.get("maxiter", 1000),
-                                  stable_update=True,
-                                  disable_progbar=svi_config.get("progress_bar", False))
+        # Old implementation
+        # self.svi_result = svi.run(rng_key=random.PRNGKey(best_seed),
+        #                           num_steps=svi_config.get("maxiter", 1000),
+        #                           stable_update=True,
+        #                           progress_bar=svi_config.get("progress_bar", False))
 
+        def body_fn(svi_state, step):
+            svi_state, loss = svi.stable_update(svi_state, step=step)
+            return svi_state, loss, svi.get_params(svi_state)
 
-        # # manually optimization loop:
-        # best_loss = float("inf")
-        # best_params = None
-        # all_losses = []
-        #
-        # svi_state = svi.init(rng_key=random.PRNGKey(best_seed))
-        # for step in range(svi_config.get("maxiter", 1000)):
-        #     svi_state, loss = svi.update(svi_state)
-        #     params = svi.get_params(svi_state)
-        #     all_losses.append(loss)
-        #
-        #     if loss < best_loss:
-        #         best_loss = loss
-        #         best_params = params
-        #
-        #     # Print the learning rate and loss every 500 steps
-        #     if step % 500 == 0:
-        #         print(f"Step {step}, Current Loss: {loss}")
-        #
-        # print("Best Loss: ", best_loss)
-        # print("Best params: ", best_params)
-        # print("Last params: ", params)
-        #
-        # self.svi_result = SVIRunResult(params=best_params, losses=jnp.array(all_losses), state=svi_state)
+        svi_state = svi.init(rng_key=random.PRNGKey(best_seed))
+        losses = []
+        params = []
+        with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
+                         disable=(not svi_config.get("progress_bar", False))) as t:
+            batch = max(svi_config.get("maxiter", 1000) // 20, 1)
+            for i in t:
+                svi_state, loss, param = jit(body_fn)(svi_state, i)
+
+                losses.append(loss)
+                params.append(param)
+                if i % batch == 0:
+                    valid_losses = [x for x in losses[i - batch:] if x == x]
+                    num_valid = len(valid_losses)
+                    if num_valid == 0:
+                        avg_loss = float("nan")
+                    else:
+                        avg_loss = sum(valid_losses) / num_valid
+                    t.set_postfix_str(
+                        "init loss: {:.4f}, avg. loss [{}-{}]: {:.4f}".format(
+                            losses[0], i - batch + 1, i, avg_loss
+                        ),
+                        refresh=False,
+                    )
+        losses = jnp.stack(losses)
+
+        params = params[jnp.argmin(losses)] if use_minimal_loss else params[-1]
+        self.svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
 
         posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
                                                         sample_shape=(500,))
