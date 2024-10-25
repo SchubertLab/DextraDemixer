@@ -200,7 +200,6 @@ class MyTestCase(unittest.TestCase):
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)  # AutoDelta works others dont
         print()
         print(mixer.summary())
-        print(trace.losses)
 
         p, assignment = mixer.predict_posterior_class(threshold=0.5)
         N = len(binder)

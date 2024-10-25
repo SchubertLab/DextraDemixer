@@ -1,3 +1,4 @@
+import itertools
 from collections import defaultdict
 from typing import Any
 
@@ -5,9 +6,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import pandas as pd
 from jax import pure_callback
 from numpy import ndarray, dtype, bool_
 from scipy.stats import ortho_group, random_correlation
+
+import scirpy as ir
 
 
 def gower_centering(distance_matrix):
@@ -77,7 +81,7 @@ def normalize_distance_matrix(D):
     return (D - min_val) / (max_val - min_val)
 
 
-def dist_to_sim(d, normalize=True, sigma=None, epsilon=None):
+def dist_to_sim(d, nearest_psed=False, normalize=True, sigma=None, epsilon=None):
     """"
     Converts a symmetric distance matrix into a symmetric positive semi-definite similarity matrix using an RBF Kernel:
 
@@ -85,7 +89,8 @@ def dist_to_sim(d, normalize=True, sigma=None, epsilon=None):
 
     Args:
         d (jax.numpy.ndarray): Symmetric distance matrix.
-        normalize (bool: indicating whether  Min-Max normalize should be applied
+        nearest_psed (bool): indicating whether the nearest PSD matrix should be constructed
+        normalize (bool): indicating whether  Min-Max normalize should be applied
         sigma (float): the hyperparameter of the RBF Kernel, if None then the median of the non-zero elements will be used
         epsilon(float): a small float 1e-6 that is added to the diagonal of the similarity matrix to stabilize it
     Returns:
@@ -107,8 +112,73 @@ def dist_to_sim(d, normalize=True, sigma=None, epsilon=None):
 
     if epsilon is not None:
         K += epsilon * jnp.eye(K.shape[0])
-    K=nearest_psd(K)
+    if nearest_psed:
+        K = nearest_psd(K)
     return K
+
+
+def calculate_clonotype_kernel(mdat,
+                               distance="tcrdist",
+                               ir_key="airr",
+                               key_added="dextramixer",
+                               normalize=False,
+                               sigma=None,
+                               nearest_psed=False,
+                               epsilon=1e-8):
+    """
+        calculates TCR dist based on specified metric for unique clones (based on aa sequence identity),
+        calculates kernel based on that, and stores the kernel under specified `airr`.uns.
+    """
+    ir.pp.ir_dist(mdat, metric="identity", sequence="aa", cutoff=int(1e8))
+    ir.pp.ir_dist(mdat, metric=distance, sequence="aa", cutoff=int(1e8))
+
+    _, _, d_ident = ir.tl.define_clonotype_clusters(mdat, sequence="aa", metric="identity",
+                                              receptor_arms="all", dual_ir="any", inplace=False)
+    _, _, d_dist = ir.tl.define_clonotype_clusters(mdat, sequence="aa", metric=distance,
+                                             receptor_arms="all", dual_ir="any", inplace=False)
+
+    # check whether rows are ordered equally if not calculate permutation,
+    cc_ident = d_ident["cell_indices"]
+    cc_dist = d_dist["cell_indices"]
+
+    permutation = np.arange(d_dist["distances"].shape[0])
+    loners = []
+
+    for k_dist, val_dist in cc_dist.items():
+        cc_ident_val = cc_ident[k_dist]
+        if len(set(cc_ident_val) - set(val_dist)) == 0:
+            continue
+        else:
+            for k_id, val_id in cc_ident.items():
+                if len(set(val_id) - set(val_dist)) == 0:
+                    permutation[k_dist] = k_id
+                    break
+
+            loners.append(k_dist)
+
+    if loners:
+        raise RuntimeError("Discrepancies between clonal identity and distance identity detected")
+
+    # define clonotype id - cc_identity is reference
+    idx, values = zip(
+        *itertools.chain.from_iterable(
+            zip(cell_ids, itertools.repeat(str(clonotype_cluster)))
+            for clonotype_cluster, cell_ids in cc_ident.items()
+        ),
+        strict=False,
+    )
+    clonotype_cluster_series = pd.Series(values, index=idx).reindex(mdat.mod[ir_key].obs_names)
+    clonotype_cluster_size_series = clonotype_cluster_series.groupby(clonotype_cluster_series).transform("count")
+
+    # extract distance
+    dist = d_dist["distances"].todense() - 1  # see scirpy sparse_matrix def
+    dist = dist[permutation]
+    K = dist_to_sim(dist, nearest_psed=nearest_psed, normalize=normalize, sigma=sigma, epsilon=epsilon)
+
+    mdat.mod[ir_key].uns[f"{key_added}_distances"] = dist
+    mdat.mod[ir_key].uns[f"{key_added}_kernel"] = K
+    mdat.mod[ir_key].obs[f"{key_added}_clone_id"] = clonotype_cluster_series
+    mdat.mod[ir_key].obs[f"{key_added}_clone_id_size"] = clonotype_cluster_size_series
 
 
 def sim_to_dist(s: jax.Array) -> jax.Array:
@@ -200,14 +270,14 @@ def convert_to_variance(mu, disp):
     """
     converts mean and dispersion of negative binomial to variance
     """
-    return mu + disp*mu**2
+    return mu + disp * mu ** 2
 
 
 def convert_to_invdispersion(mu, var):
     """
     converts mu and variance to inverse dispersion param of negative binomial
     """
-    return 1/((var - mu)/mu**2)
+    return 1 / ((var - mu) / mu ** 2)
 
 
 def hook_optax(optimizer):
@@ -226,4 +296,3 @@ def hook_optax(optimizer):
         return optimizer.update(grads, state, params=params)
 
     return optax.GradientTransformation(optimizer.init, update_fn), gradient_norms
-
