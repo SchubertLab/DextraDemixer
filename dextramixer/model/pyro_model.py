@@ -18,7 +18,6 @@ from jax import random, jit, lax
 from jax.nn import logsumexp
 
 import jax.numpy as jnp
-from numpyro.distributions import kl_divergence
 
 from optax import exponential_decay, linear_schedule
 
@@ -35,6 +34,11 @@ from dextramixer.utils import RegisteredModel
 
 if TYPE_CHECKING:
     from jax._src.typing import Array
+
+npy.enable_x64()
+
+FLOAT_DTYPE = "float64"
+INT_DTYPE = "int32"
 
 
 class DextraMixer(ApMHCDeconvolution):
@@ -190,7 +194,7 @@ class DextraMixer(ApMHCDeconvolution):
         return self.__make_arvis()
 
     def fit_svi(self, guide=npy.infer.autoguide.AutoNormal, svi_config: Dict[str, Union[int, float]] = None,
-                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 0) -> az.InferenceData:
+                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777) -> az.InferenceData:
         """
         Implements stochastic variational inference
 
@@ -228,21 +232,14 @@ class DextraMixer(ApMHCDeconvolution):
         svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.TraceGraph_ELBO(**tracer_config))
 
         # find good random initialization
-        def _init_seed(rng_key):
-            rng_key, subkey = random.split(rng_key)
-            seed = random.randint(subkey, (1,), 0, int(1e8)).item()
-            rng_seed = random.PRNGKey(seed)
-            init_state = svi.init(rng_seed)
-            initial_loss = svi.evaluate(init_state, )
-            return initial_loss, seed
-
-        best_loss, best_seed = min(_init_seed(random.PRNGKey(rng_key)) for _ in range(nof_inits))
+        best_loss, best_key = min((svi.evaluate(svi.init(key)), key) for key in
+                                  random.split(random.PRNGKey(rng_key), nof_inits))
 
         # DEBUG
-        #print("best loss:", best_loss, " best_seed:", best_seed)
+        # print("best_loss:", best_loss, "best_key:", best_key)
 
         # Old implementation
-        # self.svi_result = svi.run(rng_key=random.PRNGKey(best_seed),
+        # self.svi_result = svi.run(rng_key=random.PRNGKey(best_key),
         #                           num_steps=svi_config.get("maxiter", 1000),
         #                           stable_update=True,
         #                           progress_bar=svi_config.get("progress_bar", False))
@@ -251,7 +248,7 @@ class DextraMixer(ApMHCDeconvolution):
             svi_state, loss = svi.stable_update(svi_state, step=step)
             return svi_state, loss, svi.get_params(svi_state)
 
-        svi_state = svi.init(rng_key=random.PRNGKey(best_seed))
+        svi_state = svi.init(rng_key=best_key)
         losses = []
         params = []
         with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
@@ -315,7 +312,7 @@ class DextraMixer(ApMHCDeconvolution):
             predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
                                               num_samples=500)
             samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key
-            p = jnp.exp(jnp.mean(samples["log_p"], axis=0))[:, 1]
+            p = jnp.exp(jnp.nanmean(samples["log_p"], axis=0))[:, 1]
 
         else:
             p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
@@ -365,13 +362,11 @@ class ADextraMixerModel(metaclass=RegisteredModel):
                               **kwargs):
         """
         """
-        float_dtype = "float32"
-        int_dtype = "int32"
 
-        self.data = {"x": jnp.array(x, dtype=int_dtype),
-                     "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=float_dtype),
-                     "clone": None if c is None else jnp.array(c, dtype=int_dtype),
-                     "sigma": None if sigma is None else jnp.array(sigma, dtype=float_dtype),
+        self.data = {"x": jnp.array(x, dtype=INT_DTYPE),
+                     "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=FLOAT_DTYPE),
+                     "clone": None if c is None else jnp.array(c, dtype=INT_DTYPE),
+                     "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE),
                      }
 
         self.mode = mode
@@ -401,7 +396,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         # Initialize lists for cluster attributes
         cluster_means = []
         cluster_variances = []
-        cluster_dispersions = []
 
         kmeans_dict = {}
 
@@ -417,15 +411,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
             cluster_variance = np.var(cluster_points, ddof=1)
             cluster_variances.append(cluster_variance)
 
-            # Fit Negative Binomial to calculate dispersion (alpha_var_prior)
-            try:
-                nbfit = smf.negativebinomial("nbdata ~ 1",
-                                             data=pd.DataFrame({"nbdata": cluster_points})).fit(disp=False)
-                cluster_dispersion = 1 / nbfit.params.iloc[1]
-            except np.linalg.LinAlgError:
-                cluster_dispersion = 10
-            cluster_dispersions.append(cluster_dispersion)
-
         # Calculate cluster proportions (tau_concentration_prior)
         cluster_counts = np.bincount(labels, minlength=2)
         cluster_proportions = cluster_counts / len(labels)
@@ -434,7 +419,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         sorted_indices = np.argsort(cluster_means)
         cluster_means = np.array(cluster_means)[sorted_indices]
         cluster_variances = np.array(cluster_variances)[sorted_indices]
-        cluster_dispersions = np.array(cluster_dispersions)[sorted_indices]
         cluster_proportions = np.array(cluster_proportions)[sorted_indices]
 
         if clone is not None and sigma is not None:
@@ -448,7 +432,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         # Set mode-specific parameters (mode "C" for cloneotypes)
         if clone is not None:
             unique_clones = jnp.unique(clone)
-            clone_dispersions = []
             clone_proportions = []
 
             for unique_clone in unique_clones:
@@ -459,21 +442,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
                 clone_cluster_counts = np.bincount(clone_labels, minlength=2)[sorted_indices]
                 clone_proportions.append(clone_cluster_counts / len(clone_points))
 
-                if self.mode == "C":
-
-                    # Clone-specific dispersion
-                    try:
-                        nbfit = smf.negativebinomial("nbdata ~ 1",
-                                                     data=pd.DataFrame({"nbdata": clone_points})).fit(disp=False)
-                        clone_dispersion = 1 / nbfit.params.iloc[1]
-                    except np.linalg.LinAlgError:
-                        clone_dispersion = 10
-                    clone_dispersions.append(clone_dispersion)
-
-            # Update cluster dispersions and proportions with clone-specific values
-            if self.mode == "C":
-                cluster_dispersions = np.array(clone_dispersions)
-
             cluster_proportions = np.array(clone_proportions)
 
         # Update model configuration with calculated priors
@@ -481,7 +449,6 @@ class ADextraMixerModel(metaclass=RegisteredModel):
             "z": labels,
             "mu_q_mean_prior": cluster_means,  # Mean for each cluster
             "mu_q_var_prior": np.sqrt(cluster_variances),  # Standard deviation for each cluster
-            "alpha_var_prior": jnp.min(cluster_dispersions) if self.mode == "H" else cluster_dispersions,
             "cluster_proportion": cluster_proportions,
             "tau_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
         })
@@ -636,7 +603,8 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             if sigma is not None:
                 # non-centered multivariat parametrization
                 mu_w = npy.sample("mu_w", npd.Normal(mu_w_mean_prior, mu_w_var_prior))
-                gamma_w = npy.sample("gamma_w", npd.Normal(loc=jnp.zeros(c_nof), scale=jnp.ones(c_nof)))
+                with npy.plate("clone_axis", c_nof):
+                    gamma_w = npy.sample("gamma_w", npd.Normal(loc=0, scale=1))
                 L = jnp.linalg.cholesky(sigma)
                 w_raw = jax.scipy.special.ndtr(jnp.clip(mu_w + jnp.dot(L, gamma_w), -5, 5))
                 #w_raw = jax.scipy.special.expit(mu_w + jnp.dot(L, gamma_w))
@@ -755,27 +723,30 @@ class DextraMixerKmeansModel(ADextraMixerModel):
         alpha_var_prior = model_config["alpha_var_prior"]
         tau_concentration_prior = model_config["tau_concentration_prior"]
 
-        #alpha_var_prior = 1.0
         if self.mode == "H":
             alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
                                                                     npd.transforms.PowerTransform(-2.0)))
         elif self.mode == "C":
-            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
+            with npy.plate("clone_axis", c_nof):
+                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
                                                                     npd.transforms.PowerTransform(-2.0)))
         else:
-            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                    npd.transforms.PowerTransform(-2.0)))
+            with npy.plate("cluster_axis", K):
+                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
+                                                                        npd.transforms.PowerTransform(-2.0)))
 
         # Cluster probability prior
         if clone is not None:
             if sigma is not None:
                 mu_w = npy.sample("mu_w", npd.Normal(mu_w_mean_prior, mu_w_var_prior))
-                gamma_w = npy.sample("gamma_w", npd.Normal(loc=jnp.zeros(c_nof), scale=jnp.ones(c_nof)))
+                with npy.plate("clone_axis", c_nof):
+                    gamma_w = npy.sample("gamma_w", npd.Normal(loc=0, scale=1))
                 L = jnp.linalg.cholesky(sigma)
                 w_raw = jax.scipy.special.ndtr(jnp.clip(mu_w + jnp.dot(L, gamma_w), -5, 5))
                 w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
             else:
-                w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
+                with npy.plate("clone_axis", c_nof):
+                    w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
             z = npd.Categorical(probs=w[clone])
         else:
             w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
