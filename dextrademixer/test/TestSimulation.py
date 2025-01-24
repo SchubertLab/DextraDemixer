@@ -4,7 +4,7 @@ import muon as mu
 
 from matplotlib import pyplot as plt
 
-from dextramixer.utils import DextramerSimulator
+from dextrademixer.utils import DextramerSimulator
 
 
 class TestSimulation(unittest.TestCase):

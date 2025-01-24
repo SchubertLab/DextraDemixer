@@ -10,9 +10,9 @@ from matplotlib import pyplot as plt
 
 from sklearn.metrics import confusion_matrix
 
-from dextramixer.model import DextraMixer
-from dextramixer.utils import DextramerSimulator, dist_to_sim
-from dextramixer.utils.simulation import t_cell_simulation
+from dextrademixer.model import DextraDemixer
+from dextrademixer.utils import DextramerSimulator, dist_to_sim
+from dextrademixer.utils.simulation import t_cell_simulation
 
 
 class MyTestCase(unittest.TestCase):
@@ -35,7 +35,7 @@ class MyTestCase(unittest.TestCase):
         #print(self.mdata)
 
     def test_model_registration(self):
-        print(DextraMixer.available_methods())
+        print(DextraDemixer.available_methods())
 
     def test_svi_model_H(self):
         sim = DextramerSimulator()
@@ -51,7 +51,7 @@ class MyTestCase(unittest.TestCase):
 
         plt.show()
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(mdat, "pmhc1")
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
         print()
@@ -79,7 +79,7 @@ class MyTestCase(unittest.TestCase):
 
         plt.show()
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="I")
         mixer.preprocess_model_data(mdat, "pmhc1")
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
         print()
@@ -107,7 +107,7 @@ class MyTestCase(unittest.TestCase):
 
         plt.show()
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="C")
         mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id")
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
         print()
@@ -135,7 +135,7 @@ class MyTestCase(unittest.TestCase):
 
         plt.show()
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id")
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
         print()
@@ -163,7 +163,7 @@ class MyTestCase(unittest.TestCase):
 
         plt.show()
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="C")
         mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id", neg_ctrl_key="neg_control")
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
         print()
@@ -193,7 +193,7 @@ class MyTestCase(unittest.TestCase):
         mdat.mod["airr"].uns["clone_cov"] = jnp.eye(c_nof)
         plt.show()
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(mdat, "pmhc1",
                                     ir_cov_key="clone_cov",
                                     ir_clone_key="clone_id")
@@ -212,7 +212,7 @@ class MyTestCase(unittest.TestCase):
     @unittest.SkipTest
     def test_GPU_Metal(self):
         npy.set_platform("METAL")
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1", size_factor_key="size_factor")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -224,7 +224,7 @@ class MyTestCase(unittest.TestCase):
 
     def test_simple_mixture_model_H(self):
         npy.set_platform("cpu")
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -246,7 +246,7 @@ class MyTestCase(unittest.TestCase):
                                                          plot_data=False)
 
         binder = mdata.mod["airr"].obs["is_binder"]
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(mdata, "pmhc1", neg_ctrl_key="neg_control")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -258,7 +258,7 @@ class MyTestCase(unittest.TestCase):
 
     def test_sampler_config_override(self):
         npy.set_platform("cpu")
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control")
         trace = mixer.fit(sampler_config={
             "num_samples": 500,
@@ -278,7 +278,7 @@ class MyTestCase(unittest.TestCase):
 
     def test_simple_mixture_model_ppc_threshold(self):
         npy.set_platform("cpu")
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -290,7 +290,7 @@ class MyTestCase(unittest.TestCase):
 
     def test_simple_mixture_model_ppc_argmax(self):
         npy.set_platform("cpu")
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -302,7 +302,7 @@ class MyTestCase(unittest.TestCase):
 
     def test_simple_mixture_model_ppc_fdr(self):
         npy.set_platform("cpu")
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -320,7 +320,7 @@ class MyTestCase(unittest.TestCase):
         self.assertAlmostEquals(target_fdr, ((fdr * 10 ** 2) // 1) / (10 ** 2))
 
     def test_simple_mixture_model_I(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="I")
         mixer.preprocess_model_data(self.mdata, "pmhc1")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -332,7 +332,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_neg_control_H(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -343,7 +343,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_neg_control_I(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="I")
         mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -354,7 +354,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_C_I(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="I")
         mixer.preprocess_model_data(self.mdata, "pmhc1", ir_clone_key="clone_id")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -365,7 +365,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_C_H(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1", ir_clone_key="clone_id")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -376,7 +376,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_C_C(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="C")
         mixer.preprocess_model_data(self.mdata, "pmhc1", ir_clone_key="clone_id")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -387,7 +387,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_Sigma_H(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1", ir_clone_key="clone_id", ir_cov_key="ir_cov")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -398,7 +398,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_Sigma_I(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="I")
         mixer.preprocess_model_data(self.mdata, "pmhc1", ir_clone_key="clone_id", ir_cov_key="ir_cov")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -409,7 +409,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_Sigma_C(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="C")
         mixer.preprocess_model_data(self.mdata, "pmhc1", ir_clone_key="clone_id", ir_cov_key="ir_cov")
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
@@ -420,7 +420,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_full_H(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control",
                                     ir_clone_key="clone_id", ir_cov_key="ir_cov")
         trace = mixer.fit()
@@ -432,7 +432,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_full_I(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="I")
         mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control",
                                     ir_clone_key="clone_id", ir_cov_key="ir_cov")
         trace = mixer.fit()
@@ -444,7 +444,7 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_simple_mixture_model_full_C(self):
-        mixer = DextraMixer(model_type="mixturemodel", mode="C")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="C")
         mixer.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control",
                                     ir_clone_key="clone_id", ir_cov_key="ir_cov")
         trace = mixer.fit()
@@ -461,7 +461,7 @@ class MyTestCase(unittest.TestCase):
         mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
         #print(mdat)
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(mdat, "CMV", neg_ctrl_key="negative_control",
                                     ir_cov_key="clone_cov",
                                     ir_clone_key="clone_id")
@@ -488,7 +488,7 @@ class MyTestCase(unittest.TestCase):
         plt.show()
         binder = mdat.mod["airr"].obs["is_binder"]
 
-        mixer = DextraMixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
         mixer.preprocess_model_data(mdat, "pmhc1", neg_ctrl_key="neg_control",
                                     ir_cov_key="clone_cov",
                                     ir_clone_key="clone_id")
@@ -520,7 +520,7 @@ class MyTestCase(unittest.TestCase):
 
         binder = mdat.mod["airr"].obs["is_binder"]
 
-        mixer = DextraMixer(model_type="mixturemodelkmeans", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode="I")
 
         mixer.preprocess_model_data(mdat,
                                     "pmhc1",
@@ -542,7 +542,7 @@ class MyTestCase(unittest.TestCase):
 
         print("Random initialization")
 
-        mixer = DextraMixer(model_type="mixturemodelkmeans", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode="I")
 
         mixer.preprocess_model_data(mdat,
                                     "pmhc1",

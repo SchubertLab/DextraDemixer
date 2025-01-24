@@ -120,7 +120,7 @@ def dist_to_sim(d, nearest_psed=False, normalize=True, sigma=None, epsilon=None)
 def calculate_clonotype_kernel(mdat,
                                distance="tcrdist",
                                ir_key="airr",
-                               key_added="dextramixer",
+                               key_added="dextrademixer",
                                normalize=False,
                                sigma=None,
                                nearest_psed=False,
