@@ -2,7 +2,7 @@ import sys
 sys.path.append("../../")
 
 import matplotlib.pyplot as plt
-from dextramixer.utils import DextramerSimulator
+from dextrademixer.utils import DextramerSimulator
 
 
 def main():

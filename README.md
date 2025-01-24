@@ -1,4 +1,4 @@
-# DextraMixer Package (Placeholder Name)
+# DextraDemixer Package
 
 This module implements several mixture models to infer pMHC dextramere specificity from single-cell immune profiling data
 with increasing usage of information

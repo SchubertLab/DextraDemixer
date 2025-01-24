@@ -16,7 +16,7 @@ with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
 
 setup(
-    name='dextramixer',
+    name='dextrademixer',
 
     # Version:
     version='0.0.1',
@@ -57,7 +57,7 @@ setup(
         'Programming Language :: Python :: 3 :: Only',
     ],
 
-    # What dextramixer relates to:
+    # What dextrademixer relates to:
     keywords='single-cell pMHC binder assignment',
 
     # Specify  packages via find_packages() and exclude the tests and

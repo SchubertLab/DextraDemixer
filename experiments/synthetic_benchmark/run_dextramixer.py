@@ -8,7 +8,7 @@ import itertools as itr
 import numpyro
 import pandas as pd
 
-from dextramixer.model import DextraMixer
+from dextrademixer.model import DextraDemixer
 import muon as mu
 
 
@@ -40,7 +40,7 @@ def main(f_in, f_out_csv):
 
         print(model_config)
 
-        mixer = DextraMixer(model_type="mixturemodel", mode=m)
+        mixer = DextraDemixer(model_type="mixturemodel", mode=m)
         mixer.preprocess_model_data(mdata, "pmhc1",
                                     neg_ctrl_key=neg_ctrl,
                                     ir_clone_key=ir_clone,

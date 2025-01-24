@@ -7,7 +7,7 @@ import mudata as md
 import jax.lax
 import jax
 
-from dextramixer.model import ApMHCDeconvolution
+from dextrademixer.model import ApMHCDeconvolution
 
 if TYPE_CHECKING:
     from jax._src.typing import Array

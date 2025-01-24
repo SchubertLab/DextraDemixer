@@ -29,8 +29,8 @@ from numpyro.infer.svi import SVIRunResult
 from sklearn.cluster import KMeans
 import tqdm
 
-from dextramixer.model import ApMHCDeconvolution
-from dextramixer.utils import RegisteredModel
+from dextrademixer.model import ApMHCDeconvolution
+from dextrademixer.utils import RegisteredModel
 
 if TYPE_CHECKING:
     from jax._src.typing import Array
@@ -41,7 +41,7 @@ FLOAT_DTYPE = "float64"
 INT_DTYPE = "int32"
 
 
-class DextraMixer(ApMHCDeconvolution):
+class DextraDemixer(ApMHCDeconvolution):
     """
     This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
     data with increasing usage of information
@@ -78,9 +78,9 @@ class DextraMixer(ApMHCDeconvolution):
         self.guide = None
         self.mode = mode.upper()
 
-        if model_type not in ADextraMixerModel.registry.keys():
+        if model_type not in ADextraDemixerModel.registry.keys():
             raise warnings.warn(f"`model_type` {model_type} not supported using the standard model.")
-        self.model = ADextraMixerModel.registry.get(model_type, DextraMixerMixtureModel)()
+        self.model = ADextraDemixerModel.registry.get(model_type, DextraDemixerMixtureModel)()
 
     @property
     def version(self):
@@ -93,11 +93,11 @@ class DextraMixer(ApMHCDeconvolution):
     @staticmethod
     def available_methods():
         """
-        Returns a dictionary of available DextraMixer models and their supported versions
+        Returns a dictionary of available DextraDemixer models and their supported versions
 
-        :return: list(str) - list of DextraMixer models represented as string
+        :return: list(str) - list of DextraDemixer models represented as string
         """
-        return [k for k in ADextraMixerModel.registry.keys()]
+        return [k for k in ADextraDemixerModel.registry.keys()]
 
     def preprocess_model_data(self,
                               mdata: md.MuData,
@@ -341,9 +341,9 @@ class DextraMixer(ApMHCDeconvolution):
         return self.trace
 
 
-class ADextraMixerModel(metaclass=RegisteredModel):
+class ADextraDemixerModel(metaclass=RegisteredModel):
     """
-    Abstract model class of DextraMixer
+    Abstract model class of DextraDemixer
     """
 
     def __init__(self):
@@ -482,7 +482,7 @@ class ADextraMixerModel(metaclass=RegisteredModel):
         self._data = value
 
 
-class DextraMixerMixtureModel(ADextraMixerModel):
+class DextraDemixerMixtureModel(ADextraDemixerModel):
     """
     Implements a two-component negative-binomial mixture model of the form:
 
@@ -655,7 +655,7 @@ class DextraMixerMixtureModel(ADextraMixerModel):
             p = npy.deterministic("log_p", log_probs - logsumexp(log_probs, axis=-1, keepdims=True))
 
 
-class DextraMixerKmeansModel(ADextraMixerModel):
+class DextraDemixerKmeansModel(ADextraDemixerModel):
     """
     Dextramixer version who is initialized and prior parametrized by K-means++ results
     Thus model does not rely on hyperpriors and is a bit simpler

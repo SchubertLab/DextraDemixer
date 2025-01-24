@@ -4,8 +4,8 @@ import numpy as np
 import muon as mu
 import pandas as pd
 
-from dextramixer.model.BEAMT import BEAMT
-from dextramixer.utils.simulation import t_cell_simulation
+from dextrademixer.model.BEAMT import BEAMT
+from dextrademixer.utils.simulation import t_cell_simulation
 
 
 class MyTestCase(unittest.TestCase):

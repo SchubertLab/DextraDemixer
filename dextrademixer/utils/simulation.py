@@ -22,7 +22,7 @@ from scipy.special import expit
 
 import matplotlib.pyplot as plt
 
-from dextramixer.utils.utils import remove_outliers, convert_neg_binom_params, \
+from dextrademixer.utils.utils import remove_outliers, convert_neg_binom_params, \
     convert_to_invdispersion, convert_to_variance, dist_to_sim, generate_sim_from_ltridist, \
     normalize_distance_matrix
 

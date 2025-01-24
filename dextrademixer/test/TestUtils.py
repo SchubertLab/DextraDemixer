@@ -1,6 +1,6 @@
 import unittest
 
-from dextramixer.utils import *
+from dextrademixer.utils import *
 
 
 class MyTestCase(unittest.TestCase):

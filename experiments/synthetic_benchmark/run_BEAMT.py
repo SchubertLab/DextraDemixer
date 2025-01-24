@@ -3,7 +3,7 @@ sys.path.append("../../")
 
 import pandas as pd
 
-from dextramixer.model import BEAMT
+from dextrademixer.model import BEAMT
 import muon as mu
 
 
