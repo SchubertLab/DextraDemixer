@@ -1,0 +1,86 @@
+from itertools import product
+from snakemake.utils import min_version
+
+min_version("6.0")
+
+# Configuration
+cell_list = [5000]
+clone_list = [100]
+p_list = [0.1]
+cov_list = [0]
+p_outlier_list = [0.0]
+mean_fold_increase = [2]
+var_fold_increase = [1.2]
+reps = 10
+tools = ["dextramixer", "dextramixerkmeans"]
+
+# Parameter dictionary
+param_dict = {
+    "mode": ["I", "H", "C"],
+    "neg": [None, "neg_control"],
+    "clonotype": [None, "clone_id"],
+}
+
+# Generate all combinations of parameters
+param_combinations = [
+    {"mode": mode, "neg": neg, "clonotype": clonotype}
+    for mode, neg, clonotype in product(param_dict["mode"], param_dict["neg"], param_dict["clonotype"])
+    if (mode == "C" and clonotype is not None) or mode != "C"
+]
+
+rule all:
+    input:
+        "results/aggregated_results.csv"
+
+rule run_simulation:
+    output:
+        h5mu = "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu",
+        pdf = "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.pdf"
+    params:
+        reps = reps
+    conda:
+        "environment.yaml"
+    shell:
+        "python create_data_mean_variance_fold_increase.py {output.h5mu} {output.pdf} "
+        "{wildcards.cell} {wildcards.clone} {wildcards.po} {wildcards.p} {wildcards.cov} "
+        "{wildcards.mean} {wildcards.var} {params.reps}"
+
+rule run_tool:
+    input:
+        expand(
+            "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu",
+            cell=cell_list,
+            clone=clone_list,
+            po=p_outlier_list,
+            p=p_list,
+            cov=cov_list,
+            mean=mean_fold_increase,
+            var=var_fold_increase,
+            i=range(reps)
+        )
+    output:
+        "optuna/{tool}_mode{mode}_neg{neg}_clonotype{clonotype}.pred.csv"
+    params:
+        mode="{mode}",
+        neg="{neg}",
+        clonotype="{clonotype}",
+    conda:
+        "environment.yaml"
+    shell:
+        "python run_{wildcards.tool}.py {input} {output} --mode {params.mode} --neg {params.neg} --clonotype {params.clonotype}"
+
+rule aggregate_results:
+    input:
+        expand(
+            "optuna/{tool}_mode{mode}_neg{neg}_clonotype{clonotype}.pred.csv",
+            tool=tools,
+            mode=param_dict["mode"],
+            neg=[str(x) for x in param_dict["neg"]],
+            clonotype=[str(x) for x in param_dict["clonotype"]],
+        )
+    output:
+        "results/aggregated_results.csv"
+    conda:
+        "environment.yaml"
+    shell:
+        "python aggregate_results.py optuna {output}"
