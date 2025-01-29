@@ -1,76 +1,80 @@
-import itertools
+import argparse
+
 import sys
-import os
+
 
 sys.path.append("../../")
 
-import itertools as itr
 import numpyro
+import os
+import optuna
+import numpy as np
 import pandas as pd
+from sklearn.metrics import roc_auc_score
 
 from dextrademixer.model import DextraDemixer
 import muon as mu
 
 
-def main(f_in, f_out_csv):
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Run tool on multiple simulation files and average results.")
+    parser.add_argument("input_files", nargs="+", help="List of input .h5mu files")
+    parser.add_argument("output_file", help="Output CSV file for averaged results")
+    parser.add_argument("--mode", required=True, help="Processing mode")
+    parser.add_argument("--neg", required=True, help="Negative control parameter")
+    parser.add_argument("--clonotype", required=True, help="Clonotype parameter")
+    return parser.parse_args()
+
+
+def run_inference(opt_params, f_in,  m, neg_ctrl, ir_clone):
     numpyro.set_host_device_count(4)
-    base_path = os.path.basename(f_out_csv)
 
     mdata = mu.read(f_in)
-    true_binder = mdata.mod["airr"].obs["is_binder"]
-    N = len(true_binder)
+    y_true = mdata.mod["airr"].obs["is_binder"]
 
-    d = {"model": [], "thresh": [], "p": [], "assignment": [], "true_binder": []}
-    for m, neg_ctrl, ir_clone, ir_cov, svi in itr.product(["I", "H", "C"],
-                                                     [None, "neg_control"],
-                                                     [None, "clone_id"],
-                                                     [None, "clone_cov"],
-                                                     [True]):
+    mixer = DextraDemixer(model_type="mixturemodelkmeans", mode=m)
+    mixer.preprocess_model_data(mdata, "pmhc1",
+                                neg_ctrl_key=neg_ctrl,
+                                ir_clone_key=ir_clone)
 
-        if "_cov1_" not in f_in and ir_cov is not None and ir_clone is not None:
-            continue
+    trace = mixer.fit_svi(svi_config=opt_params)
+    p_pred, assignment_fdr = mixer.predict_posterior_class(target_fdr=0.05)
+    auc = roc_auc_score(y_true, p_pred, average="weighted")
 
-        if ir_cov is not None and ir_clone is None:
-            continue
+    return auc
 
-        if m == "C" and ir_clone is None:
-            continue
 
-        model_config = f"dextramixerkmeans_svi_{int(svi)}_mode_{m}_negctrl_{int(neg_ctrl is not None)}_clone_{int(ir_clone is not None)}_cov_{int(ir_cov is not None)}"
+def main():
+    args = parse_arguments()
 
-        print(model_config)
+    def objective(trial):
+        """Optuna objective function."""
 
-        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode=m)
-        mixer.preprocess_model_data(mdata, "pmhc1",
-                                    neg_ctrl_key=neg_ctrl,
-                                    ir_clone_key=ir_clone,
-                                    ir_cov_key=ir_cov)
-        if svi:
-            trace = mixer.fit_svi()
-        else:
-            trace = mixer.fit()
+        opt_params = {"maxiter": trial.suggest_int("maxiter", 100, 10000),
+                       "adam":
+                               {
+                                "init_value": trial.suggest_loguniform("init_value", 1e-5, 1e-1),
+                                "transition_steps": trial.suggest_int("transition_steps", 100, 5000),
+                                "decay_rate": trial.suggest_uniform("decay_rate", 0.5, 1.0),
+                                "end_value": trial.suggest_loguniform("end_value", 1e-8, 1e-2)
+                               }
+                      }
 
-        # trace.to_netcdf(filename=os.path.join(base_path, "dextramier_"+model_config+"{}.ncdf"))
+        # Evaluate over multiple datasets
+        mean_auc = np.mean([run_inference(opt_params, dataset, args.mode, args.neg, args.clonotype)
+                            for dataset in args.input_files])
 
-        p_thr, assignment_thr = mixer.predict_posterior_class(threshold=0.5)
-        p_fdr, assignment_fdr = mixer.predict_posterior_class(target_fdr=0.05)
-        d["model"].extend([model_config] * N)
-        d["thresh"].extend(["thresh"] * N)
-        d["p"].extend(p_thr)
-        d["assignment"].extend(assignment_thr)
-        d["true_binder"].extend(true_binder)
+        return mean_auc
 
-        d["model"].extend([model_config] * N)
-        d["thresh"].extend(["fdr"] * N)
-        d["p"].extend(p_fdr)
-        d["assignment"].extend(assignment_fdr)
-        d["true_binder"].extend(true_binder)
+    sampler = optuna.samplers.GPSampler()
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10)
 
-    df = pd.DataFrame.from_dict(d)
-    df.to_csv(f_out_csv)
+    study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize")
+    study.optimize(objective, n_trials=100)
+
+    df = study.trials_dataframe()
+    df.write_csv(args.output_file)
 
 
 if __name__ == "__main__":
-    f_in = sys.argv[1]
-    f_out_csv = sys.argv[2]
-    main(f_in, f_out_csv)
+    main()
