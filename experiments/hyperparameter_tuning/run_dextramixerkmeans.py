@@ -55,10 +55,10 @@ def main():
         opt_params = {"maxiter": trial.suggest_int("maxiter", 100, 10000),
                        "adam":
                                {
-                                "init_value": trial.suggest_loguniform("init_value", 1e-5, 1e-1),
+                                "init_value": trial.suggest_float("init_value", 1e-5, 1e-1, log=True),
                                 "transition_steps": trial.suggest_int("transition_steps", 100, 5000),
-                                "decay_rate": trial.suggest_uniform("decay_rate", 0.5, 1.0),
-                                "end_value": trial.suggest_loguniform("end_value", 1e-8, 1e-2)
+                                "decay_rate": trial.suggest_float("decay_rate", 0.5, 1.0),
+                                "end_value": trial.suggest_float("end_value", 1e-8, 1e-2, log=True)
                                }
                       }
 
