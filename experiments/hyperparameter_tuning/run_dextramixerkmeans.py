@@ -13,6 +13,7 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 
 from dextrademixer.model import DextraDemixer
+from dextrademixer.utils import convert_str_to_bool_and_none
 import muon as mu
 
 
@@ -46,6 +47,7 @@ def run_inference(opt_params, f_in,  m, neg_ctrl, ir_clone):
 
 def main():
     args = parse_arguments()
+    args = convert_str_to_bool_and_none(args)
 
     def objective(trial):
         """Optuna objective function."""
@@ -73,7 +75,7 @@ def main():
     study.optimize(objective, n_trials=100)
 
     df = study.trials_dataframe()
-    df.write_csv(args.output_file)
+    df.to_csv(args.output_file)
 
 
 if __name__ == "__main__":
