@@ -39,7 +39,7 @@ rule run_simulation:
     params:
         reps = reps
     conda:
-        "environment.yaml"
+        "dextrademixer"
     shell:
         "python create_data_mean_variance_fold_increase.py {output.h5mu} {output.pdf} "
         "{wildcards.cell} {wildcards.clone} {wildcards.po} {wildcards.p} {wildcards.cov} "
@@ -65,7 +65,7 @@ rule run_tool:
         neg="{neg}",
         clonotype="{clonotype}",
     conda:
-        "environment.yaml"
+        "dextrademixer"
     shell:
         "python run_{wildcards.tool}.py {input} {output} --mode {params.mode} --neg {params.neg} --clonotype {params.clonotype}"
 
@@ -75,6 +75,6 @@ rule aggregate_results:
     output:
         "results/aggregated_results.csv"
     conda:
-        "environment.yaml"
+        "dextrademixer"
     shell:
         "python aggregate_results.py optuna {output}"
