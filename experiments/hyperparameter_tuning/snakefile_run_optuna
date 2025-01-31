@@ -27,7 +27,7 @@ param_combinations = [
     for mode, neg, clonotype in product(param_dict["mode"], param_dict["neg"], param_dict["clonotype"])
     if (mode == "C" and clonotype is not None) or mode != "C"
 ]
-
+results_list = [f"optuna/{tool}_mode{params['mode']}_neg{params['neg']}_clonotype{params['clonotype']}.pred.csv" for tool in tools for params in param_combinations]
 rule all:
     input:
         "results/aggregated_results.csv"
@@ -71,13 +71,7 @@ rule run_tool:
 
 rule aggregate_results:
     input:
-        expand(
-            "optuna/{tool}_mode{mode}_neg{neg}_clonotype{clonotype}.pred.csv",
-            tool=tools,
-            mode=param_dict["mode"],
-            neg=[str(x) for x in param_dict["neg"]],
-            clonotype=[str(x) for x in param_dict["clonotype"]],
-        )
+        results_list
     output:
         "results/aggregated_results.csv"
     conda:
