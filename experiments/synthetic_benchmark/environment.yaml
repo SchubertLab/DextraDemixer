@@ -1,4 +1,4 @@
-name: sc
+name: dextraMixer_syntheticBenchmark
 channels:
   - conda-forge
   - bioconda
@@ -12,11 +12,14 @@ dependencies:
       - statsmodels>=0.14.1
       - matplotlib>=3.8.3
       - jax>=0.4.26
-      - jax-lib>=0.4.26
+      - jaxlib>=0.4.26
       - numpyro>=0.14.0
       - arviz>=0.17.1
       - mudata>=0.2.3
       - muon>=0.1.6
       - scanpy>=1.9.8
       - scirpy>=0.13.0
-      - sklearn
+      - scikit-learn 
+
+
+# TODO: fix scikit-learn version
