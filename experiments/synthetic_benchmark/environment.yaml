@@ -17,6 +17,7 @@ dependencies:
       - arviz>=0.17.1
       - mudata>=0.2.3
       - muon>=0.1.6
+      - optax>=0.2.2
       - scanpy>=1.9.8
       - scirpy>=0.13.0
       - scikit-learn 

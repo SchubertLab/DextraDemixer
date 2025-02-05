@@ -1,5 +1,0 @@
-__default__:
-    partition: your_partition
-    time: '01:00:00'
-    mem_mb: 4000
-    cpus: 1
