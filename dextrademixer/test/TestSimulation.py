@@ -43,7 +43,7 @@ class TestSimulation(unittest.TestCase):
         # dist = self.mdata.mod["airr"].uns["cc_aa_alignment"]["distances"].toarray()
         # self.mdata.mod["airr"].uns["ir_dist_aa_full"] = dist - 1
         # self.mdata.write("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
-        self.mdata = mu.read("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+        self.mdata = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
         #print(self.mdata)
         pass
 
@@ -61,7 +61,7 @@ class TestSimulation(unittest.TestCase):
         ax = sim.estimate_simulation_params(self.mdata, neg_ctrl_key="negative_control",
                                             ir_dist_key="ir_dist_aa_full", plot_qc=True)
         print(sim.dist_params)
-        plt.savefig("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model.pdf")
+        #plt.savefig("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model.pdf")
         plt.show()
 
     def test_estimating_params_with_plot_filtered(self):
@@ -70,7 +70,7 @@ class TestSimulation(unittest.TestCase):
         sim = DextramerSimulator()
         ax = sim.estimate_simulation_params(self.mdata, neg_ctrl_key="negative_control",
                                             ir_dist_key="ir_dist_aa_full", filter_extreme_values=True, plot_qc=True)
-        plt.savefig("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
+        plt.savefig("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
         plt.show()
 
     def test_estimating_params_with_plot_filtered_individually(self):
@@ -79,9 +79,11 @@ class TestSimulation(unittest.TestCase):
                                             ir_dist_key="ir_dist_aa_full",
                                             filter_extreme_values=[True, True, False, True],
                                             plot_qc=True)
+        print()
+        print(DextramerSimulator.default_params())
         print(sim.dist_params)
-        plt.savefig("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
-        plt.show()
+        #plt.savefig("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
+        #plt.show()
 
     def test_simulating_params(self):
         sim = DextramerSimulator()

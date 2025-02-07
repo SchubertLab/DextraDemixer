@@ -1,6 +1,7 @@
 import collections.abc
 import numbers
 import warnings
+from collections import defaultdict
 from typing import Union, Tuple, Optional, Any
 
 import jax
@@ -274,8 +275,11 @@ class DextramerSimulator:
         dist_norm = normalize_distance_matrix(dist)
         dist_flat = dist_norm[np.triu_indices_from(dist_norm, k=-1)] # lower-triangle without diagnoal
         dist_flat = np.clip(dist_flat, 1e-6, 1-1e-6)
-        dist_param["clonotype_dist_param"] = stats.beta.fit(dist_flat, floc=0, fscale=1)
+        perc_10, perc_50 = np.percentile(dist_flat, [10, 50])
 
+        dist_param["clonotype_dist_param"] = stats.beta.fit(dist_flat, floc=0, fscale=1)
+        dist_param["lower_clonotype_dist_param"] = stats.beta.fit(dist_flat[dist_flat <= perc_10], floc=0, fscale=1)
+        dist_param["upper_clonotype_dist_param"] = stats.beta.fit(dist_flat[dist_flat >= perc_50], floc=0, fscale=1)
         param["clonotype_dist"] = dist_flat
 
         self.dist_params = dist_param
@@ -372,7 +376,9 @@ class DextramerSimulator:
                                              binding_ratio: float = 0.05,
                                              binding_fold_increase_range: list[float] = None,
                                              variance_fold_increase_range: list[float] = None,
+                                             p_nonbinding_clone_outlier=0.0,
                                              p_binding_outlier=0.0,
+                                             nof_clonotype_cluster=None,
                                              use_clonotype_cov: bool = False,
                                              simulate_neg_control: bool = False,
                                              plot_data: bool = False,
@@ -389,8 +395,11 @@ class DextramerSimulator:
             binding_fold_increase_range: list of fold increase for pMHC binding cells
             variance_fold_increase_range: list of fold increase of the variance to the mean of a negative binomial
                                           (i.e. variance_fold_increase_range=[1] => mean = var).
-                                          If not specified estimated inverdispersion of clonotypes will be used.
-            p_binding_outlier: the probability of a cell of binding clonotype to have low (noise-level) counts
+                                          If not specified estimated inverdispersion of clonotypes will be used
+            p_nonbinding_clone_outlier: The probability that a non-binding clone is clustered together with binding clones
+            p_binding_outlier: the probability of a cell of binding clonotype to have low pMHC counts
+            nof_clonotype_cluster: number of clonotype clusters to simulate in case covariance matrix should be
+                                   simulated (if None than randomly sampled between [2, nof_clones]
             use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
             simulate_neg_control: whether to simulate a negative control pMHC for each cell (default: False)
             plot_data: boolean whether to plot simulated data (default: False)
@@ -410,6 +419,14 @@ class DextramerSimulator:
             raise ValueError("`variance_fold_increase_range` contains fold increases <= 1. " +
                              "Fold increases must be > 1")
 
+        if nof_clonotype_cluster is not None:
+            if nof_clonotype_cluster > nof_clones:
+                raise ValueError("`nof_clonotype_cluster` must be smaller than `nof_clones`")
+            if nof_clonotype_cluster < 2:
+                raise ValueError("`nof_clonotype_cluster` must be at least 2")
+        else:
+            nof_clonotype_cluster = rng.randint(2, nof_clones)
+
         # params
         neg_mean = params["neg_mean"]
         neg_concentration = params["neg_concentration"]
@@ -420,15 +437,20 @@ class DextramerSimulator:
         if binding_fold_increase_range is None:
             binding_fold_increase_range = [2, 5, 10, 50, 100, 150, 200, 500]
 
-        if use_clonotype_cov:
-            # sample covariance matrix
-            ltridist = stats.beta.rvs(*clonotype_dist_param, size=int(nof_clones*(nof_clones-1)/2), random_state=rng)
-            cov = generate_sim_from_ltridist(ltridist, normalize=False, epsilon=0)
+        binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
+        K = None
+        cc_assignment = None
 
-            p_clone = expit(rng.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
-            binder_assignment = rng.binomial(1, p_clone)
-        else:
-            binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
+        # simulate TCR similarity clusters
+        if use_clonotype_cov:
+
+            cc_assignment = self.__cc_assignment(binder_assignment,
+                                                       nof_clones,
+                                                       nof_clonotype_cluster,
+                                                       p_nonbinding_clone_outlier, rng)
+
+            K = self.__construct_tcr_kernel(cc_assignment, params, rng)
+
 
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
@@ -485,9 +507,9 @@ class DextramerSimulator:
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([fold_change] * n_cells)
 
-        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None)
+        mdat = self.__generate_mdata(d, simulate_neg_control, K, cc_assignment)
         if plot_data:
-            return mdat, DextramerSimulator.__plot_simulated_data(d)
+            return mdat, self.__plot_simulated_data(d)
         else:
             return mdat
 
@@ -570,7 +592,7 @@ class DextramerSimulator:
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([fold_change] * n_cells)
 
-        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None)
+        mdat = self.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None)
 
         if plot_data:
             return mdat, self.__plot_simulated_data(d)
@@ -610,7 +632,7 @@ class DextramerSimulator:
         return axs
 
     @staticmethod
-    def __generate_mdata(d, simulate_neg_control, cov=None) -> MuData:
+    def __generate_mdata(d, simulate_neg_control, cov, cc_assignment) -> MuData:
 
         if simulate_neg_control:
             adata = ad.AnnData(np.array([d["x"], d["x_neg"]], dtype="int64").T)
@@ -627,6 +649,12 @@ class DextramerSimulator:
         adata_tcr = ad.AnnData()
         adata_tcr.obs["is_binder"] = d["binder"]
         adata_tcr.obs["clone_id"] = d["clone"]
+        adata_tcr.obs["cc_aa_sim"] = cc_assignment[d["clone"]]
+        n_cc = len(np.unique(cc_assignment))
+        cc_size = np.zeros(n_cc)
+        for c in adata_tcr.obs["cc_aa_sim"]:
+            cc_size[c] += 1
+        adata_tcr.obs["cc_aa_sim_size"] = cc_size[adata_tcr.obs["cc_aa_sim"]]
 
         if cov is not None:
             adata_tcr.uns["clone_cov"] = np.array(cov)
@@ -644,3 +672,90 @@ class DextramerSimulator:
             rng_key: an integer to initialize the random key generator.
         """
         return npd.NegativeBinomial2(mu, alpha).sample(jax.random.PRNGKey(rng_key), sample_shape=(size,))
+
+    @staticmethod
+    def __cc_assignment(binder_assignment, nof_clones, nof_clonotype_cluster, p_nonbinding_clone_outlier, rng):
+        """
+        Split clonotypes into clusters but ensure perfect separation of binding assignment.
+        Missassigns with `p_nonbinding_clone_outlier`probability nonbinding clones to binding clusters
+
+        Returns: an array with clonotype cluster assignments
+        """
+
+        # make local copy as we might modify the assignment to infuse errors
+        binder_assignment = np.asarray(binder_assignment).copy()
+
+        # Inject errors into cc_assignments via label switching of non-binders
+        if 0 < p_nonbinding_clone_outlier < 1:
+            nonbinder_indices = np.where(binder_assignment == 0)[0]
+            n_nonbinder = len(nonbinder_indices)
+
+            n_errors = rng.binomial(n_nonbinder, p_nonbinding_clone_outlier)
+            if n_errors > 0:
+                error_indices = rng.choice(nonbinder_indices, size=n_errors, replace=False)
+                binder_assignment[error_indices] = 1
+
+        nonbinder_indices = np.where(binder_assignment == 0)[0]
+        binder_indices = np.where(binder_assignment == 1)[0]
+
+        # Randomly assign number of clusters to each class
+        n_clusters_nonbinder = rng.randint(1, nof_clonotype_cluster)
+        n_clusters_binder = nof_clonotype_cluster - n_clusters_nonbinder
+
+        # Initialize cluster assignments
+        cluster_assignments = np.zeros(nof_clones, dtype=int)
+
+        def randomly_assign_to_clusters(indices, start_cluster, n_clusters):
+            # Randomly assign each sample to a cluster
+
+            cluster_choices = np.arange(start_cluster, start_cluster + n_clusters)
+
+            # Ensure at least one sample per cluster
+            if len(indices) >= n_clusters:
+                initial_assignments = np.random.choice(indices, n_clusters, replace=False)
+                for i, idx in enumerate(initial_assignments):
+                    cluster_assignments[idx] = start_cluster + i
+
+                # Then randomly assign remaining samples
+                remaining_indices = np.setdiff1d(indices, initial_assignments)
+                if len(remaining_indices) > 0:
+                    random_clusters = np.random.choice(cluster_choices, size=len(remaining_indices))
+                    cluster_assignments[remaining_indices] = random_clusters
+            else:
+                random_clusters = np.random.choice(cluster_choices, size=len(indices))
+                cluster_assignments[indices] = random_clusters
+
+        randomly_assign_to_clusters(nonbinder_indices, 0, n_clusters_nonbinder)
+        randomly_assign_to_clusters(binder_indices, n_clusters_nonbinder, n_clusters_binder)
+
+        return cluster_assignments
+
+    @staticmethod
+    def __construct_tcr_kernel(n_clones, cc_assignment, params, rng):
+        """
+            construct the TCR-similarity Kernel based on clonotype cluster assignments.
+
+            Returns: an n_clones x n_clones similarity matrix
+        """
+
+        # first extra inter and intra distance parameters
+        inter_dist_param = params["upper_clonotype_dist_param"]
+        intra_dist_param = params["lower_clonotype_dist_param"]
+
+        cc_to_clone = defaultdict(list)
+        for c, cc in enumerate(cc_assignment):
+            cc_to_clone[cc].append(c)
+
+        # initialize Kernel with only inter distances
+        K = stats.beta.rvs(*inter_dist_param, size=n_clones**2, random_state=rng).reshape(n_clones, n_clones)
+
+        # iterate through cc simulate intra distances and replace values in K
+        for cc, c_idx in cc_to_clone.items():
+            n_cc = len(c_idx)
+            K_sub = stats.beta.rvs(*intra_dist_param, size=n_cc**2, random_state=rng).reshape(n_cc, n_cc)
+            K[np.ix_(c_idx, c_idx)] = K_sub
+
+        # set diagonal to 0
+        K[np.diag_indices(n_clones)] = 0
+
+        return dist_to_sim(K, normalize=False, epsilon=1e-6)
