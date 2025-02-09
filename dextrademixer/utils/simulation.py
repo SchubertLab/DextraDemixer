@@ -17,6 +17,7 @@ import numpyro as npy
 import numpyro.distributions as npd
 import statsmodels.formula.api as smf
 from mudata import MuData
+from numpy.ma.core import shape
 
 from scipy import stats
 from scipy.special import expit
@@ -455,7 +456,6 @@ class DextramerSimulator:
         # params
         neg_mean = params["neg_mean"]
         neg_concentration = params["neg_concentration"]
-        clonotype_dist_param = params["clonotype_dist_param"]
         cells_per_clonotype = params["cells_per_clonotype"]
         concentration_param = params["concentration_param"]
 
@@ -532,9 +532,9 @@ class DextramerSimulator:
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([fold_change] * n_cells)
 
-        mdat = self.__generate_mdata(d, simulate_neg_control, K, cc_assignment)
+        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, K, cc_assignment)
         if plot_data:
-            return mdat, self.__plot_simulated_data(d)
+            return mdat, DextramerSimulator.__plot_simulated_data(d)
         else:
             return mdat
 
@@ -544,6 +544,8 @@ class DextramerSimulator:
                                        binding_ratio: float = 0.05,
                                        binding_fold_increase_range: list[float] = None,
                                        use_clonotype_cov: bool = False,
+                                       nof_clonotype_cluster = None,
+                                       p_nonbinding_clone_outlier = 0.0,
                                        simulate_neg_control: bool = False,
                                        plot_data: bool = False,
                                        rng_key: int = 42
@@ -573,32 +575,30 @@ class DextramerSimulator:
 
         # params
         neg_x = self.params["neg_x"]
-        clonotype_dist = self.params["clonotype_dist"]
-        cells_per_binder = self.params["cells_per_binder"]
-        cells_per_nonbinder = self.params["cells_per_nonbinder"]
+        cells_per_clonotype = self.params["cells_per_clonotype"]
 
         if binding_fold_increase_range is None:
             binding_fold_increase_range = [2, 5, 10, 50, 100, 150, 200, 500]
 
         d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": []}
 
-        if use_clonotype_cov:
-            # sample covariance matrix
-            ltridist = rng.choice(clonotype_dist, size=int(nof_clones * (nof_clones - 1) / 2), replace=False)
-            ltridist = np.where(ltridist < 0, 1e-10, ltridist)
-            cov = generate_sim_from_ltridist(ltridist, normalize=False)
+        binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
+        K = None
+        cc_assignment = None
 
-            p_clone = expit(rng.multivariate_normal(mean=np.zeros(nof_clones), cov=cov))
-            binder_assignment = rng.binomial(1, p_clone)
-        else:
-            binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
+        # simulate TCR similarity clusters
+        if use_clonotype_cov:
+            cc_assignment = self.__cc_assignment(binder_assignment,
+                                                 nof_clones,
+                                                 nof_clonotype_cluster,
+                                                 p_nonbinding_clone_outlier, rng)
+
+            K = self.__construct_tcr_kernel(nof_clones, cc_assignment, self.dist_params, rng)
 
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
         total_le = total_cells - nof_clones
-        raw_cells_per_clone = np.array([rng.choice(cells_per_binder)
-                                        if binder_assignment[i] else rng.choice(cells_per_nonbinder)
-                                        for i in range(nof_clones)])
+        raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_clonotype,random_state=rng) for _ in range(nof_clones)])
         cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone, random_state=rng)[0]
         cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
@@ -617,7 +617,7 @@ class DextramerSimulator:
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([fold_change] * n_cells)
 
-        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, cov if use_clonotype_cov else None)
+        mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, K, cc_assignment)
 
         if plot_data:
             return mdat, DextramerSimulator.__plot_simulated_data(d)
@@ -669,21 +669,20 @@ class DextramerSimulator:
             adata.var["feature_types"] = ["Antigen Capture"]
 
         adata.obs["fold_increase"] = d["fold_increase"]
-        adata.obs.index = adata.obs.index.astype("int32")
+        adata.obs.index = adata.obs.index.astype("int64")
 
         adata_tcr = ad.AnnData()
         adata_tcr.obs["is_binder"] = d["binder"]
         adata_tcr.obs["clone_id"] = d["clone"]
 
-#        if cov is not None:
-#            adata_tcr.obs["cc_aa_sim"] = cc_assignment[d["clone"]]
-#            n_cc = len(np.unique(cc_assignment))
-#            cc_size = np.zeros(n_cc)
-#            for c in adata_tcr.obs["cc_aa_sim"]:
-#                cc_size[c] += 1
-#            adata_tcr.obs["cc_aa_sim_size"] = cc_size[adata_tcr.obs["cc_aa_sim"]]
-#            adata_tcr.uns["clone_cov"] = np.array(cov)
-
+        if cov is not None:
+            adata_tcr.obs["cc_aa_sim"] = cc_assignment[d["clone"]]
+            n_cc = len(np.unique(cc_assignment))
+            cc_size = np.zeros(n_cc)
+            for c in adata_tcr.obs["cc_aa_sim"]:
+                cc_size[c] += 1
+            adata_tcr.obs["cc_aa_sim_size"] = cc_size[adata_tcr.obs["cc_aa_sim"]]
+            adata_tcr.uns["clone_cov"] = np.array(cov)
 
         return md.MuData({"gex": adata, "airr": adata_tcr})
 
@@ -708,6 +707,27 @@ class DextramerSimulator:
         Returns: an array with clonotype cluster assignments
         """
 
+        def randomly_assign_to_clusters(assignments, indices, start_cluster, n_clusters):
+            # Randomly assign each sample to a cluster
+            cluster_choices = np.arange(start_cluster, start_cluster + n_clusters)
+
+            # Ensure at least one sample per cluster
+            if len(indices) >= n_clusters:
+                initial_assignments = np.random.choice(indices, n_clusters, replace=False)
+                for i, idx in enumerate(initial_assignments):
+                    assignments[idx] = start_cluster + i
+
+                # Then randomly assign remaining samples
+                remaining_indices = np.setdiff1d(indices, initial_assignments)
+                if len(remaining_indices) > 0:
+                    random_clusters = np.random.choice(cluster_choices, size=len(remaining_indices))
+                    assignments[remaining_indices] = random_clusters
+            else:
+                random_clusters = np.random.choice(cluster_choices, size=len(indices))
+                assignments[indices] = random_clusters
+
+            return assignments
+
         # make local copy as we might modify the assignment to infuse errors
         binder_assignment = np.asarray(binder_assignment).copy()
 
@@ -729,30 +749,10 @@ class DextramerSimulator:
         n_clusters_binder = nof_clonotype_cluster - n_clusters_nonbinder
 
         # Initialize cluster assignments
-        cluster_assignments = np.zeros(nof_clones, dtype=int)
-
-        def randomly_assign_to_clusters(indices, start_cluster, n_clusters):
-            # Randomly assign each sample to a cluster
-
-            cluster_choices = np.arange(start_cluster, start_cluster + n_clusters)
-
-            # Ensure at least one sample per cluster
-            if len(indices) >= n_clusters:
-                initial_assignments = np.random.choice(indices, n_clusters, replace=False)
-                for i, idx in enumerate(initial_assignments):
-                    cluster_assignments[idx] = start_cluster + i
-
-                # Then randomly assign remaining samples
-                remaining_indices = np.setdiff1d(indices, initial_assignments)
-                if len(remaining_indices) > 0:
-                    random_clusters = np.random.choice(cluster_choices, size=len(remaining_indices))
-                    cluster_assignments[remaining_indices] = random_clusters
-            else:
-                random_clusters = np.random.choice(cluster_choices, size=len(indices))
-                cluster_assignments[indices] = random_clusters
-
-        randomly_assign_to_clusters(nonbinder_indices, 0, n_clusters_nonbinder)
-        randomly_assign_to_clusters(binder_indices, n_clusters_nonbinder, n_clusters_binder)
+        cluster_assignments = randomly_assign_to_clusters(np.zeros(nof_clones, dtype=int), nonbinder_indices, 0,
+                                                          n_clusters_nonbinder)
+        cluster_assignments = randomly_assign_to_clusters(cluster_assignments, binder_indices, n_clusters_nonbinder,
+                                                          n_clusters_binder)
 
         return cluster_assignments
 

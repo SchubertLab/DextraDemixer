@@ -147,13 +147,13 @@ class TestSimulation(unittest.TestCase):
 
     def test_simulating_params_nctrl(self):
         sim = DextramerSimulator()
-        mdat, _ = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True)
+        mdat = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True,
+                                                         rng_key=3443)
         print(mdat)
 
     def test_simulating_params_write_read(self):
         sim = DextramerSimulator()
-        mdat = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True, use_clonotype_cov=True,
-                                                        )
+        mdat = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True, use_clonotype_cov=True)
 
         mdat.write("test.h5mu")
         mdat2 = mu.read("test.h5mu")
@@ -161,7 +161,7 @@ class TestSimulation(unittest.TestCase):
 
     def test_simulating_params_cov(self):
         sim = DextramerSimulator()
-        mdat, _ = sim.simulate_pmhc_data_from_distribution(nof_clones=5, use_clonotype_cov=True)
+        mdat = sim.simulate_pmhc_data_from_distribution(nof_clones=5, use_clonotype_cov=True)
         print(mdat)
 
     def test_simulation_sample(self):
