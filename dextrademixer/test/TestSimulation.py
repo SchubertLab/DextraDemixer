@@ -83,7 +83,7 @@ class TestSimulation(unittest.TestCase):
         print(DextramerSimulator.default_params())
         print(sim.dist_params)
         #plt.savefig("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
-        #plt.show()
+        plt.show()
 
     def test_simulating_params(self):
         sim = DextramerSimulator()
@@ -161,7 +161,7 @@ class TestSimulation(unittest.TestCase):
 
     def test_simulating_params_cov(self):
         sim = DextramerSimulator()
-        mdat, _ = sim.simulate_pmhc_data_from_distribution(use_clonotype_cov=True)
+        mdat, _ = sim.simulate_pmhc_data_from_distribution(nof_clones=5, use_clonotype_cov=True)
         print(mdat)
 
     def test_simulation_sample(self):
