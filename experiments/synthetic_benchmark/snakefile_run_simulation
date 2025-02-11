@@ -18,6 +18,7 @@ rule all:
         "results/aggregated_results.csv"
 
 rule run_simulation:
+    priority: 30
     input:
         # No input files required for this script
     output:
@@ -33,6 +34,7 @@ rule run_simulation:
         "{wildcards.mean} {wildcards.var} {params.reps}"
 
 rule run_tool:
+    priority: 20
     input:
         "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu"
     output:
@@ -43,6 +45,7 @@ rule run_tool:
         "python run_{wildcards.tool}.py {input} {output}"
 
 rule aggregate_results:
+    priority: 10
     input:
         expand("prediction/{tool}_{sim_name}.pred.csv",
                tool=tools,
@@ -61,3 +64,4 @@ rule aggregate_results:
         "environment.yaml"
     shell:
         "python aggregate_results.py prediction {output}"
+
