@@ -18,3 +18,27 @@ A read count matrix **$X_{ij}\in \mathbb{N}$** approximating the avidity of $i\i
 
 I am looking for volunteers who are interested in developing and testing this package with
 me. TODOS will be managed as issues.
+
+# Installation
+
+DextraDemixer requires python>=3.10
+
+**Pip**:
+```
+TODO: create pip package
+pip install DextraDemixer
+```
+
+**From Repository**:
+```
+git clone git@github.com:SchubertLab/DextraDemixer.git
+cd DextraDemixer
+pip install -e .
+```
+
+# Citation
+If you found this tool helpful in your research, please cite:
+```
+@article {dextraMixerTODO
+}
+```
