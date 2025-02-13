@@ -61,7 +61,7 @@ class TestSimulation(unittest.TestCase):
         ax = sim.estimate_simulation_params(self.mdata, neg_ctrl_key="negative_control",
                                             ir_dist_key="ir_dist_aa_full", plot_qc=True)
         print(sim.dist_params)
-        #plt.savefig("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model.pdf")
+        plt.savefig("10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model.pdf")
         plt.show()
 
     def test_estimating_params_with_plot_filtered(self):
@@ -70,7 +70,7 @@ class TestSimulation(unittest.TestCase):
         sim = DextramerSimulator()
         ax = sim.estimate_simulation_params(self.mdata, neg_ctrl_key="negative_control",
                                             ir_dist_key="ir_dist_aa_full", filter_extreme_values=True, plot_qc=True)
-        plt.savefig("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
+        plt.savefig("10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
         plt.show()
 
     def test_estimating_params_with_plot_filtered_individually(self):
@@ -82,7 +82,7 @@ class TestSimulation(unittest.TestCase):
         print()
         print(DextramerSimulator.default_params())
         print(sim.dist_params)
-        #plt.savefig("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
+        plt.savefig("10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
         plt.show()
 
     def test_simulating_params(self):
@@ -169,7 +169,7 @@ class TestSimulation(unittest.TestCase):
         sim.estimate_simulation_params(self.mdata,
                                        neg_ctrl_key="negative_control",
                                        ir_dist_key="ir_dist_aa_full",
-                                       #filter_extreme_values=[True, True, False, True]
+                                       filter_extreme_values=[True, True, False, True]
                                        )
         mdat, axs = sim.simulate_pmhc_data_from_sample(total_cells=5000,
                                                        binding_ratio=0.1,
@@ -178,4 +178,27 @@ class TestSimulation(unittest.TestCase):
                                                        simulate_neg_control=True,
                                                        use_clonotype_cov=True,
                                                        plot_data=True)
+        plt.show()
+
+
+    def test_simulation_TCR_covariance(self):
+        import seaborn as sns
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        sim = DextramerSimulator()
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
+                                                             binding_ratio=0.1,
+                                                             nof_clones=150,
+                                                             binding_fold_increase_range=[5],
+                                                             variance_fold_increase_range=[2],
+                                                             simulate_neg_control=False,
+                                                             use_clonotype_cov=True,
+                                                             nof_clonotype_cluster=50,
+                                                             plot_data=False)
+        K = mdat.mod["airr"].uns["clone_cov"]
+
+        sns.set_theme(style="white")
+        cmap = sns.color_palette("rocket", as_cmap=True)
+        sns.clustermap(K, cmap=cmap)
         plt.show()

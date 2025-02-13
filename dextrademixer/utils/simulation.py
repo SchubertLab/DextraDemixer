@@ -246,6 +246,7 @@ class DextramerSimulator:
                           "adjust boundary conditions of the parameters")
 
         dist_param["cells_per_clonotype"] = list(res.params)
+        param["cells_per_clonotype"] = clone_size
 
         # fit inv dispersion distribution
         invdisp = []
@@ -573,12 +574,21 @@ class DextramerSimulator:
 
         rng = np.random.RandomState(seed=rng_key)
 
+
         # params
         neg_x = self.params["neg_x"]
         cells_per_clonotype = self.params["cells_per_clonotype"]
 
         if binding_fold_increase_range is None:
             binding_fold_increase_range = [2, 5, 10, 50, 100, 150, 200, 500]
+
+        if nof_clonotype_cluster is not None:
+            if nof_clonotype_cluster > nof_clones:
+                raise ValueError("`nof_clonotype_cluster` must be smaller than `nof_clones`")
+            if nof_clonotype_cluster < 2:
+                raise ValueError("`nof_clonotype_cluster` must be at least 2")
+        else:
+            nof_clonotype_cluster = rng.randint(2, nof_clones)
 
         d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": []}
 
@@ -598,7 +608,7 @@ class DextramerSimulator:
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
         total_le = total_cells - nof_clones
-        raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_clonotype,random_state=rng) for _ in range(nof_clones)])
+        raw_cells_per_clone = rng.choice(cells_per_clonotype, size=nof_clones)
         cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone, random_state=rng)[0]
         cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
@@ -677,10 +687,7 @@ class DextramerSimulator:
 
         if cov is not None:
             adata_tcr.obs["cc_aa_sim"] = cc_assignment[d["clone"]]
-            n_cc = len(np.unique(cc_assignment))
-            cc_size = np.zeros(n_cc)
-            for c in adata_tcr.obs["cc_aa_sim"]:
-                cc_size[c] += 1
+            cc_size = np.bincount(adata_tcr.obs["cc_aa_sim"])
             adata_tcr.obs["cc_aa_sim_size"] = cc_size[adata_tcr.obs["cc_aa_sim"]]
             adata_tcr.uns["clone_cov"] = np.array(cov)
 
