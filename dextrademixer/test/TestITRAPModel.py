@@ -30,6 +30,5 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
 
-
 if __name__ == '__main__':
     unittest.main()

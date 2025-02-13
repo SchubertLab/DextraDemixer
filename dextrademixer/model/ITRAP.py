@@ -148,7 +148,7 @@ class ITRAP(ApMHCDeconvolution):
                     filters &= data[k] >= thr
             # filters &= eval(' & '.join([f'(data["{k}"] >= {abs(v)})' for k, v in self.opt_thr.items() if k in data.columns]))
 
-        # TODO Other filters are not implemented yet
+        # TODO Other filters are not implemented yet, only makes sense once we have the respective data
         # Filter 2: Hashing singlets
         if 'hashing_singlets' in self.filters:
             raise NotImplementedError("Hashing singlets filter is not implemented yet.")
@@ -188,7 +188,7 @@ class ITRAP(ApMHCDeconvolution):
             return False, most_abundant_epitope[0]
 
     def _calculate_ideal_umi_thresholds(self, data):
-        # TODO What if tie in specificity? Should we just take the first one?
+        # In case of a tie, in default params negative control is the first column and hence chosen as most abundant
         data['cell_specificity'] = data[self.umi_cols_mhc].idxmax(1).values
 
         # Calculate expected target for each clonotype
@@ -215,7 +215,7 @@ class ITRAP(ApMHCDeconvolution):
         else:
             umi_count_TRB_l = np.arange(0, data['umi_count_TRB'].quantile(0.4, interpolation='higher'))
             delta_umi_TRB_l = np.arange(0, 4)
-        # TODO Why start from 1 in original implementation?
+
         umi_count_mhc_l = np.arange(1, data['umi_count_mhc'].quantile(0.5, interpolation='higher'))
         delta_umi_mhc_l = [0, 1, 2]  # hparam from itrap Snakefile
         umi_relat_mhc_l = [0]  # seems unused in original implementation
@@ -266,51 +266,23 @@ class ITRAP(ApMHCDeconvolution):
 
 
 if __name__ == "__main__":
-    from dextrademixer.utils import DextramerSimulator
-    import muon as mu
+    from dextrademixer.utils.simulation import DextramerSimulator
+
+    sim = DextramerSimulator()
+    mdata = sim.simulate_pmhc_data_from_distribution(total_cells=500, nof_clones=10, binding_ratio=0.05,
+                                                          simulate_neg_control=True, rng_key=42
+                                                          )
 
 
-    if os.path.exists('../../data/test.h5mu'):
-        mdata = mu.read('../../data/test.h5mu')
-    else:
 
-        sim = DextramerSimulator()
-        mdata = sim.simulate_pmhc_data_from_distribution(total_cells=10000,
-                                                        nof_clones=150,
-                                                        p_binding_outlier=0.05,
-                                                        binding_ratio=0.1,
-                                                        binding_fold_increase_range=[5],
-                                                        variance_fold_increase_range=[1.2],
-                                                        simulate_neg_control=True,
-                                                        use_clonotype_cov=True,
-                                                        plot_data=False,
-                                                        rng_key=42)
-        mdata.write('../../mdata/test.h5mu')
+    binder = mdata.mod["airr"].obs["is_binder"].to_numpy()
 
-    itrap = ITRAP(filters=['opt_thr'])
-    itrap.preprocess_model_data(mdata, "pmhc1", neg_ctrl_key="neg_control", ir_key="airr", ir_clone_key='clone_id')
+    itrap = ITRAP()
+    itrap.preprocess_model_data(mdata, "pmhc1", neg_ctrl_key="neg_control", ir_clone_key="clone_id")
     itrap.fit()
-    p, assignment = itrap.predict_posterior_class()
+    p, assignment = itrap.predict_posterior_class(target_fdr=0.05)
     print(assignment)
-
-
-from dextrademixer.utils.simulation import DextramerSimulator
-
-sim = DextramerSimulator()
-mdata = sim.simulate_pmhc_data_from_distribution(total_cells=500, nof_clones=10, binding_ratio=0.05,
-                                                      simulate_neg_control=True, rng_key=42
-                                                      )
-
-
-
-binder = mdata.mod["airr"].obs["is_binder"].to_numpy()
-
-itrap = ITRAP()
-itrap.preprocess_model_data(mdata, "pmhc1", neg_ctrl_key="neg_control", ir_clone_key="clone_id")
-itrap.fit()
-p, assignment = itrap.predict_posterior_class(target_fdr=0.05)
-print(assignment)
-print(binder)
-N = len(binder)
-accuracy = (binder == assignment).sum() / N
-print("Accuracy", accuracy)
+    print(binder)
+    N = len(binder)
+    accuracy = (binder == assignment).sum() / N
+    print("Accuracy", accuracy)
