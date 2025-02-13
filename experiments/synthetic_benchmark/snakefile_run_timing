@@ -3,45 +3,22 @@ min_version("6.0")
 
 
 # Configuration
-tools = ["dextramixer", "dextramixerkmeans", "beamt"]
+tools = ["dextramixer"] 
 reps = 5
 
-# Scenario 1: Signal-to-noise effects
-config_scenario_1 = {
-    "cell_list": [500, 1000, 2000, 5000, 1000, 25000],
-    "frac_clone_list": [0.4],
+# Scenario 4: Timing analyse on reserved node
+scenario = {
+    "cell_list": [2000, 5000, 1000, 25000, 50000],
+    "frac_clone_list": [0.01, 0.1, 0.25, 0.5, 0.75, 1.0],
     "p_list": [0.1],
     "cov_list": [None],
-    "p_outlier_list": [0.0],
-    "mean_fold_increase": [1, 2, 5, 10, 20, 50],
-    "var_fold_increase": [1.2, 2, 5, 10],
-}
-
-# Scenario 2: Specificity distribution
-config_scenario_2 = {
-    "cell_list": [5000],
-    "frac_clone_list": [0.4],
-    "p_list": [0.0, 0.001, 0.1, 0.25, 0.5, 0.75, 1.0],
-    "cov_list": [None],
-    "p_outlier_list": [0.0],
-    "mean_fold_increase": [2, 5, 10],
-    "var_fold_increase": [2, 5],
+    "p_outlier_list": [0], 
+    "mean_fold_increase": [5],
+    "var_fold_increase": [2], 
 }
 
 
-# Scenario 3: outlier influnce 
-config_scenario_3 = { 
-    "cell_list": [5000],
-    "frac_clone_list": [0.4],
-    "p_list":  [0.1],
-    "cov_list": [None],
-    "p_outlier_list": [0.01, 0.1, 0.15, 0.2],
-    "mean_fold_increase": [5, 20], 
-    "var_fold_increase": [2, 10],
-}
-
-
-def aggregate_simulation_by_scenario(scenario):
+def aggregate_simulation():
     sim_name = [f"ncell{cell}_nclone{int(clone*cell)}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}"
                 for cell in scenario["cell_list"]
                 for clone in scenario["frac_clone_list"]
@@ -54,17 +31,9 @@ def aggregate_simulation_by_scenario(scenario):
     return sim_name
 
 
-def aggregate_all_simulations():
-    simulations = []
-    scenarios = [config_scenario_1, config_scenario_2, config_scenario_3]
-    for scenario in scenarios:
-        simulations += aggregate_simulation_by_scenario(scenario)
-    return simulations
-
-
 rule all:
     input:
-        "results/aggregated_results_simulation.csv"
+        "results/aggregated_results_timing.csv"
 
 rule run_simulation:
     priority: 30
@@ -98,7 +67,7 @@ rule aggregate_results:
     input:
         expand("prediction/{tool}_{sim_name}.pred.csv",
                tool=tools,
-               sim_name=aggregate_all_simulations())
+               sim_name=aggregate_simulation())
     output:
         "results/aggregated_results.csv"
     conda:
