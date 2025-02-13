@@ -28,7 +28,7 @@ def main():
                                                             simulate_neg_control=True,
                                                             use_clonotype_cov=cov,
                                                             plot_data=True,
-                                                            rng_key=i)
+                                                            rng_key=n)
     mdata1.write(output_h5mu)
     axs1[0, 0].get_figure().savefig(output_pdf)
     plt.close()
