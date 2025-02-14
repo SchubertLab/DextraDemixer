@@ -146,7 +146,6 @@ class ITRAP(ApMHCDeconvolution):
             for k, thr in self.opt_thr.items():
                 if k in data.columns:
                     filters &= data[k] >= thr
-            # filters &= eval(' & '.join([f'(data["{k}"] >= {abs(v)})' for k, v in self.opt_thr.items() if k in data.columns]))
 
         # TODO Other filters are not implemented yet, only makes sense once we have the respective data
         # Filter 2: Hashing singlets
@@ -263,26 +262,3 @@ class ITRAP(ApMHCDeconvolution):
                                                  'delta_umi_TRA', 'umi_count_TRB', 'delta_umi_TRB']]
 
         return opt_thr
-
-
-if __name__ == "__main__":
-    from dextrademixer.utils.simulation import DextramerSimulator
-
-    sim = DextramerSimulator()
-    mdata = sim.simulate_pmhc_data_from_distribution(total_cells=500, nof_clones=10, binding_ratio=0.05,
-                                                          simulate_neg_control=True, rng_key=42
-                                                          )
-
-
-
-    binder = mdata.mod["airr"].obs["is_binder"].to_numpy()
-
-    itrap = ITRAP()
-    itrap.preprocess_model_data(mdata, "pmhc1", neg_ctrl_key="neg_control", ir_clone_key="clone_id")
-    itrap.fit()
-    p, assignment = itrap.predict_posterior_class(target_fdr=0.05)
-    print(assignment)
-    print(binder)
-    N = len(binder)
-    accuracy = (binder == assignment).sum() / N
-    print("Accuracy", accuracy)
