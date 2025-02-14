@@ -771,22 +771,26 @@ class DextramerSimulator:
             Returns: an n_clones x n_clones similarity matrix
         """
 
-        def tril_indices_from_subset(subidx):
+        def tril_indices_from_subset(row_idx, col_idx):
             """
-            Get strictly lower triangular indices for a subset of rows in an n x n matrix.
+            Get strictly lower triangular indices for a subset of indices in an n x n matrix.
 
             Parameters:
-                subidx (array-like): Selected subset of row indices.
+                row_idx (array-like): Selected subset of row indices.
+                col_idx (array-like): Selected subset of colume indices.
 
             Returns:
                 tuple: (row_indices, col_indices) for strictly lower triangular elements.
             """
-            row_idx, col_idx = np.tril_indices(len(subidx), k=-1)
-            return subidx[row_idx], subidx[col_idx]
+            r_grid, c_grid = np.meshgrid(row_idx, col_idx, indexing='ij')
+            mask = r_grid > c_grid
+            return r_grid[mask], c_grid[mask]
 
         # first extra inter and intra distance parameters
-        inter_dist_param = params["upper_clonotype_dist_param"]
-        intra_dist_param = params["lower_clonotype_dist_param"]
+        inter_dist_param = list(params["upper_clonotype_dist_param"])
+        intra_dist_param = list(params["lower_clonotype_dist_param"])
+
+        c_ids = np.arange(n_clones)
 
         cc_to_clone = defaultdict(list)
         for c, cc in enumerate(cc_assignment):
@@ -794,19 +798,29 @@ class DextramerSimulator:
 
         # initialize Kernel with only inter distances
         K = np.zeros([n_clones,n_clones])
-        Kltril = np.clip(stats.beta.rvs(*inter_dist_param, size=int((n_clones*(n_clones-1))/2),
-                                   random_state=rng),0,1)
-        K[np.tril_indices(n_clones, -1)] = Kltril
 
         # iterate through cc simulate intra distances and replace values in K
         for cc, c_idx in cc_to_clone.items():
             n_cc = len(c_idx)
-            K_sub = np.clip(stats.beta.rvs(*intra_dist_param, size=int(n_cc*(n_cc-1)/2),
+            c_idx = np.array(c_idx)
+            K_intra = np.clip(stats.beta.rvs(*intra_dist_param, size=int(n_cc*(n_cc-1)/2),
                                            random_state=rng),0,1)
-            sub_tr_row, sub_tr_col = tril_indices_from_subset(np.array(c_idx))
-            K[(sub_tr_row, sub_tr_col)] = K_sub
+            sub_tr_row, sub_tr_col = tril_indices_from_subset(c_idx, c_idx)
+            K[(sub_tr_row, sub_tr_col)] = K_intra
+
+            # generate inter-clonal distance while shifting also the mean of the distribution randomly
+            # get clonotype not contained in current clone cluster
+            c_inter  = np.setdiff1d(c_ids, c_idx)
+            sub_tr_row, sub_tr_col = tril_indices_from_subset(c_idx, c_inter)
+
+            #shift mean
+            tmp = np.copy(inter_dist_param)
+            tmp[2] = inter_dist_param[2] + rng.uniform(-0.2, 0.3, size=1)
+            K_inter = np.clip(stats.beta.rvs(*(tmp), size=len(sub_tr_row),
+                                            random_state=rng), 0, 0.9)
+            K[(sub_tr_row, sub_tr_col)] = K_inter
 
         # set diagonal to 0
-        K[np.diag_indices(n_clones)] = 0
         K += np.tril(K).T
+        K[np.diag_indices(n_clones)] = 0
         return dist_to_sim(jax.numpy.array(K), normalize=False, epsilon=1e-6)

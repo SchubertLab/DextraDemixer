@@ -184,6 +184,7 @@ class TestSimulation(unittest.TestCase):
     def test_simulation_TCR_covariance(self):
         import seaborn as sns
         import numpy as np
+        import matplotlib
         import matplotlib.pyplot as plt
 
         sim = DextramerSimulator()
@@ -198,7 +199,26 @@ class TestSimulation(unittest.TestCase):
                                                              plot_data=False)
         K = mdat.mod["airr"].uns["clone_cov"]
 
+        idx = np.random.randint(0, K.shape[0], size=[20])
+
         sns.set_theme(style="white")
+
         cmap = sns.color_palette("rocket", as_cmap=True)
-        sns.clustermap(K, cmap=cmap)
+        g=sns.clustermap(K, cmap=cmap)
+        g.gs.update(left=0.05, right=0.45)
+
+        gs2 = matplotlib.gridspec.GridSpec(1, 1)
+
+        # create axes within this new gridspec
+        ax2 = g.fig.add_subplot(gs2[0])
+        heatmap_bbox = g.ax_heatmap.get_position()
+        ax2.set_position([0.6, heatmap_bbox.y0, .35, heatmap_bbox.height])
+
+        sns.violinplot(K[idx].T, fill=False, ax=ax2)
+        sns.stripplot(K[idx].T, ax=ax2)
+        sns.despine(ax=ax2)
+
+        ax2.set_title('covariance within 20 random clonotype of simulated kernel')
+        plt.savefig('cov_test.pdf')
+
         plt.show()
