@@ -1,6 +1,7 @@
 import unittest
 
 import muon as mu
+import pandas as pd
 
 from matplotlib import pyplot as plt
 
@@ -222,3 +223,29 @@ class TestSimulation(unittest.TestCase):
         plt.savefig('cov_test.pdf')
 
         plt.show()
+
+    def test_p_outlier_prob(self):
+        import seaborn as sns
+        import numpy as np
+        import matplotlib
+        import matplotlib.pyplot as plt
+
+        sim = DextramerSimulator()
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
+                                                             binding_ratio=0.1,
+                                                             nof_clones=150,
+                                                             binding_fold_increase_range=[100],
+                                                             variance_fold_increase_range=[2],
+                                                             simulate_neg_control=False,
+                                                             p_binding_outlier=0.1,
+                                                             p_nonbinding_outlier=0.1,
+                                                             use_clonotype_cov=False,
+                                                             nof_clonotype_cluster=None,
+                                                             plot_data=False)
+        neg_out  = mdat.mod["gex"].X[(mdat.mod["gex"].obs["is_outlier"] == 1) & (mdat.mod["airr"].obs["is_binder"] == 0),0]
+        true_neg = mdat.mod["gex"].X[(mdat.mod["gex"].obs["is_outlier"] == 0) & (mdat.mod["airr"].obs["is_binder"] == 0),0]
+        pos_out  = mdat.mod["gex"].X[(mdat.mod["gex"].obs["is_outlier"] == 1) & (mdat.mod["airr"].obs["is_binder"] == 1),0]
+        true_pos = mdat.mod["gex"].X[(mdat.mod["gex"].obs["is_outlier"] == 0) & (mdat.mod["airr"].obs["is_binder"] == 1),0]
+
+        assert(np.mean(neg_out) > np.mean(true_neg))
+        assert(np.mean(pos_out) < np.mean(true_pos))
