@@ -11,9 +11,9 @@ cov_list = [0]
 p_outlier_list = [0.0]
 mean_fold_increase = [2]
 var_fold_increase = [1.2]
-reps = 10
-tools = ["dextramixer", "dextramixerkmeans"]
+reps = 1
 
+model_types = ["mixturemodel", "mixturemodelkmeans"]
 # Parameter dictionary
 param_dict = {
     "mode": ["I", "H", "C"],
@@ -21,13 +21,13 @@ param_dict = {
     "clonotype": [None, "clone_id"],
 }
 
-# Generate all combinations of parameters
-param_combinations = [
-    {"mode": mode, "neg": neg, "clonotype": clonotype}
-    for mode, neg, clonotype in product(param_dict["mode"], param_dict["neg"], param_dict["clonotype"])
-    if (mode == "C" and clonotype is not None) or mode != "C"
-]
-results_list = [f"optuna/{tool}_mode{params['mode']}_neg{params['neg']}_clonotype{params['clonotype']}.pred.csv" for tool in tools for params in param_combinations]
+# Create a list of all possible combinations of parameters
+results_list = [f"optuna/{model_type}_mode{mode}_neg{neg}_clonotype{clonotype}.pred.csv"
+                for model_type in model_types
+                for mode in param_dict["mode"]
+                for neg in param_dict["neg"]
+                for clonotype in param_dict["clonotype"] if (mode == "C" and clonotype is not None) or mode != "C"]
+
 rule all:
     input:
         "results/aggregated_results.csv"
@@ -59,15 +59,18 @@ rule run_tool:
             i=range(reps)
         )
     output:
-        "optuna/{tool}_mode{mode}_neg{neg}_clonotype{clonotype}.pred.csv"
+        "optuna/{model_type}_mode{mode}_neg{neg}_clonotype{clonotype}.pred.csv"
     params:
         mode="{mode}",
         neg="{neg}",
         clonotype="{clonotype}",
+        model_type="{model_type}"
     conda:
         "dextrademixer"
+    threads:
+        1  # TODO higher number of threads decreases performance
     shell:
-        "python run_{wildcards.tool}.py {input} {output} --mode {params.mode} --neg {params.neg} --clonotype {params.clonotype}"
+        "python optuna_dextrademixer.py {input} {output} --model_type {params.model_type} --mode {params.mode} --neg {params.neg} --clonotype {params.clonotype} --threads {threads}"
 
 rule aggregate_results:
     input:

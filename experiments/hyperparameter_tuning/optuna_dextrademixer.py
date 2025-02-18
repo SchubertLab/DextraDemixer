@@ -24,16 +24,20 @@ def parse_arguments():
     parser.add_argument("--mode", required=True, help="Processing mode")
     parser.add_argument("--neg", required=True, help="Negative control parameter")
     parser.add_argument("--clonotype", required=True, help="Clonotype parameter")
+    parser.add_argument("--model_type", required=True, help="Model type",
+                        choices=["mixturemodelkmeans", "mixturemodel"])
+    parser.add_argument("--threads", type=int, default=None, help="Number of threads")
     return parser.parse_args()
 
 
-def run_inference(opt_params, f_in,  m, neg_ctrl, ir_clone):
-    numpyro.set_host_device_count(4)
+def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads):
+    if threads is not None:
+        numpyro.set_host_device_count(threads)
 
     mdata = mu.read(f_in)
     y_true = mdata.mod["airr"].obs["is_binder"]
 
-    mixer = DextraDemixer(model_type="mixturemodelkmeans", mode=m)
+    mixer = DextraDemixer(model_type=model_type, mode=m)
     mixer.preprocess_model_data(mdata, "pmhc1",
                                 neg_ctrl_key=neg_ctrl,
                                 ir_clone_key=ir_clone)
@@ -52,7 +56,7 @@ def main():
     def objective(trial):
         """Optuna objective function."""
 
-        opt_params = {"maxiter": trial.suggest_int("maxiter", 100, 10000),
+        opt_params = {"maxiter": trial.suggest_int("maxiter", 100, 10000, log=True),
                        "adam":
                                {
                                 "init_value": trial.suggest_float("init_value", 1e-5, 1e-1, log=True),
@@ -63,7 +67,8 @@ def main():
                       }
 
         # Evaluate over multiple datasets
-        mean_auc = np.mean([run_inference(opt_params, dataset, args.mode, args.neg, args.clonotype)
+        mean_auc = np.mean([run_inference(opt_params, dataset, args.model_type, args.mode,
+                                          args.neg, args.clonotype, args.threads)
                             for dataset in args.input_files])
 
         return mean_auc
