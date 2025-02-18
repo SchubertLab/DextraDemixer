@@ -39,7 +39,7 @@ rule run_simulation:
     params:
         reps = reps
     conda:
-        "dextrademixer"
+        "environment_optuna.yaml"
     shell:
         "python create_data_mean_variance_fold_increase.py {output.h5mu} {output.pdf} "
         "{wildcards.cell} {wildcards.clone} {wildcards.po} {wildcards.p} {wildcards.cov} "
@@ -66,7 +66,7 @@ rule run_tool:
         clonotype="{clonotype}",
         model_type="{model_type}"
     conda:
-        "dextrademixer"
+        "environment_optuna.yaml"
     threads:
         1  # TODO higher number of threads decreases performance
     shell:
@@ -78,6 +78,6 @@ rule aggregate_results:
     output:
         "results/aggregated_results.csv"
     conda:
-        "dextrademixer"
+        "environment_optuna.yaml"
     shell:
         "python aggregate_results.py optuna {output}"
