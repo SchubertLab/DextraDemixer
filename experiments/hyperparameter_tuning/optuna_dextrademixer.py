@@ -68,9 +68,14 @@ def main():
                       }
 
         # Evaluate over multiple datasets
-        mean_auc = np.mean([run_inference(opt_params, dataset, args.model_type, args.mode,
-                                          args.neg, args.clonotype, args.threads, args.seed)
-                            for dataset in args.input_files])
+        mean_auc = []
+        for dataset in args.input_files:
+            auc = run_inference(opt_params, dataset, args.model_type, args.mode, args.neg, args.clonotype,
+                                args.threads, args.seed)
+            mean_auc.append(auc)
+            trial.set_user_attr(f"run_auc_{dataset}", auc)
+
+        mean_auc = np.mean(mean_auc)
 
         return mean_auc
 
@@ -81,6 +86,7 @@ def main():
     study.optimize(objective, n_trials=100)
 
     df = study.trials_dataframe()
+    df['auc_std'] = df.filter(like="run_auc").std(axis=1)
     df.to_csv(args.output_file)
 
 
