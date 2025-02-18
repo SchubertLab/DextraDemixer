@@ -27,10 +27,11 @@ def parse_arguments():
     parser.add_argument("--model_type", required=True, help="Model type",
                         choices=["mixturemodelkmeans", "mixturemodel"])
     parser.add_argument("--threads", type=int, default=None, help="Number of threads")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
     return parser.parse_args()
 
 
-def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads):
+def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads, seed):
     if threads is not None:
         numpyro.set_host_device_count(threads)
 
@@ -42,7 +43,7 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads)
                                 neg_ctrl_key=neg_ctrl,
                                 ir_clone_key=ir_clone)
 
-    trace = mixer.fit_svi(svi_config=opt_params)
+    trace = mixer.fit_svi(svi_config=opt_params, rng_key=seed)
     p_pred, assignment_fdr = mixer.predict_posterior_class(target_fdr=0.05)
     auc = roc_auc_score(y_true, p_pred, average="weighted")
 
@@ -68,12 +69,12 @@ def main():
 
         # Evaluate over multiple datasets
         mean_auc = np.mean([run_inference(opt_params, dataset, args.model_type, args.mode,
-                                          args.neg, args.clonotype, args.threads)
+                                          args.neg, args.clonotype, args.threads, args.seed)
                             for dataset in args.input_files])
 
         return mean_auc
 
-    sampler = optuna.samplers.GPSampler()
+    sampler = optuna.samplers.GPSampler(args.seed)
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10)
 
     study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize")
