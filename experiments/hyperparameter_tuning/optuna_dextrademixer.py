@@ -7,6 +7,7 @@ sys.path.append("../../")
 
 import numpyro
 import os
+import multiprocessing
 import optuna
 import numpy as np
 import pandas as pd
@@ -32,8 +33,7 @@ def parse_arguments():
 
 
 def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads, seed):
-    if threads is not None:
-        numpyro.set_host_device_count(threads)
+    numpyro.set_host_device_count(1)
 
     mdata = mu.read(f_in)
     y_true = mdata.mod["airr"].obs["is_binder"]
@@ -47,6 +47,11 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads,
     p_pred, assignment_fdr = mixer.predict_posterior_class(target_fdr=0.05)
     auc = roc_auc_score(y_true, p_pred, average="weighted")
 
+    return auc
+
+
+def worker(dataset, opt_params, model_type, mode, neg, clonotype, threads, seed):
+    auc = run_inference(opt_params, dataset, model_type, mode, neg, clonotype, threads, seed)
     return auc
 
 
@@ -68,14 +73,14 @@ def main():
                       }
 
         # Evaluate over multiple datasets
-        mean_auc = []
-        for dataset in args.input_files:
-            auc = run_inference(opt_params, dataset, args.model_type, args.mode, args.neg, args.clonotype,
-                                args.threads, args.seed)
-            mean_auc.append(auc)
-            trial.set_user_attr(f"run_auc_{dataset}", auc)
+        with multiprocessing.Pool(processes=args.threads) as pool:
+            auc = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
+                                              args.neg, args.clonotype, args.threads, args.seed)
+                                             for dataset in args.input_files])
 
-        mean_auc = np.mean(mean_auc)
+        for i, dataset in enumerate(args.input_files):
+            trial.set_user_attr(f"run_auc_{dataset}", auc[i])
+        mean_auc = np.mean(auc)
 
         return mean_auc
 
