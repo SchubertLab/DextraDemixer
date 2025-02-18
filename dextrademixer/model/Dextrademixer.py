@@ -226,8 +226,6 @@ class DextraDemixer(ApMHCDeconvolution):
         else:
             self.guide = guide(self.model.model)
 
-        adam_config["transition_steps"] = svi_config.get("maxiter", 1000) // 2
-
         optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config))
         svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.TraceGraph_ELBO(**tracer_config))
 

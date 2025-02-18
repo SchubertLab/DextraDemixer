@@ -61,14 +61,17 @@ def main():
 
     def objective(trial):
         """Optuna objective function."""
+        init_value = trial.suggest_float("init_value", 1e-5, 1e-1, log=True)
+        max_iter = trial.suggest_int("maxiter", 100, 10000, log=True)
+        transition_steps = trial.suggest_float("transition_rate", 0.0, 1.0) * max_iter
 
-        opt_params = {"maxiter": trial.suggest_int("maxiter", 100, 10000, log=True),
+        opt_params = {"maxiter": max_iter,
                        "adam":
                                {
-                                "init_value": trial.suggest_float("init_value", 1e-5, 1e-1, log=True),
-                                "transition_steps": trial.suggest_int("transition_steps", 100, 5000),
+                                "init_value": init_value,
+                                "transition_steps": transition_steps,
                                 "decay_rate": trial.suggest_float("decay_rate", 0.5, 1.0),
-                                "end_value": trial.suggest_float("end_value", 1e-8, 1e-2, log=True)
+                                "end_value": trial.suggest_float("end_value", 1e-8, init_value, log=True)
                                }
                       }
 
