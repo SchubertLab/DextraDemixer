@@ -3,7 +3,7 @@
 /notebooks
 /papers
 /manuscript
-
+.snakemake
 
 # Editors
 .vscode/
