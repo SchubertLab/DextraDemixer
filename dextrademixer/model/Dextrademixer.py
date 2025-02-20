@@ -230,8 +230,10 @@ class DextraDemixer(ApMHCDeconvolution):
         svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.TraceGraph_ELBO(**tracer_config))
 
         # find good random initialization
-        best_loss, best_key = min((svi.evaluate(svi.init(key)), key) for key in
-                                  random.split(random.PRNGKey(rng_key), nof_inits))
+        random_init = [(svi.evaluate(svi.init(key)), key) for key in random.split(random.PRNGKey(rng_key), nof_inits)]
+        init_losses = np.array([x[0] for x in random_init])
+        best_idx = jnp.nanargmin(init_losses)
+        best_loss, best_key = random_init[best_idx]
 
         # DEBUG
         # print("best_loss:", best_loss, "best_key:", best_key)
@@ -273,6 +275,7 @@ class DextraDemixer(ApMHCDeconvolution):
         losses = jnp.stack(losses)
 
         params = params[jnp.argmin(losses)] if use_minimal_loss else params[-1]
+        params = params[jnp.nanargmin(losses)] if use_minimal_loss else params[-1]
         self.svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
 
         posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
