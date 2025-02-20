@@ -7,7 +7,7 @@ sys.path.append("../../")
 
 import numpyro
 import os
-import multiprocessing
+import warnings
 import optuna
 import numpy as np
 import pandas as pd
@@ -34,8 +34,9 @@ def parse_arguments():
 
 def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads, seed):
     numpyro.set_host_device_count(1)
-
-    mdata = mu.read(f_in)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mdata = mu.read(f_in)
     y_true = mdata.mod["airr"].obs["is_binder"]
 
     mixer = DextraDemixer(model_type=model_type, mode=m)
