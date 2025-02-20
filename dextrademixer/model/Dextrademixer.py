@@ -250,7 +250,7 @@ class DextraDemixer(ApMHCDeconvolution):
         losses = []
         params = []
         with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
-                         disable=(not svi_config.get("progress_bar", False))) as t:
+                         disable=(not svi_config.get("progress_bar", False)), mininterval=10) as t:
             batch = max(svi_config.get("maxiter", 1000) // 20, 1)
             for i in t:
                 svi_state, loss, param = jit(body_fn)(svi_state, i)
