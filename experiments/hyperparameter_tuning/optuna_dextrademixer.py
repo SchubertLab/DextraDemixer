@@ -69,11 +69,11 @@ def main():
     def objective(trial):
         """Optuna objective function."""
         init_value = trial.suggest_float("init_value", 1e-4, 1e0, log=True)
-        max_iter = trial.suggest_int("maxiter", 100, 10000, log=True)
+        max_iter = trial.suggest_int("maxiter", 10, 100, log=True)
         transition_steps = trial.suggest_float("transition_rate", 0.0, 1.0) * max_iter
 
         opt_params = {"maxiter": max_iter,
-                      "nof_inits": 1000,
+                      "nof_inits": 100,
                        "adam":
                                {
                                 "init_value": init_value,
@@ -92,14 +92,20 @@ def main():
 
         auc_list = []
         for i, dataset in enumerate(args.input_files):
-            auc = roc_auc_score(y_true[i], p_pred[i])
-            auc_list.append(auc)
+            if not np.isfinite(p_pred[i]).any() or not np.isfinite(assignment_fdr[i]).any():
+                auc = 0.0
+                for metric in ["f1", "precision", "recall", "aps", "acc"]:
+                    trial.set_user_attr(f"{metric}_{dataset}", 0.0)
+            else:
+                auc = roc_auc_score(y_true[i], p_pred[i])
+                trial.set_user_attr(f"f1_{dataset}", f1_score(y_true[i], assignment_fdr[i]))
+                trial.set_user_attr(f"precision_{dataset}", precision_score(y_true[i], assignment_fdr[i]))
+                trial.set_user_attr(f"recall_{dataset}", recall_score(y_true[i], assignment_fdr[i]))
+                trial.set_user_attr(f"aps_{dataset}", average_precision_score(y_true[i], assignment_fdr[i]))
+                trial.set_user_attr(f"acc_{dataset}", accuracy_score(y_true[i], assignment_fdr[i]))
+
             trial.set_user_attr(f"auc_{dataset}", auc)
-            trial.set_user_attr(f"f1_{dataset}", f1_score(y_true[i], assignment_fdr[i]))
-            trial.set_user_attr(f"precision_{dataset}", precision_score(y_true[i], assignment_fdr[i]))
-            trial.set_user_attr(f"recall_{dataset}", recall_score(y_true[i], assignment_fdr[i]))
-            trial.set_user_attr(f"aps_{dataset}", average_precision_score(y_true[i], assignment_fdr[i]))
-            trial.set_user_attr(f"acc_{dataset}", accuracy_score(y_true[i], assignment_fdr[i]))
+            auc_list.append(auc)
             trial.set_user_attr(f"converged_{dataset}", best_loss[i]["converged"])
             trial.set_user_attr(f"best_loss_{dataset}", best_loss[i]["best_loss"])
             trial.set_user_attr(f"init_loss_{dataset}", best_loss[i]["init_loss"])
