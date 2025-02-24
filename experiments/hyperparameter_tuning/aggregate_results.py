@@ -7,7 +7,7 @@ import pandas as pd
 
 def main(f_in_dir, f_out):
     files = glob.glob(os.path.join(f_in_dir, "*"))
-    dfs = [pd.read_csv(f) for f in files]
+    dfs = [pd.read_csv(f) for f in files if ".csv" in f]
 
     extracted_rows=[]
     for name, df in zip(files, dfs):
