@@ -12,7 +12,7 @@ def main():
     nclones = int(sys.argv[4])
     p_outlier = float(sys.argv[5])
     p = float(sys.argv[6])
-    cov = bool(sys.argv[7])
+    cov = bool(int(sys.argv[7]))
     mean_inc = float(sys.argv[8])
     var_inc = float(sys.argv[9])
     i = int(sys.argv[10])
