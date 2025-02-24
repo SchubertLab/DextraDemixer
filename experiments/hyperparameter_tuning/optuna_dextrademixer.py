@@ -79,7 +79,7 @@ def main():
                                 "init_value": init_value,
                                 "transition_steps": transition_steps,
                                 "decay_rate": trial.suggest_float("decay_rate", 0.5, 1.0),
-                                "end_value": trial.suggest_float("end_value", 1e-8, init_value, log=True)
+                                "end_value": trial.suggest_float("end_value_factor", 1e-3, 1e0, log=True) * init_value,
                                }
                       }
 
