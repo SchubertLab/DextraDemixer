@@ -1,4 +1,7 @@
 import argparse
+import multiprocessing
+import os
+import warnings
 
 import sys
 
@@ -6,16 +9,17 @@ import sys
 sys.path.append("../../")
 
 import numpyro
-import os
-import warnings
 import optuna
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
+                             accuracy_score)
 
 from dextrademixer.model import DextraDemixer
 from dextrademixer.utils import convert_str_to_bool_and_none
 import muon as mu
+
+multiprocessing.set_start_method('spawn', force=True)
 
 
 def parse_arguments():
@@ -44,16 +48,18 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads,
                                 neg_ctrl_key=neg_ctrl,
                                 ir_clone_key=ir_clone)
 
-    trace = mixer.fit_svi(svi_config=opt_params, rng_key=seed)
+    trace, best_loss = mixer.fit_svi(svi_config=opt_params,
+                                     nof_inits=opt_params["nof_inits"],
+                                     rng_key=seed,
+                                     return_loss=True)
     p_pred, assignment_fdr = mixer.predict_posterior_class(target_fdr=0.05)
-    auc = roc_auc_score(y_true, p_pred, average="weighted")
 
-    return auc
+    return y_true, p_pred, assignment_fdr, best_loss
 
 
 def worker(dataset, opt_params, model_type, mode, neg, clonotype, threads, seed):
-    auc = run_inference(opt_params, dataset, model_type, mode, neg, clonotype, threads, seed)
-    return auc
+    y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode, neg, clonotype, threads, seed)
+    return y_true, p_pred, assignment_fdr, best_loss
 
 
 def main():
@@ -78,13 +84,27 @@ def main():
 
         # Evaluate over multiple datasets
         with multiprocessing.Pool(processes=args.threads) as pool:
-            auc = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
-                                              args.neg, args.clonotype, args.threads, args.seed)
-                                             for dataset in args.input_files])
+             results = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
+                                            args.neg, args.clonotype, args.threads, args.seed)
+                                            for dataset in args.input_files])
+        y_true, p_pred, assignment_fdr, best_loss = zip(*results)
 
+        auc_list = []
         for i, dataset in enumerate(args.input_files):
-            trial.set_user_attr(f"run_auc_{dataset}", auc[i])
-        mean_auc = np.mean(auc)
+            auc = roc_auc_score(y_true[i], p_pred[i])
+            auc_list.append(auc)
+            trial.set_user_attr(f"auc_{dataset}", auc)
+            trial.set_user_attr(f"f1_{dataset}", f1_score(y_true[i], assignment_fdr[i]))
+            trial.set_user_attr(f"precision_{dataset}", precision_score(y_true[i], assignment_fdr[i]))
+            trial.set_user_attr(f"recall_{dataset}", recall_score(y_true[i], assignment_fdr[i]))
+            trial.set_user_attr(f"aps_{dataset}", average_precision_score(y_true[i], assignment_fdr[i]))
+            trial.set_user_attr(f"acc_{dataset}", accuracy_score(y_true[i], assignment_fdr[i]))
+            trial.set_user_attr(f"converged_{dataset}", best_loss[i]["converged"])
+            trial.set_user_attr(f"best_loss_{dataset}", best_loss[i]["best_loss"])
+            trial.set_user_attr(f"init_loss_{dataset}", best_loss[i]["init_loss"])
+            trial.set_user_attr(f"best_iteration_{dataset}", best_loss[i]["best_iteration"])
+
+        mean_auc = np.mean(auc_list)
 
         return mean_auc
 
