@@ -68,7 +68,7 @@ def main():
 
     def objective(trial):
         """Optuna objective function."""
-        init_value = trial.suggest_float("init_value", 1e-5, 1e-1, log=True)
+        init_value = trial.suggest_float("init_value", 1e-4, 1e0, log=True)
         max_iter = trial.suggest_int("maxiter", 100, 10000, log=True)
         transition_steps = trial.suggest_float("transition_rate", 0.0, 1.0) * max_iter
 
