@@ -275,8 +275,6 @@ class DextraDemixer(ApMHCDeconvolution):
                         refresh=False,
                     )
         losses = jnp.stack(losses)
-
-        params = params[jnp.argmin(losses)] if use_minimal_loss else params[-1]
         params = params[jnp.nanargmin(losses)] if use_minimal_loss else params[-1]
         self.svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
 
