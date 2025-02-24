@@ -194,7 +194,9 @@ class DextraDemixer(ApMHCDeconvolution):
         return self.__make_arvis()
 
     def fit_svi(self, guide=npy.infer.autoguide.AutoNormal, svi_config: Dict[str, Union[int, float]] = None,
-                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777) -> az.InferenceData:
+                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
+                return_loss: bool = False) \
+            -> az.InferenceData:
         """
         Implements stochastic variational inference
 
@@ -285,7 +287,14 @@ class DextraDemixer(ApMHCDeconvolution):
         posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
         inference_data = az.from_dict(posterior=posterior_samples_np)
 
-        return inference_data
+        if return_loss:
+            converged = not jnp.isnan(losses).all()
+            best_iteration = jnp.nanargmin(losses)
+            best_loss = losses[best_iteration]
+            return inference_data, {"init_loss": losses[0], "converged": converged,
+                                    "best_loss": best_loss, "best_iteration": best_iteration}
+        else:
+            return inference_data
 
     def predict_posterior_class(self,
                                 threshold: float = None,
