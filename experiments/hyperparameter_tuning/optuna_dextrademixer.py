@@ -90,30 +90,29 @@ def main():
                                             for dataset in args.input_files])
         y_true, p_pred, assignment_fdr, best_loss = zip(*results)
 
-        auc_list = []
+        f1_list = []
         for i, dataset in enumerate(args.input_files):
             if not np.isfinite(p_pred[i]).any() or not np.isfinite(assignment_fdr[i]).any():
-                auc = 0.0
+                f1 = 0.0
                 for metric in ["f1", "precision", "recall", "aps", "acc"]:
                     trial.set_user_attr(f"{metric}_{dataset}", 0.0)
             else:
-                auc = roc_auc_score(y_true[i], p_pred[i])
-                trial.set_user_attr(f"f1_{dataset}", f1_score(y_true[i], assignment_fdr[i]))
+                trial.set_user_attr(f"auc_{dataset}", roc_auc_score(y_true[i], p_pred[i]))
+                f1 = f1_score(y_true[i], assignment_fdr[i])
+                trial.set_user_attr(f"f1_{dataset}", f1)
                 trial.set_user_attr(f"precision_{dataset}", precision_score(y_true[i], assignment_fdr[i]))
                 trial.set_user_attr(f"recall_{dataset}", recall_score(y_true[i], assignment_fdr[i]))
                 trial.set_user_attr(f"aps_{dataset}", average_precision_score(y_true[i], assignment_fdr[i]))
                 trial.set_user_attr(f"acc_{dataset}", accuracy_score(y_true[i], assignment_fdr[i]))
-
-            trial.set_user_attr(f"auc_{dataset}", auc)
-            auc_list.append(auc)
+            f1_list.append(f1)
             trial.set_user_attr(f"converged_{dataset}", best_loss[i]["converged"])
             trial.set_user_attr(f"best_loss_{dataset}", best_loss[i]["best_loss"])
             trial.set_user_attr(f"init_loss_{dataset}", best_loss[i]["init_loss"])
             trial.set_user_attr(f"best_iteration_{dataset}", best_loss[i]["best_iteration"])
 
-        mean_auc = np.mean(auc_list)
+        mean_f1 = np.mean(f1_list)
 
-        return mean_auc
+        return mean_f1
 
     sampler = optuna.samplers.GPSampler(seed=args.seed)
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10)
