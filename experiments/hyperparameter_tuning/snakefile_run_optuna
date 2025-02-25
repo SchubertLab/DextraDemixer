@@ -36,14 +36,12 @@ rule run_simulation:
     output:
         h5mu = "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.h5mu",
         pdf = "simulation/sim_ncell{cell}_nclone{clone}_poutlier{po}_pbinder{p}_negctr1_cov{cov}_meaninc{mean}_varinc{var}_rep{i}.pdf"
-    params:
-        reps = reps
     conda:
         "environment_optuna.yaml"
     shell:
         "python create_data_mean_variance_fold_increase.py {output.h5mu} {output.pdf} "
         "{wildcards.cell} {wildcards.clone} {wildcards.po} {wildcards.p} {wildcards.cov} "
-        "{wildcards.mean} {wildcards.var} {params.reps}"
+        "{wildcards.mean} {wildcards.var} {wildcards.i}"
 
 rule run_tool:
     input:
