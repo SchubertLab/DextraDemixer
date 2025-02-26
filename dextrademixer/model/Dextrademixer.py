@@ -398,8 +398,12 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         n_clusters = 2  # KMeans with 2 clusters
 
         # Perform KMeans clustering
-        kmeans = KMeans(n_clusters=n_clusters, random_state=0, n_init="auto").fit(x.reshape(-1, 1))
-        labels = kmeans.labels_
+        # TODO Workaround if there is an outlier in the data which becomes a sole cluster
+        for seed in range(100):
+            kmeans = KMeans(n_clusters=n_clusters, random_state=seed, n_init="auto").fit(x.reshape(-1, 1))
+            labels = kmeans.labels_
+            if (labels == 0).sum() > 1 and (labels == 1).sum() > 1:
+                break
 
         # Initialize lists for cluster attributes
         cluster_means = []
