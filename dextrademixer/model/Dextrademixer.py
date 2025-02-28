@@ -560,7 +560,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
             "mu_w_mean_prior": 0.0,
             "mu_w_var_prior": 10.0,
             "mu_q_mean_prior": 0.0,
-            "mu_q_var_prior": 10.0,
+            "mu_q_var_prior": 5.0,
             "sigma_q_var_prior": 10.0,
             "alpha_var_prior": 10.0,
         }
@@ -600,7 +600,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
         mu_w_mean_prior = model_config.get("mu_w_mean_prior", 0.0)
         mu_w_var_prior = model_config.get("mu_w_var_prior", 10.0)
         mu_q_mean_prior = model_config.get("mu_q_mean_prior", 0.0)
-        mu_q_var_prior = model_config.get("mu_q_var_prior", 10.0)
+        mu_q_var_prior = model_config.get("mu_q_var_prior", 5.0)
         sigma_q_var_prior = model_config.get("sigma_q_var_prior", 10.0)
         alpha_var_prior = model_config.get("alpha_var_prior", 10.0)
 

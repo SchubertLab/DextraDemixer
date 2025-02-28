@@ -73,7 +73,7 @@ def main():
         transition_steps = trial.suggest_float("transition_rate", 0.0, 1.0) * max_iter
 
         opt_params = {"maxiter": max_iter,
-                      "nof_inits": 1000,
+                      "nof_inits": 10,
                        "adam":
                                {
                                 "init_value": init_value,
