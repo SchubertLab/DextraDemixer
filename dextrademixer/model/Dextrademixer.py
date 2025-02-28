@@ -223,19 +223,30 @@ class DextraDemixer(ApMHCDeconvolution):
         svi_config.pop("tracer", None)
 
         # check for custom guide in self.model otherwise use autoguide
-        if callable(getattr(self.model, "guide", None)):
-            self.guide = self.model.guide
-        else:
-            self.guide = guide(self.model.model)
-
         optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config))
-        svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.TraceGraph_ELBO(**tracer_config))
 
         # find good random initialization
-        random_init = [(svi.evaluate(svi.init(key)), key) for key in random.split(random.PRNGKey(rng_key), nof_inits)]
+        random_init = []
+        for i, key in enumerate(random.split(random.PRNGKey(rng_key), nof_inits)):
+            if callable(getattr(self.model, "guide", None)):
+                self.guide = self.model.guide
+            else:
+                self.guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_mean)
+            svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
+                                loss=npy.infer.TraceGraph_ELBO(**tracer_config))
+            init_state = svi.init(key)
+            loss = svi.evaluate(init_state)
+
+            # Initialization depends on the guide, so need to save the best guide
+            random_init.append((loss, key, self.guide))
+
         init_losses = np.array([x[0] for x in random_init])
         best_idx = jnp.nanargmin(init_losses)
-        best_loss, best_key = random_init[best_idx]
+        best_loss, best_key, best_guide = random_init[best_idx]
+
+        self.guide = best_guide
+        svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
+                            loss=npy.infer.TraceGraph_ELBO(**tracer_config))
 
         # DEBUG
         # print("best_loss:", best_loss, "best_key:", best_key)
