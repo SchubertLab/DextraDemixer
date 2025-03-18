@@ -69,7 +69,8 @@ rule run_tool:
         min(32, num_simulations)  # Cluster can only request 32 cores at once
     resources:
         c=min(32, num_simulations),
-        mem_mb=8000 * min(32, num_simulations)
+        mem_mb=8000 * min(32, num_simulations),
+        mem=f"{8 * min(32, num_simulations)}G",
     shell:
         "python optuna_dextrademixer.py {input} {output} --model_type {params.model_type} --mode {params.mode} --neg {params.neg} --clonotype {params.clonotype} --threads {threads}"
 
