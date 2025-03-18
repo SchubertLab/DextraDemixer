@@ -121,13 +121,14 @@ def main():
         return mean_f1
 
     sampler = optuna.samplers.GPSampler(seed=args.seed)
-    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10)
+    study_name = f"{strftime('%Y%m%d-%H%M%S')}_{args.model_type}_mode{args.mode}_neg{args.neg}_clonotype{args.clonotype}"
+    os.makedirs('optuna_study', exist_ok=True)
 
-    study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize")
+    study = optuna.create_study(storage=f"sqlite:///optuna_study/{study_name}.db",
+                                sampler=sampler, direction="maximize", study_name=study_name)
     study.optimize(objective, n_trials=100)
 
     df = study.trials_dataframe()
-    df['auc_std'] = df.filter(like="run_auc").std(axis=1)
     df.to_csv(args.output_file)
 
 
