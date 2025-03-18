@@ -33,6 +33,7 @@ def parse_arguments():
                         choices=["mixturemodelkmeans", "mixturemodel"])
     parser.add_argument("--threads", type=int, default=None, help="Number of threads")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
     return parser.parse_args()
 
 
@@ -69,18 +70,23 @@ def main():
     def objective(trial):
         """Optuna objective function."""
         init_value = trial.suggest_float("init_value", 1e-4, 1e0, log=True)
-        max_iter = trial.suggest_int("maxiter", 100, 10000, log=True)
-        transition_steps = trial.suggest_float("transition_rate", 0.0, 1.0) * max_iter
+        # max_iter = trial.suggest_int("maxiter", 100, args.maxiter, log=True)
+        # transition_steps = trial.suggest_float("transition_rate", 0.0, 1.0) * max_iter
 
-        opt_params = {"maxiter": max_iter,
+        opt_params = {"maxiter": args.max_iter,
                       "nof_inits": 10,
                        "adam":
                                {
                                 "init_value": init_value,
-                                "transition_steps": transition_steps,
-                                "decay_rate": trial.suggest_float("decay_rate", 0.5, 1.0),
-                                "end_value": trial.suggest_float("end_value_factor", 1e-3, 1e0, log=True) * init_value,
-                               }
+                                # "transition_steps": transition_steps,
+                                # "decay_rate": trial.suggest_float("decay_rate", 0.5, 1.0, log=True),
+                                # "end_value": trial.suggest_float("end_value_factor", 1e-3, 1e0, log=True) * init_value,
+                               },
+                      # "adam_beta":
+                      #           {
+                      #            "b1": trial.suggest_float("beta1", 0.5, 1.0, log=True),
+                      #            "b2": trial.suggest_float("beta2", 0.5, 1.0, log=True),
+                      #           }
                       }
 
         # Evaluate over multiple datasets

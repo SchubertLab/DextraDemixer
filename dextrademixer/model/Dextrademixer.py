@@ -223,7 +223,9 @@ class DextraDemixer(ApMHCDeconvolution):
         svi_config.pop("tracer", None)
 
         # check for custom guide in self.model otherwise use autoguide
-        optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config))
+        # optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config),
+        #                                   b1=svi_config['adam_beta']['b1'], b2=svi_config['adam_beta']['b2'])
+        optimizer = npy.optim.ClippedAdam(adam_config['init_value'])
 
         # find good random initialization
         random_init = []
