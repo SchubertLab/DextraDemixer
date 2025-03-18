@@ -57,6 +57,8 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads,
                                      return_loss=True)
     p_pred, assignment_fdr = mixer.predict_posterior_class(target_fdr=0.05)
     config = f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}_Trial={trial_number}"
+    mixer.plot_results(assignment_fdr, p_pred, y_true, seed, config)
+
     os.makedirs('saved_models', exist_ok=True)
     with open(f"saved_models/{config}.pkl", "wb") as f:
         pickle.dump(mixer, f)
