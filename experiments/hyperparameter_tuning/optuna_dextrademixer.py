@@ -55,7 +55,8 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads,
                                      nof_inits=opt_params["nof_inits"],
                                      rng_key=seed,
                                      return_loss=True)
-    p_pred, assignment_fdr = mixer.predict_posterior_class(target_fdr=0.05)
+    p_pred, assignment_fdr = mixer.predict_posterior_class(threshold=0.5)
+
     config = f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}_Trial={trial_number}"
     mixer.plot_results(assignment_fdr, p_pred, y_true, seed, config)
 
