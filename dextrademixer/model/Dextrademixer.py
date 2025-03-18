@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Union, Dict, Tuple
 import arviz as az
 
 import numpy as np
-import optax
 import pandas as pd
 import mudata as md
 import matplotlib.pyplot as plt
@@ -17,17 +16,13 @@ import seaborn as sns
 
 import jax
 import jax.lax
-from jax import random, jit, lax
+from jax import random, jit
 from jax.nn import logsumexp
-
 import jax.numpy as jnp
-
-from optax import exponential_decay, linear_schedule
 
 import numpyro as npy
 import numpyro.distributions as npd
 
-import statsmodels.formula.api as smf
 from numpyro.infer.svi import SVIRunResult
 from sklearn.cluster import KMeans
 import tqdm
@@ -227,8 +222,8 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # check for custom guide in self.model otherwise use autoguide
         # optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config),
-        #                                   b1=svi_config['adam_beta']['b1'], b2=svi_config['adam_beta']['b2'])
-        optimizer = npy.optim.ClippedAdam(adam_config['init_value'])
+        #                                   b1=svi_config["adam_beta"]["b1"], b2=svi_config["adam_beta"]["b2"])
+        optimizer = npy.optim.ClippedAdam(adam_config["init_value"])
 
         # find good random initialization
         random_init = []
@@ -360,79 +355,76 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # Plot data colored in predicted class assignment
         plt.subplot(3, 3, 1)
-        sns.histplot(x=self.model.data['x'], hue=assignment,
-                     discrete=True, element='step', alpha=0.7)
+        sns.histplot(x=self.model.data["x"], hue=assignment,
+                     discrete=True, element="step", alpha=0.7)
         sns.despine()
-        plt.xlabel('UMI count')
-        plt.title('Predicted class assignment')
+        plt.xlabel("UMI count")
+        plt.title("Predicted class assignment")
 
         plt.subplot(3, 3, 2)
-        sns.histplot(x=self.model.data['x'], hue=assignment,
-                     discrete=True, element='step', alpha=0.7)
+        sns.histplot(x=self.model.data["x"], hue=assignment,
+                     discrete=True, element="step", alpha=0.7)
         sns.despine()
-        plt.yscale('log')
-        plt.xlabel('UMI count')
-        plt.title('Predicted class assignment log-scale')
+        plt.yscale("log")
+        plt.xlabel("UMI count")
+        plt.title("Predicted class assignment log-scale")
 
         plt.subplot(3, 3, 3)
-        sns.scatterplot(x=self.model.data['x'], y=p_pred, hue=assignment,
-                        markers={0: '.', 1: 'X'})
+        sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=assignment,
+                        markers={0: ".", 1: "X"})
         sns.despine()
-        plt.xlabel('UMI count')
-        plt.ylabel('Posterior probability')
-        plt.title('Predicted probability and label of UMI count')
+        plt.xlabel("UMI count")
+        plt.ylabel("Posterior probability")
+        plt.title("Predicted probability and label of UMI count")
 
         # Plot data colored in true class assignment
         plt.subplot(3, 3, 4)
-        sns.histplot(x=self.model.data['x'], hue=y_true,
-                     discrete=True, element='step', alpha=0.7)
+        sns.histplot(x=self.model.data["x"], hue=y_true,
+                     discrete=True, element="step", alpha=0.7)
         sns.despine()
-        plt.xlabel('UMI count')
-        plt.title('True class assignment')
+        plt.xlabel("UMI count")
+        plt.title("True class assignment")
 
         plt.subplot(3, 3, 5)
-        sns.histplot(x=self.model.data['x'], hue=y_true,
-                     discrete=True, element='step', alpha=0.7)
+        sns.histplot(x=self.model.data["x"], hue=y_true,
+                     discrete=True, element="step", alpha=0.7)
         sns.despine()
-        plt.yscale('log')
-        plt.xlabel('UMI count')
-        plt.title('True class assignment log-scale')
+        plt.yscale("log")
+        plt.xlabel("UMI count")
+        plt.title("True class assignment log-scale")
 
         plt.subplot(3, 3, 6)
-        sns.scatterplot(x=self.model.data['x'], y=p_pred, hue=y_true,
-                        style=y_true, markers={False: '.', True: 'X'})
+        sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true,
+                        style=y_true, markers={False: ".", True: "X"})
         sns.despine()
-        plt.xlabel('UMI count')
-        plt.ylabel('Posterior probability')
-        plt.title('Predicted probability of UMI count with true label')
+        plt.xlabel("UMI count")
+        plt.ylabel("Posterior probability")
+        plt.title("Predicted probability of UMI count with true label")
 
         # Plot posterior distribution of Negative Binomial
         predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=1000)
         posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
 
         # Extract mean from posterior samples
-        q = posterior_samples['q'].mean(0)
-        alpha = posterior_samples['alpha'].mean(0)
-        w = posterior_samples['w'].mean(0)
+        q = posterior_samples["q"].mean(0)
+        alpha = posterior_samples["alpha"].mean(0)
+        w = posterior_samples["w"].mean(0)
 
         # If mode is C, we average over the clonotypes
-        if self.mode == 'C':
+        if self.mode == "C":
             # TODO visualize distribution for each clonotype
             alpha = alpha.mean(0)
 
-        x = np.arange(0, self.model.data['x'].max())
-        if self.mode == 'H' or self.mode == 'C':
+        x = np.arange(0, self.model.data["x"].max())
+        if self.mode == "H" or self.mode == "C":
             alpha0 = alpha
             alpha1 = alpha
-        elif self.mode == 'I':
+        elif self.mode == "I":
             alpha0 = alpha[0]
             alpha1 = alpha[1]
 
         prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha0).log_prob(x))
         prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha1).log_prob(x))
-
-        # prob0 = nbinom_dist0.pmf(np.arange(0, self.model.data['x'].max()), ) #* posterior_samples['w'].mean(0)[0]
-        # prob1 = nbinom_dist1.pmf(np.arange(0, self.model.data['x'].max()), ) #* posterior_samples['w'].mean(0)[1]
 
         if self.model.data["clone"] is not None:
             # w.shape = (#clonotypes, 2)
@@ -440,7 +432,7 @@ class DextraDemixer(ApMHCDeconvolution):
             prob0_mix = prob0[None,] * w[:, 0:1]
             prob1_mix = prob1[None,] * w[:, 1:2]
             w_mean = w.mean(0)
-            x = np.tile(np.arange(0, self.model.data['x'].max()), (prob0_mix.shape[0]))
+            x = np.tile(np.arange(0, self.model.data["x"].max()), (prob0_mix.shape[0]))
         else:
             # w.shape = (2,)
             prob0_mix = prob0 * w[0]
@@ -449,27 +441,27 @@ class DextraDemixer(ApMHCDeconvolution):
         # Mixture of Negative Binomial
         plt.subplot(3, 3, 7)
         sns.lineplot(x=x, y=prob0_mix.reshape(-1),
-                     label=f'q={q[0]:.2f} alpha={alpha0:.2f}', linewidth=3)
+                     label=f"q={q[0]:.2f} alpha={alpha0:.2f}", linewidth=3)
         sns.lineplot(x=x, y=prob1_mix.reshape(-1),
-                    label=f'q={q[1]:.2f} alpha={alpha1:.2f}', linewidth=3)
-        sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color='k',
-                     label=f'mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}', linestyle='--')
+                    label=f"q={q[1]:.2f} alpha={alpha1:.2f}", linewidth=3)
+        sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
+                     label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
         sns.despine()
-        plt.title('Posterior Mixture NB')
-        plt.xlabel('UMI count')
-        plt.ylabel('Probability')
+        plt.title("Posterior Mixture NB")
+        plt.xlabel("UMI count")
+        plt.ylabel("Probability")
 
         # Individual Negative Binomial
         plt.subplot(3, 3, 8)
-        sns.lineplot(x=np.arange(0, self.model.data['x'].max()), y=prob0, label=f'q={q[0]:.2f} alpha={alpha0:.2f}')
-        sns.lineplot(x=np.arange(0, self.model.data['x'].max()), y=prob1, label=f'q={q[1]:.2f} alpha={alpha1:.2f}')
+        sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0, label=f"q={q[0]:.2f} alpha={alpha0:.2f}")
+        sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, label=f"q={q[1]:.2f} alpha={alpha1:.2f}")
         sns.despine()
-        plt.title('Posterior NB without mixing weights')
-        plt.xlabel('UMI count')
-        plt.ylabel('Probability')
+        plt.title("Posterior NB without mixing weights")
+        plt.xlabel("UMI count")
+        plt.ylabel("Probability")
 
         # Save plot
-        plt.suptitle(config.replace('_', ' ').replace('ncell', '\nncell'))
+        plt.suptitle(config.replace("_", " ").replace("ncell", "\nncell"))
         os.makedirs("figs", exist_ok=True)
         plt.savefig(f"figs/{config}.png")
         plt.show()

@@ -5,23 +5,21 @@ import warnings
 import pickle
 from time import strftime
 
+import numpyro
+import optuna
+import numpy as np
+from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
+                             accuracy_score)
+
 import sys
 
 
 sys.path.append("../../")
-
-import numpyro
-import optuna
-import numpy as np
-import pandas as pd
-from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
-                             accuracy_score)
-
 from dextrademixer.model import DextraDemixer
 from dextrademixer.utils import convert_str_to_bool_and_none
 import muon as mu
 
-multiprocessing.set_start_method('spawn', force=True)
+multiprocessing.set_start_method("spawn", force=True)
 
 
 def parse_arguments():
@@ -39,7 +37,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads, seed, trial_number):
+def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, seed, trial_number):
     numpyro.set_host_device_count(1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -57,19 +55,21 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads,
                                      return_loss=True)
     p_pred, assignment_fdr = mixer.predict_posterior_class(threshold=0.5)
 
-    config = f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}_Trial={trial_number}"
+    config = (f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_"
+              f"{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}"
+              f"_Trial={trial_number}")
     mixer.plot_results(assignment_fdr, p_pred, y_true, seed, config)
 
-    os.makedirs('saved_models', exist_ok=True)
+    os.makedirs("saved_models", exist_ok=True)
     with open(f"saved_models/{config}.pkl", "wb") as f:
         pickle.dump(mixer, f)
 
     return y_true, p_pred, assignment_fdr, best_loss
 
 
-def worker(dataset, opt_params, model_type, mode, neg, clonotype, threads, seed, trial_number):
+def worker(dataset, opt_params, model_type, mode, neg, clonotype, seed, trial_number):
     y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode, neg, clonotype,
-                                                              threads, seed, trial_number)
+                                                              seed, trial_number)
     return y_true, p_pred, assignment_fdr, best_loss
 
 
@@ -102,8 +102,8 @@ def main():
         # Evaluate over multiple datasets
         with multiprocessing.Pool(processes=args.threads) as pool:
              results = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
-                                            args.neg, args.clonotype, args.threads, args.seed, trial.number)
-                                            for dataset in args.input_files])
+                                              args.neg, args.clonotype, args.seed, trial.number)
+                                             for dataset in args.input_files])
         y_true, p_pred, assignment_fdr, best_loss = zip(*results)
 
         f1_list = []
@@ -132,7 +132,7 @@ def main():
 
     sampler = optuna.samplers.GPSampler(seed=args.seed)
     study_name = f"{strftime('%Y%m%d-%H%M%S')}_{args.model_type}_mode{args.mode}_neg{args.neg}_clonotype{args.clonotype}"
-    os.makedirs('optuna_study', exist_ok=True)
+    os.makedirs("optuna_study", exist_ok=True)
 
     study = optuna.create_study(storage=f"sqlite:///optuna_study/{study_name}.db",
                                 sampler=sampler, direction="maximize", study_name=study_name)
