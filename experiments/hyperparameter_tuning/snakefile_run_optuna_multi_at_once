@@ -7,14 +7,14 @@ from pprint import pprint
 min_version("6.0")
 
 # Configuration
-cell_list = [1000, 5000]
-clone_list = [400]
-p_list = [0.1, 0.25]
+cell_list = [10000]
+clone_list = [2000, 4000]
+p_list = [0.1, 0.01]
 cov_list = [0]
 p_outlier_list = [0.0]
-mean_fold_increase = [2, 5]
+mean_fold_increase = [10, 25]
 var_fold_increase = [2]
-reps = 1
+reps = [2]
 
 # Manually create list to avoid invalid combinations
 tool_list = [
@@ -26,7 +26,7 @@ tool_list = [
     if (mode == "C" and clonotype is not None) or mode != "C"
 ]
 
-num_simulations = len(cell_list) * len(clone_list) * len(p_list) * len(cov_list) * len(p_outlier_list) * len(mean_fold_increase) * len(var_fold_increase) * reps
+num_simulations = len(cell_list) * len(clone_list) * len(p_list) * len(cov_list) * len(p_outlier_list) * len(mean_fold_increase) * len(var_fold_increase) * len(reps)
 
 rule all:
     input:
@@ -54,7 +54,7 @@ rule run_tool:
             cov=cov_list,
             mean=mean_fold_increase,
             var=var_fold_increase,
-            i=range(reps)
+            i=reps
         )
     output:
         "optuna/{model_type}_mode{mode}_neg{neg}_clonotype{clonotype}.csv"
