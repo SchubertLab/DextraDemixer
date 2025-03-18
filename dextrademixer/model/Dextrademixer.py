@@ -775,8 +775,6 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
             z = npd.Categorical(probs=w)
 
-        q = npy.sample("q", npd.TransformedDistribution(npd.LogNormal(loc=mu_q_mean_prior, scale=mu_q_var_prior),
-                                                        npd.transforms.OrderedTransform()))
         # kmeans q prior already ordered and OrderedTransform exponentiates the values leading to overflow
         q = npy.sample("q", npd.LogNormal(loc=mu_q_mean_prior, scale=mu_q_var_prior))
 
