@@ -115,13 +115,13 @@ def main():
                 trial.set_user_attr(f"f1_{dataset}", f1)
                 trial.set_user_attr(f"precision_{dataset}", precision_score(y_true[i], assignment_fdr[i]))
                 trial.set_user_attr(f"recall_{dataset}", recall_score(y_true[i], assignment_fdr[i]))
-                trial.set_user_attr(f"aps_{dataset}", average_precision_score(y_true[i], assignment_fdr[i]))
+                trial.set_user_attr(f"aps_{dataset}", average_precision_score(y_true[i], p_pred[i]))
                 trial.set_user_attr(f"acc_{dataset}", accuracy_score(y_true[i], assignment_fdr[i]))
             f1_list.append(f1)
             trial.set_user_attr(f"converged_{dataset}", best_loss[i]["converged"])
-            trial.set_user_attr(f"best_loss_{dataset}", best_loss[i]["best_loss"])
-            trial.set_user_attr(f"init_loss_{dataset}", best_loss[i]["init_loss"])
-            trial.set_user_attr(f"best_iteration_{dataset}", best_loss[i]["best_iteration"])
+            trial.set_user_attr(f"best_loss_{dataset}", float(best_loss[i]["best_loss"]))
+            trial.set_user_attr(f"init_loss_{dataset}", float(best_loss[i]["init_loss"]))
+            trial.set_user_attr(f"best_iteration_{dataset}", int(best_loss[i]["best_iteration"]))
 
         mean_f1 = np.mean(f1_list)
 
