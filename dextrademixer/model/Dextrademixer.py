@@ -470,8 +470,8 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         # Update model configuration with calculated priors
         kmeans_dict.update({
             "z": labels,
-            "mu_q_mean_prior": cluster_means,  # Mean for each cluster
-            "mu_q_var_prior": np.sqrt(cluster_variances),  # Standard deviation for each cluster
+            "mu_q_mean_prior": np.log(cluster_means),  # Mean for each cluster
+            "mu_q_var_prior": np.maximum(np.log(np.sqrt(cluster_variances)), 5.0),  # Standard deviation for each cluster
             "cluster_proportion": cluster_proportions,
             "tau_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
         })
@@ -777,6 +777,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
         q = npy.sample("q", npd.TransformedDistribution(npd.LogNormal(loc=mu_q_mean_prior, scale=mu_q_var_prior),
                                                         npd.transforms.OrderedTransform()))
+        # kmeans q prior already ordered and OrderedTransform exponentiates the values leading to overflow
+        q = npy.sample("q", npd.LogNormal(loc=mu_q_mean_prior, scale=mu_q_var_prior))
 
         # Sample from the mixture model
         with npy.plate("sample_axis", N_sample):
