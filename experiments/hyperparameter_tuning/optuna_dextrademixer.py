@@ -2,6 +2,8 @@ import argparse
 import multiprocessing
 import os
 import warnings
+import pickle
+from time import strftime
 
 import sys
 
@@ -37,7 +39,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads, seed):
+def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads, seed, trial_number):
     numpyro.set_host_device_count(1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -54,12 +56,17 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, threads,
                                      rng_key=seed,
                                      return_loss=True)
     p_pred, assignment_fdr = mixer.predict_posterior_class(target_fdr=0.05)
+    config = f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}_Trial={trial_number}"
+    os.makedirs('saved_models', exist_ok=True)
+    with open(f"saved_models/{config}.pkl", "wb") as f:
+        pickle.dump(mixer, f)
 
     return y_true, p_pred, assignment_fdr, best_loss
 
 
-def worker(dataset, opt_params, model_type, mode, neg, clonotype, threads, seed):
-    y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode, neg, clonotype, threads, seed)
+def worker(dataset, opt_params, model_type, mode, neg, clonotype, threads, seed, trial_number):
+    y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode, neg, clonotype,
+                                                              threads, seed, trial_number)
     return y_true, p_pred, assignment_fdr, best_loss
 
 
@@ -92,7 +99,7 @@ def main():
         # Evaluate over multiple datasets
         with multiprocessing.Pool(processes=args.threads) as pool:
              results = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
-                                            args.neg, args.clonotype, args.threads, args.seed)
+                                            args.neg, args.clonotype, args.threads, args.seed, trial.number)
                                             for dataset in args.input_files])
         y_true, p_pred, assignment_fdr, best_loss = zip(*results)
 
