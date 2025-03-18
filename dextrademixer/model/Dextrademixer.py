@@ -231,7 +231,7 @@ class DextraDemixer(ApMHCDeconvolution):
             if callable(getattr(self.model, "guide", None)):
                 self.guide = self.model.guide
             else:
-                self.guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_mean)
+                self.guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
             svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
                                 loss=npy.infer.TraceGraph_ELBO(**tracer_config))
             init_state = svi.init(key)
