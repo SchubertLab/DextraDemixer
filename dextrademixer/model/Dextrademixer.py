@@ -25,6 +25,7 @@ import numpyro.distributions as npd
 
 from numpyro.infer.svi import SVIRunResult
 from sklearn.cluster import KMeans
+from sklearn.metrics import f1_score
 import tqdm
 
 from dextrademixer.model import ApMHCDeconvolution
@@ -61,7 +62,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
     """
 
-    def __init__(self, model_type: str = "mixturemodel", mode: str = "H"):
+    def __init__(self, model_type: str = "mixturemodel", mode: str = "H", alpha_model="overdispersion"):
         super().__init__()
 
         if mode.upper() not in ("H", "I", "C"):
@@ -75,6 +76,7 @@ class DextraDemixer(ApMHCDeconvolution):
         self.rng_key = None
         self.guide = None
         self.mode = mode.upper()
+        self.alpha_model = alpha_model
 
         if model_type not in ADextraDemixerModel.registry.keys():
             raise warnings.warn(f"`model_type` {model_type} not supported using the standard model.")
@@ -135,7 +137,8 @@ class DextraDemixer(ApMHCDeconvolution):
                 raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
 
         self._check_parameters(x, x_neg, c, sigma)
-        self.model.preprocess_model_data(x, x_neg, c, sigma, self.mode, **kwargs)
+        self.model.preprocess_model_data(x=x, neg_cont=x_neg, c=c, sigma=sigma, mode=self.mode,
+                                         alpha_model=self.alpha_model, **kwargs)
 
     @staticmethod
     def get_default_sampler_config():
@@ -351,53 +354,47 @@ class DextraDemixer(ApMHCDeconvolution):
         return self.trace
 
     def plot_results(self, assignment, p_pred, y_true, seed, config):
-        plt.figure(figsize=(15, 15))
+        plt.figure(figsize=(16, 12))
 
         # Plot data colored in predicted class assignment
-        plt.subplot(3, 3, 1)
+        plt.subplot(3, 4, 1)
         sns.histplot(x=self.model.data["x"], hue=assignment,
                      discrete=True, element="step", alpha=0.7)
         sns.despine()
-        plt.xlabel("UMI count")
         plt.title("Predicted class assignment")
 
-        plt.subplot(3, 3, 2)
+        plt.subplot(3, 4, 5)
         sns.histplot(x=self.model.data["x"], hue=assignment,
                      discrete=True, element="step", alpha=0.7)
         sns.despine()
         plt.yscale("log")
-        plt.xlabel("UMI count")
         plt.title("Predicted class assignment log-scale")
 
-        plt.subplot(3, 3, 3)
+        plt.subplot(3, 4, 9)
         sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=assignment,
                         markers={0: ".", 1: "X"})
         sns.despine()
-        plt.xlabel("UMI count")
         plt.ylabel("Posterior probability")
         plt.title("Predicted probability and label of UMI count")
 
         # Plot data colored in true class assignment
-        plt.subplot(3, 3, 4)
+        plt.subplot(3, 4, 2)
         sns.histplot(x=self.model.data["x"], hue=y_true,
                      discrete=True, element="step", alpha=0.7)
         sns.despine()
-        plt.xlabel("UMI count")
         plt.title("True class assignment")
 
-        plt.subplot(3, 3, 5)
+        plt.subplot(3, 4, 6)
         sns.histplot(x=self.model.data["x"], hue=y_true,
                      discrete=True, element="step", alpha=0.7)
         sns.despine()
         plt.yscale("log")
-        plt.xlabel("UMI count")
         plt.title("True class assignment log-scale")
 
-        plt.subplot(3, 3, 6)
+        plt.subplot(3, 4, 10)
         sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true,
                         style=y_true, markers={False: ".", True: "X"})
         sns.despine()
-        plt.xlabel("UMI count")
         plt.ylabel("Posterior probability")
         plt.title("Predicted probability of UMI count with true label")
 
@@ -407,7 +404,11 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # Extract mean from posterior samples
         q = posterior_samples["q"].mean(0)
-        alpha = posterior_samples["alpha"].mean(0)
+        if self.alpha_model == 'overdispersion':
+            overdispersion = posterior_samples["overdispersion"].mean(0)
+            alpha = q**2 / (q * (overdispersion + 1) - q)
+        else:
+            alpha = posterior_samples["alpha"].mean(0)
         w = posterior_samples["w"].mean(0)
 
         # If mode is C, we average over the clonotypes
@@ -439,7 +440,7 @@ class DextraDemixer(ApMHCDeconvolution):
             prob1_mix = prob1 * w[1]
             w_mean = w
         # Mixture of Negative Binomial
-        plt.subplot(3, 3, 7)
+        plt.subplot(3, 4, 4)
         sns.lineplot(x=x, y=prob0_mix.reshape(-1),
                      label=f"q={q[0]:.2f} alpha={alpha0:.2f}", linewidth=3)
         sns.lineplot(x=x, y=prob1_mix.reshape(-1),
@@ -448,20 +449,55 @@ class DextraDemixer(ApMHCDeconvolution):
                      label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
         sns.despine()
         plt.title("Posterior Mixture NB")
-        plt.xlabel("UMI count")
         plt.ylabel("Probability")
 
         # Individual Negative Binomial
-        plt.subplot(3, 3, 8)
+        plt.subplot(3, 4, 8)
         sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0, label=f"q={q[0]:.2f} alpha={alpha0:.2f}")
         sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, label=f"q={q[1]:.2f} alpha={alpha1:.2f}")
         sns.despine()
         plt.title("Posterior NB without mixing weights")
-        plt.xlabel("UMI count")
         plt.ylabel("Probability")
 
+        if self.model_type == "mixturemodelkmeans":
+            cluster_means = self.model._kmeans_dict["cluster_means"]
+            cluster_vars = self.model._kmeans_dict["cluster_variances"]
+            dists = jnp.abs(self.model.data["x"][:, None].repeat(2, axis=1) - cluster_means)
+            labels = np.argmin(dists, axis=1)
+
+            plt.subplot(3, 4, 3)
+            sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            plt.axvline(cluster_means[0], color="red", linestyle="--")
+            plt.axvline(cluster_means[1], color="red", linestyle="--")
+            sns.despine()
+            plt.title("KMeans clustering")
+            plt.ylabel("Percent")
+
+            plt.subplot(3, 4, 7)
+            sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            plt.yscale("log")
+            plt.axvline(cluster_means[0], color="red", linestyle="--")
+            plt.axvline(cluster_means[1], color="red", linestyle="--")
+            sns.despine()
+            plt.title("KMeans cluster log-scale")
+            plt.ylabel("Percent")
+
+            plt.subplot(3, 4, 12)
+            alpha = cluster_means**2 / (cluster_vars - cluster_means)
+            alpha[alpha < 0] = 100
+            x = np.arange(0, self.model.data["x"].max())
+            prob0 = jnp.exp(npd.NegativeBinomial2(cluster_means[0], alpha[0]).log_prob(x))
+            prob1 = jnp.exp(npd.NegativeBinomial2(cluster_means[1], alpha[1]).log_prob(x))
+
+            sns.lineplot(x=x, y=prob0, label=f"q={cluster_means[0]:.2f} alpha={alpha[0]:.2f}")
+            sns.lineplot(x=x, y=prob1, label=f"q={cluster_means[1]:.2f} alpha={alpha[1]:.2f}")
+            sns.despine()
+            plt.title("kMeans determined distribution")
+            plt.ylabel("Probability")
+
         # Save plot
-        plt.suptitle(config.replace("_", " ").replace("ncell", "\nncell"))
+        f1 = f1_score(assignment, y_true)
+        plt.suptitle(config.replace("_", " ").replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}")
         os.makedirs("figs", exist_ok=True)
         plt.savefig(f"figs/{config}.png")
         plt.show()
@@ -479,6 +515,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         self._version = "0.0.0"
         self._data = None
         self._kmeans_dict = None
+        self.alpha_model = None
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
@@ -486,6 +523,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                               c: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[np.ndarray, Array] = None,
                               mode: str = "H",
+                              alpha_model="overdispersion",
                               **kwargs):
         """
         """
@@ -497,6 +535,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                      }
 
         self.mode = mode
+        self.alpha_model = alpha_model
 
     def _init_kmeans(self, scale_factor=1.0) -> Dict:
         """
@@ -504,9 +543,8 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         for mu_q, sigma_q, alpha, and tau priors.
 
         This method calculates the following priors:
-        - mu_q_mean_prior: Mean of each cluster (KMeans cluster centers)
-        - mu_q_var_prior: Variance of each cluster (spread of the cluster points)
-        - alpha_var_prior: Dispersion (or precision) for each cluster
+        - cluster_means: Mean of each cluster (KMeans cluster centers)
+        - cluster_variances: Variance of each cluster (spread of the cluster points)
         - tau_concentration_prior: Proportion of each cluster in the dataset
 
         returns: Dict with params estimates and  k-mean labels,
@@ -546,7 +584,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         cluster_proportions = cluster_counts / len(labels)
 
         # Sort clusters by mean for consistency
-        # TODO Maybe don't need anymore, as we are now initializing the KMeans with min and max
         sorted_indices = np.argsort(cluster_means)
         cluster_means = np.array(cluster_means)[sorted_indices]
         cluster_variances = np.array(cluster_variances)[sorted_indices]
@@ -803,6 +840,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             "mu_q_var_prior": 10.0,
             "sigma_q_var_prior": 10.0,
             "alpha_var_prior": 10.0,
+            "var_hyperprior": 10.0,
         }
 
     @property
@@ -818,11 +856,13 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[np.ndarray, Array] = None,
+                              alpha_model="overdispersion",
                               mode: str = "H",
                               scale_factor: float = 1.0,
                               **kwargs):
 
-        super().preprocess_model_data(x, neg_cont, c, sigma, mode, **kwargs)
+        super().preprocess_model_data(x=x, neg_cont=neg_cont, c=c, sigma=sigma, mode=mode,
+                                      alpha_model=alpha_model, **kwargs)
         self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor)
         self._model_config.update(self._kmeans_dict)
 
@@ -849,22 +889,10 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         # Extract hyperpriors
         mu_w_mean_prior = model_config["mu_w_mean_prior"]
         mu_w_var_prior = model_config["mu_w_var_prior"]
-        mu_q_mean_prior = model_config["cluster_means"]
-        mu_q_var_prior = model_config["cluster_variances"]
-        alpha_var_prior = model_config["alpha_var_prior"]
+        cluster_means = model_config["cluster_means"]
+        cluster_variances = model_config["cluster_variances"]
+        var_hyperprior = model_config["var_hyperprior"]  # Variance for priors if using alpha_model = kmeans
         tau_concentration_prior = model_config["tau_concentration_prior"]
-
-        if self.mode == "H":
-            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                    npd.transforms.PowerTransform(-2.0)))
-        elif self.mode == "C":
-            with npy.plate("clone_axis", c_nof):
-                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                    npd.transforms.PowerTransform(-2.0)))
-        else:
-            with npy.plate("cluster_axis", K):
-                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                        npd.transforms.PowerTransform(-2.0)))
 
         # Cluster probability prior
         if clone is not None:
@@ -883,8 +911,80 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
             z = npd.Categorical(probs=w)
 
-        # kmeans q prior already ordered and OrderedTransform exponentiates the values leading to overflow
-        q = npy.sample("q", npd.LogNormal(loc=mu_q_mean_prior, scale=mu_q_var_prior))
+        # Variant 1: Model alpha as through overdispersion
+        if self.alpha_model == "overdispersion":
+            # Convert kmeans priors to deltas, due to cumsum ordering
+            mean_deltas = jnp.array([cluster_means[0], cluster_means[1] - cluster_means[0]])
+            var_deltas = jnp.array([cluster_variances[0], max(cluster_variances[1] - cluster_variances[0], 1e-5)])
+
+            # Convert kmeans parameters to lognormal parameters with target mean and variance
+            # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
+            sigma2_q_prior = jnp.log(var_deltas / mean_deltas ** 2 + 1)
+            sigma_q_prior = jnp.sqrt(sigma2_q_prior)
+            mu_q_prior = jnp.log(mean_deltas) - sigma2_q_prior / 2
+
+            # Sample delta_q from lognormal distribution and cumsum to create ordered q
+            delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
+            q = jnp.cumsum(delta_q, axis=0)
+
+            # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
+            overdispersion_prior_dist = npd.HalfCauchy(1)
+            if self.mode == "H":
+                overdispersion = npy.sample("overdispersion", overdispersion_prior_dist)
+            elif self.mode == "C":
+                # TODO Doesn't work for C yet, since we somehow would need to have access to the mean of each clone
+                with npy.plate("clone_axis", c_nof):
+                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist)
+            else:
+                with npy.plate("cluster_axis", K):
+                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist)
+            # NB cannot be underdispersed, e.g., overdispersion < 1
+            overdispersion = overdispersion + 1
+            alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
+
+        elif self.alpha_model == "kmeans":
+            # Variance should roughly follow my guessed "uncertainty" around my prior point in percent,
+            # and put adjust the standard deviation at those point sigma^2=(log(1+p))**2
+            # e.g., if I think x=30, and I think it should be around 50% of it [15, 45], then I would have
+            # sigma^2=log(1+0.5)**2=0.164
+
+            # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and hyperprior variances
+            var_hyperprior_deltas = jnp.array([var_hyperprior, 1])  # 1 in delta to have the similar variance for both
+            mean_deltas = jnp.array([cluster_means[0], cluster_means[1] - cluster_means[0]])
+
+            sigma2_q_hyperprior = jnp.log(var_hyperprior_deltas / mean_deltas ** 2 + 1)
+            sigma_q_hyperprior = jnp.sqrt(sigma2_q_hyperprior)
+            mu_q_prior = jnp.log(mean_deltas) - sigma2_q_hyperprior / 2
+
+            delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_hyperprior))
+            q = jnp.cumsum(delta_q, axis=0)
+
+            # NB concentration parameter: convert to alpha, alpha_prior ~ LogNormal(mu_alpha, sigma_alpha), with cluster variance and hyperprior variances
+            # Calculate alpha parameter with target variance
+            alpha_prior = cluster_means**2 / (cluster_variances - cluster_means)
+            # In case of underdispersion (negative alpha), set to a high number
+            alpha_prior[alpha_prior <= 0] = 100
+
+            var_hyperprior_deltas = jnp.array([var_hyperprior, 1])  # 1 in delta to have similar variance for both
+            # Due to cumsum ordering, second component cannot be smaller than first
+            alpha_deltas = jnp.array([alpha_prior[0], jnp.maximum(alpha_prior[1] - alpha_prior[0], 1e-5)])
+
+            sigma2_alpha_hyperprior = jnp.log(var_hyperprior_deltas / alpha_deltas ** 2 + 1)
+            sigma_alpha_hyperprior = jnp.sqrt(sigma2_alpha_hyperprior)
+
+            mu_alpha_prior = jnp.log(alpha_deltas) - sigma2_alpha_hyperprior / 2
+            alpha_dist = npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hyperprior)
+            if self.mode == "H":
+                alpha = npy.sample("alpha", alpha_dist)
+            elif self.mode == "C":
+                with npy.plate("clone_axis", c_nof):
+                    alpha = npy.sample("alpha", alpha_dist)
+            else:
+                with npy.plate("cluster_axis", K):
+                    alpha = npy.sample("alpha", alpha_dist)
+
+        else:
+            raise NotImplementedError(f" {self.alpha_model} not implemented")
 
         # Sample from the mixture model
         with npy.plate("sample_axis", N_sample):

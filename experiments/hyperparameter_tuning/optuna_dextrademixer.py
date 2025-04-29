@@ -34,17 +34,22 @@ def parse_arguments():
     parser.add_argument("--threads", type=int, default=None, help="Number of threads")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
+    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
+    parser.add_argument("--mp", type=str, default=True, help="Use multiprocessing")
+    parser.add_argument("--alpha_model", type=str, default='overdispersion',
+                        choices=["overdispersion", "kmeans"],
+                        help="Modeling of the alpha parameter. Options: 'overdispersion', 'kmeans'.")
     return parser.parse_args()
 
 
-def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, seed, trial_number):
+def run_inference(opt_params, f_in, model_type, m, alpha_model, neg_ctrl, ir_clone, seed, trial_number):
     numpyro.set_host_device_count(1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         mdata = mu.read(f_in)
     y_true = mdata.mod["airr"].obs["is_binder"]
 
-    mixer = DextraDemixer(model_type=model_type, mode=m)
+    mixer = DextraDemixer(model_type=model_type, mode=m, alpha_model=alpha_model)
     mixer.preprocess_model_data(mdata, "pmhc1",
                                 neg_ctrl_key=neg_ctrl,
                                 ir_clone_key=ir_clone)
@@ -55,7 +60,7 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, seed, tr
                                      return_loss=True)
     p_pred, assignment_fdr = mixer.predict_posterior_class(threshold=0.5)
 
-    config = (f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_"
+    config = (f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{alpha_model}"
               f"{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}"
               f"_Trial={trial_number}")
     mixer.plot_results(assignment_fdr, p_pred, y_true, seed, config)
@@ -67,9 +72,9 @@ def run_inference(opt_params, f_in,  model_type, m, neg_ctrl, ir_clone, seed, tr
     return y_true, p_pred, assignment_fdr, best_loss
 
 
-def worker(dataset, opt_params, model_type, mode, neg, clonotype, seed, trial_number):
-    y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode, neg, clonotype,
-                                                              seed, trial_number)
+def worker(dataset, opt_params, model_type, mode, alpha_model, neg, clonotype, seed, trial_number):
+    y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode,
+                                                              alpha_model, neg, clonotype, seed, trial_number)
     return y_true, p_pred, assignment_fdr, best_loss
 
 
@@ -83,7 +88,7 @@ def main():
         # max_iter = trial.suggest_int("maxiter", 100, args.maxiter, log=True)
         # transition_steps = trial.suggest_float("transition_rate", 0.0, 1.0) * max_iter
 
-        opt_params = {"maxiter": args.max_iter,
+        opt_params = {"maxiter": args.maxiter,
                       "nof_inits": 10,
                        "adam":
                                {
@@ -100,10 +105,17 @@ def main():
                       }
 
         # Evaluate over multiple datasets
-        with multiprocessing.Pool(processes=args.threads) as pool:
-             results = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
-                                              args.neg, args.clonotype, args.seed, trial.number)
-                                             for dataset in args.input_files])
+        if args.mp:
+            with multiprocessing.Pool(processes=args.threads) as pool:
+                 results = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
+                                                  args.alpha_model, args.neg, args.clonotype, args.seed, trial.number)
+                                                 for dataset in args.input_files])
+        else:
+            results = []
+            for dataset in args.input_files:
+                results.append(worker(dataset, opt_params, args.model_type, args.mode,
+                                      args.alpha_model, args.neg, args.clonotype, args.seed, trial.number))
+
         y_true, p_pred, assignment_fdr, best_loss = zip(*results)
 
         f1_list = []
@@ -131,7 +143,7 @@ def main():
         return mean_f1
 
     sampler = optuna.samplers.GPSampler(seed=args.seed)
-    study_name = f"{strftime('%Y%m%d-%H%M%S')}_{args.model_type}_mode{args.mode}_neg{args.neg}_clonotype{args.clonotype}"
+    study_name = f"{strftime('%Y%m%d-%H%M%S')}_{args.model_type}_mode{args.mode}_neg{args.neg}_clonotype{args.clonotype}_alpha_model{args.alpha_model}"
     os.makedirs("optuna_study", exist_ok=True)
 
     study = optuna.create_study(storage=f"sqlite:///optuna_study/{study_name}.db",
