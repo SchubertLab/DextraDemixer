@@ -511,18 +511,17 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
 
         returns: Dict with params estimates and  k-mean labels,
         """
-        x = self.data["x"]
+        x = self.data["x"].copy()
+        # remove outliers
+        zscore = (x - x.mean()) / x.std()
+        x = x[zscore < 20]  # TODO determine which threshold works the best
         clone = self.data.get("clone", None)
         sigma = self.data.get("sigma", None)
         n_clusters = 2  # KMeans with 2 clusters
 
         # Perform KMeans clustering
-        # TODO Workaround if there is an outlier in the data which becomes a sole cluster
-        for seed in range(100):
-            kmeans = KMeans(n_clusters=n_clusters, random_state=seed, n_init="auto").fit(x.reshape(-1, 1))
-            labels = kmeans.labels_
-            if (labels == 0).sum() > 1 and (labels == 1).sum() > 1:
-                break
+        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x), np.max(x)]), n_init="auto").fit(x.reshape(-1, 1))
+        labels = kmeans.labels_
 
         # Initialize lists for cluster attributes
         cluster_means = []
@@ -547,6 +546,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         cluster_proportions = cluster_counts / len(labels)
 
         # Sort clusters by mean for consistency
+        # TODO Maybe don't need anymore, as we are now initializing the KMeans with min and max
         sorted_indices = np.argsort(cluster_means)
         cluster_means = np.array(cluster_means)[sorted_indices]
         cluster_variances = np.array(cluster_variances)[sorted_indices]
@@ -578,8 +578,8 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         # Update model configuration with calculated priors
         kmeans_dict.update({
             "z": labels,
-            "mu_q_mean_prior": np.log(cluster_means),  # Mean for each cluster
-            "mu_q_var_prior": np.maximum(np.log(np.sqrt(cluster_variances)), 5.0),  # Standard deviation for each cluster
+            "cluster_means": cluster_means,  # Mean for each cluster
+            "cluster_variances": cluster_variances,  # variance for each cluster
             "cluster_proportion": cluster_proportions,
             "tau_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
         })
@@ -849,8 +849,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         # Extract hyperpriors
         mu_w_mean_prior = model_config["mu_w_mean_prior"]
         mu_w_var_prior = model_config["mu_w_var_prior"]
-        mu_q_mean_prior = model_config["mu_q_mean_prior"]
-        mu_q_var_prior = model_config["mu_q_var_prior"]
+        mu_q_mean_prior = model_config["cluster_means"]
+        mu_q_var_prior = model_config["cluster_variances"]
         alpha_var_prior = model_config["alpha_var_prior"]
         tau_concentration_prior = model_config["tau_concentration_prior"]
 
