@@ -3,6 +3,7 @@ sys.path.append("../../")
 
 import matplotlib.pyplot as plt
 from dextrademixer.utils import DextramerSimulator
+import hashlib
 
 
 def main():
@@ -17,6 +18,11 @@ def main():
     var_inc = float(sys.argv[9])
     i = int(sys.argv[10])
 
+    sim_config = f'{total_cell}_{nclones}_{p_outlier}_{p}_{cov}_{mean_inc}_{var_inc}_{i}'
+    # Use sim_hash to ensure reproducibility, but have variance in seed
+    sim_hash = hashlib.sha256(sim_config.encode('utf-8')).digest()
+    seed = int.from_bytes(sim_hash[:4], byteorder='little')
+
     plt.ioff()
     sim = DextramerSimulator()
 
@@ -29,7 +35,7 @@ def main():
                                                             simulate_neg_control=True,
                                                             use_clonotype_cov=cov,
                                                             plot_data=True,
-                                                            rng_key=i)
+                                                            rng_key=seed)
     mdata1.write(output_h5mu)
     axs1[0, 0].get_figure().savefig(output_pdf)
     plt.close()
