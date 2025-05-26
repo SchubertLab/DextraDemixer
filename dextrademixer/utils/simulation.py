@@ -96,27 +96,29 @@ def t_cell_simulation(n_clones=3,
     d_neg = {"avidity": [], "binder": [], "clone": []}
     binder_assignment = rng.binomial(1, binding_ratio, size=n_clones)
 
+    key = jax.random.PRNGKey(rng_key)  # set starting rng_key
     for i in range(n_clones):
+        key, subkey = jax.random.split(key)
         is_binder = binder_assignment[i]
 
         if is_binder:
             n_cell = rng.randint(*n_cells_per_binder, size=1)[0]
             mean = rng.uniform(*mean_binder_range, size=1)[0]
             shape = rng.uniform(*shape_binder_range, size=1)[0]
-            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean, shape, size=n_cell, rng_key=rng_key).tolist())
+            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean, shape, size=n_cell, rng_key=key).tolist())
 
         else:
             n_cell = rng.randint(*n_cells_per_non_binder, size=1)[0]
             d["avidity"].extend(
                 DextramerSimulator.generate_nb_val(mean_non_binder, shape_non_binder, size=n_cell,
-                                                   rng_key=rng_key).tolist())
+                                                   rng_key=key).tolist())
 
         d["binder"].extend([is_binder] * n_cell)
         d["clone"].extend([i] * n_cell)
 
         d_neg["avidity"].extend(DextramerSimulator.generate_nb_val(mean_non_binder,
                                                                    shape_non_binder, size=n_cell,
-                                                                   rng_key=rng_key).tolist())
+                                                                   rng_key=key).tolist())
         d_neg["binder"].extend([0] * n_cell)
         d_neg["clone"].extend([i] * n_cell)
 
@@ -438,8 +440,11 @@ class DextramerSimulator:
         cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
         d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
-
+        key = jax.random.PRNGKey(rng_key)  # set starting rng_key
         for i in range(nof_clones):
+            # Propagate the key to create new subkeys for each clone, else the same distribution will always be sampled
+            key, subkey = jax.random.split(key)
+
             is_binder = int(binder_assignment[i])
             n_cells = cells_per_clone[i]
 
@@ -458,7 +463,7 @@ class DextramerSimulator:
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
                                                     random_state=rng)
 
-            x = self.generate_nb_val(mean, concentration, size=n_cells, rng_key=rng_key)
+            x = npd.NegativeBinomial2(mean, concentration).sample(key, sample_shape=(n_cells,))
 
             if p_binding_outlier > 0 and is_binder:
                 outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells, random_state=rng)
@@ -468,16 +473,15 @@ class DextramerSimulator:
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
                                                     random_state=rng)
 
-                x = x.at[outlier_idx].set(self.generate_nb_val(mean, concentration, size=np.sum(outlier),
-                                                               rng_key=rng_key))
-
+                x = x.at[outlier_idx].set( npd.NegativeBinomial2(mean, concentration).sample(key, sample_shape=(np.sum(outlier),)))
                 d["outlier"].extend(outlier.tolist())
             else:
                 d["outlier"].extend([0]*n_cells)
 
             if simulate_neg_control:
+                key, subkey = jax.random.split(key)
                 mean = neg_mean
-                x_neg = self.generate_nb_val(mean, neg_concentration, size=n_cells, rng_key=rng_key)
+                x_neg = npd.NegativeBinomial2(mean, neg_concentration).sample(key, sample_shape=(n_cells,))
                 d["x_neg"].extend(x_neg.tolist())
 
             d["x"].extend(x.tolist())
