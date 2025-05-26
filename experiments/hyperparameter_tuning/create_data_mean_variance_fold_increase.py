@@ -26,7 +26,7 @@ def main():
     plt.ioff()
     sim = DextramerSimulator()
 
-    mdata1, axs1 = sim.simulate_pmhc_data_from_distribution(total_cells=total_cell,
+    mdata1, fig = sim.simulate_pmhc_data_from_distribution(total_cells=total_cell,
                                                             nof_clones=nclones,
                                                             p_binding_outlier=p_outlier,
                                                             binding_ratio=p,
@@ -37,7 +37,7 @@ def main():
                                                             plot_data=True,
                                                             rng_key=seed)
     mdata1.write(output_h5mu)
-    axs1[0, 0].get_figure().savefig(output_pdf)
+    fig.savefig(output_pdf)
     plt.close()
 
 

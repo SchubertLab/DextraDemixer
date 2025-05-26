@@ -583,35 +583,75 @@ class DextramerSimulator:
 
     @staticmethod
     def __plot_simulated_data(d):
-
-        fig_params = {'legend.fontsize': 'x-small',
-                      'figure.figsize': (8.27, 5.845),
-                      'figure.dpi': 100,
-                      'axes.labelsize': 'x-small',
-                      'axes.titlesize': 'x-small',
-                      'xtick.labelsize': 'x-small',
-                      'ytick.labelsize': 'x-small'
-                      }
-        plt.rcParams.update(fig_params)
-
-        fig, axs = plt.subplots(2, 2, layout='tight')  #gridspec_kw={'height_ratios': [1, 1, 2, 0]}
-        if not len(d["x_neg"]):
-            del d["x_neg"]
-
         df = pd.DataFrame.from_dict(d)
 
-        axs[0, 0].set_title("pMHC Dextramer")
-        sns.histplot(data=df, x="x", hue="binder", log_scale=True, ax=axs[0, 0])
-        if "x_neg" in d:
-            axs[0, 1].set_title("Negative Control")
-            sns.histplot(data=df, x="x_neg", log_scale=True, ax=axs[0, 1])
-        else:
-            axs[0, 1].axis('off')
-        axs[1, 0].set_title("Clonal distribution of Non-binder")
-        sns.histplot(data=df[df.binder == 0], x="x", hue="clone", log_scale=True, legend=False, ax=axs[1, 0])
-        axs[1, 1].set_title("Clonal distribution of Binder")
-        sns.histplot(data=df[df.binder == 1], x="x", hue="clone", log_scale=True, legend=False, ax=axs[1, 1])
-        return axs
+        x = df["x"].values.reshape(-1, )
+        hue = pd.Series(df["binder"]).map({0: "non-binder", 1: "binder"})
+        x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
+        zscore = (x_log - x_log.mean()) / x_log.std()
+        x_no_outliers = x[zscore < 3]  # TODO determine which threshold works the best
+        hue_no_outliers = hue[zscore < 3]
+        outlier_thr = x_no_outliers.max()
+
+        if "x_neg" in df:
+            x_neg = df["x_neg"].values.reshape(-1, )
+            x = np.concatenate((x, x_neg), axis=0)
+            x_no_outliers = np.concatenate((x_no_outliers, x_neg), axis=0)
+            hue = pd.concat([hue, pd.Series(["Neg control"]*len(x_neg))], axis=0)
+            hue_no_outliers = pd.concat([hue_no_outliers, pd.Series(["Neg control"]*len(x_neg))], axis=0)
+
+        n_cols = 3
+        n_rows = 2
+        fig = plt.figure(figsize=(3 * n_cols, 2.4 * n_rows))
+        i = 1
+
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, legend=False)
+        plt.axvline(outlier_thr, ls='--', c='r')
+        sns.despine()
+        plt.title(f'Linear (outlier threshold in red)')
+        i += 1
+
+        plt.subplot(n_rows, n_cols, i)
+        ax = sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers)
+        sns.despine()
+        plt.title(f'Linear no outliers (log-transformed z-score > 3)')
+        i += 1
+
+        sns.move_legend(ax, "upper center", bbox_to_anchor=(0.5, 1.4), ncol=3, frameon=False, title='Binding status')
+
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x, discrete=True, stat='percent', binrange=(0, 100), element='step', hue=hue, legend=False)
+        plt.title(f'Linear x < 100')
+        sns.despine()
+        i += 1
+
+        # Log scale
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, legend=False)
+        plt.yscale('log')
+        plt.axvline(outlier_thr, ls='--', c='r')
+        plt.title(f'Log-scale (outlier threshold in red)')
+        sns.despine()
+        i += 1
+
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers, legend=False)
+        plt.yscale('log')
+        plt.title(f'Log-scale no outliers (log-transformed z-score > 3)')
+        sns.despine()
+        i += 1
+
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x, discrete=True, stat='percent', binrange=(0, 100), element='step', hue=hue, legend=False)
+        plt.yscale('log')
+        plt.title(f'Log-scale x < 100')
+        sns.despine()
+        i += 1
+
+        plt.show()
+
+        return fig
 
     @staticmethod
     def __generate_mdata(d, simulate_neg_control, cov=None) -> MuData:
