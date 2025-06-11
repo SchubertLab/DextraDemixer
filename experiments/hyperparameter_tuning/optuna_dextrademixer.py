@@ -29,12 +29,13 @@ def parse_arguments():
     parser.add_argument("--mode", required=True, help="Processing mode")
     parser.add_argument("--neg", required=True, help="Negative control parameter")
     parser.add_argument("--clonotype", required=True, help="Clonotype parameter")
-    parser.add_argument("--model_type", required=True, help="Model type",
+    parser.add_argument("--model_type", default='mixturemodelkmeans', help="Model type",
                         choices=["mixturemodelkmeans", "mixturemodel"])
     parser.add_argument("--threads", type=int, default=None, help="Number of threads")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
     parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
+    parser.add_argument("--n_trials", type=int, default=5, help="Number of trials, in this case number of seeds")
     parser.add_argument("--mp", type=str, default=True, help="Use multiprocessing")
     parser.add_argument("--alpha_model", type=str, default='overdispersion',
                         choices=["overdispersion", "kmeans"],
@@ -152,9 +153,10 @@ def main():
 
     study = optuna.create_study(storage=f"sqlite:///optuna_study/{study_name}.db",
                                 sampler=sampler, direction="maximize", study_name=study_name)
-    study.optimize(objective, n_trials=100)
+    study.optimize(objective, n_trials=args.n_trials)
 
     df = study.trials_dataframe()
+    os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
     df.to_csv(args.output_file)
 
 
