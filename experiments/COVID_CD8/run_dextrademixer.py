@@ -120,6 +120,7 @@ def run_inference(f_in, args):
      "FN": np.sum(df_reactive_clones[f"assignment"] != 1),
      "recall": np.sum(df_reactive_clones[f"assignment"]) / len(df_reactive_clones),
      "clonal_precision": clone_precision}
+    print(metrics)
 
     mixer.plot_results(assignment, p_pred, y_true, args.seed, config)
 
@@ -168,15 +169,13 @@ def main():
     y_true, p_pred, assignment, best_loss = zip(*results)
 
     results = pd.Series()
-    results['roc_auc'] = roc_auc_score(np.concatenate(y_true), np.concatenate(p_pred))
-    results['pr_auc'] = average_precision_score(np.concatenate(y_true), np.concatenate(p_pred))
-    results['f1'] = f1_score(np.concatenate(y_true), np.concatenate(assignment))
-    results['precision'] = precision_score(np.concatenate(y_true), np.concatenate(assignment))
-    results['recall'] = recall_score(np.concatenate(y_true), np.concatenate(assignment))
-    results['accuracy'] = accuracy_score(np.concatenate(y_true), np.concatenate(assignment))
+    results['roc_auc'] = roc_auc_score(y_true, p_pred)
+    results['pr_auc'] = average_precision_score(y_true, p_pred)
+    results['f1'] = f1_score(y_true, assignment)
+    results['precision'] = precision_score(y_true, assignment)
+    results['recall'] = recall_score(y_true, assignment)
+    results['accuracy'] = accuracy_score(y_true, assignment)
 
-
-    os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
     results.to_csv(args.output_file)
 
 
