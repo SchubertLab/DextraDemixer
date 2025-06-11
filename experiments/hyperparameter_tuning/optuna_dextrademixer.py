@@ -81,8 +81,12 @@ def run_inference(opt_params, f_in, model_type, m, alpha_model, neg_ctrl, ir_clo
 
 
 def worker(dataset, opt_params, model_type, mode, alpha_model, neg, clonotype, seed, trial_number):
-    y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode,
-                                                              alpha_model, neg, clonotype, seed, trial_number)
+    try:
+        y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode,
+                                                                  alpha_model, neg, clonotype, seed, trial_number)
+    except Exception as e:
+        raise RuntimeError(f"Failed on {dataset}") from e
+
     return y_true, p_pred, assignment_fdr, best_loss
 
 
@@ -107,9 +111,9 @@ def main():
         # Evaluate over multiple datasets
         if args.mp:
             with multiprocessing.Pool(processes=args.threads) as pool:
-                 results = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
-                                                  args.alpha_model, args.neg, args.clonotype, args.seed, trial.number)
-                                                 for dataset in args.input_files])
+                results = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
+                                                 args.alpha_model, args.neg, args.clonotype, args.seed, trial.number)
+                                                for dataset in args.input_files], chunksize=1)
         else:
             results = []
             for dataset in args.input_files:
