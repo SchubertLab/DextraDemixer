@@ -39,6 +39,10 @@ def parse_arguments():
     parser.add_argument("--alpha_model", type=str, default='overdispersion',
                         choices=["overdispersion", "kmeans"],
                         help="Modeling of the alpha parameter. Options: 'overdispersion', 'kmeans'.")
+    parser.add_argument("--overdispersion_scale_prior", type=float, default=1,
+                        help="Prior for scale parameter of HalfCauchy for overdispersion model. Not used for kmeans.")
+    parser.add_argument("--var_hyperprior", type=float, default=10,
+                        help="Prior for scale parameter of kmeans model. Not used for overdispersion.")
     return parser.parse_args()
 
 
@@ -54,15 +58,19 @@ def run_inference(opt_params, f_in, model_type, m, alpha_model, neg_ctrl, ir_clo
                                 neg_ctrl_key=neg_ctrl,
                                 ir_clone_key=ir_clone)
 
+    mixer.model._model_config["overdispersion_scale_prior"] = opt_params["overdispersion_scale_prior"]
+    mixer.model._model_config["var_hyperprior"] = opt_params["var_hyperprior"]
+
     trace, best_loss = mixer.fit_svi(svi_config=opt_params,
                                      nof_inits=opt_params["nof_inits"],
                                      rng_key=seed,
                                      return_loss=True)
     p_pred, assignment_fdr = mixer.predict_posterior_class(threshold=0.5)
 
-    config = (f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{alpha_model}"
+    config = (f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{alpha_model}_{opt_params['overdispersion_scale_prior']},{opt_params['var_hyperprior']}_lr={opt_params['adam']['init_value']}"
               f"{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}"
               f"_Trial={trial_number}")
+
     mixer.plot_results(assignment_fdr, p_pred, y_true, seed, config)
 
     os.makedirs("saved_models", exist_ok=True)
@@ -84,24 +92,16 @@ def main():
 
     def objective(trial):
         """Optuna objective function."""
-        init_value = trial.suggest_float("init_value", 1e-4, 1e0, log=True)
-        # max_iter = trial.suggest_int("maxiter", 100, args.maxiter, log=True)
-        # transition_steps = trial.suggest_float("transition_rate", 0.0, 1.0) * max_iter
+        init_value = trial.suggest_float("init_value", 1e-4, 1e0, log=True) if args.lr is None else args.lr
 
         opt_params = {"maxiter": args.maxiter,
                       "nof_inits": 10,
-                       "adam":
-                               {
-                                "init_value": init_value,
-                                # "transition_steps": transition_steps,
-                                # "decay_rate": trial.suggest_float("decay_rate", 0.5, 1.0, log=True),
-                                # "end_value": trial.suggest_float("end_value_factor", 1e-3, 1e0, log=True) * init_value,
-                               },
-                      # "adam_beta":
-                      #           {
-                      #            "b1": trial.suggest_float("beta1", 0.5, 1.0, log=True),
-                      #            "b2": trial.suggest_float("beta2", 0.5, 1.0, log=True),
-                      #           }
+                      "adam":
+                          {
+                              "init_value": init_value,
+                          },
+                      "overdispersion_scale_prior": args.overdispersion_scale_prior,
+                      "var_hyperprior": args.var_hyperprior,
                       }
 
         # Evaluate over multiple datasets
@@ -143,7 +143,7 @@ def main():
         return mean_f1
 
     sampler = optuna.samplers.GPSampler(seed=args.seed)
-    study_name = f"{strftime('%Y%m%d-%H%M%S')}_{args.model_type}_mode{args.mode}_neg{args.neg}_clonotype{args.clonotype}_alpha_model{args.alpha_model}"
+    study_name = f"{strftime('%Y%m%d-%H%M%S')}_mode{args.mode}_neg{args.neg}_clonotype{args.clonotype}_lr{args.lr}_alpha_model{args.alpha_model}_priors{args.overdispersion_scale_prior},{args.var_hyperprior}"
     os.makedirs("optuna_study", exist_ok=True)
 
     study = optuna.create_study(storage=f"sqlite:///optuna_study/{study_name}.db",

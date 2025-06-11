@@ -841,6 +841,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             "sigma_q_var_prior": 10.0,
             "alpha_var_prior": 10.0,
             "var_hyperprior": 10.0,
+            "overdispersion_scale_prior": 1.0,
         }
 
     @property
@@ -893,6 +894,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         cluster_variances = model_config["cluster_variances"]
         var_hyperprior = model_config["var_hyperprior"]  # Variance for priors if using alpha_model = kmeans
         tau_concentration_prior = model_config["tau_concentration_prior"]
+        overdispersion_scale_prior = model_config["overdispersion_scale_prior"]
 
         # Cluster probability prior
         if clone is not None:
@@ -915,7 +917,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         if self.alpha_model == "overdispersion":
             # Convert kmeans priors to deltas, due to cumsum ordering
             mean_deltas = jnp.array([cluster_means[0], cluster_means[1] - cluster_means[0]])
-            var_deltas = jnp.array([cluster_variances[0], max(cluster_variances[1] - cluster_variances[0], 1e-5)])
+            var_deltas = jnp.array([cluster_variances[0], max(cluster_variances[1] - cluster_variances[0], 1)])
 
             # Convert kmeans parameters to lognormal parameters with target mean and variance
             # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
@@ -928,19 +930,17 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             q = jnp.cumsum(delta_q, axis=0)
 
             # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
-            overdispersion_prior_dist = npd.HalfCauchy(1)
-            if self.mode == "H":
-                overdispersion = npy.sample("overdispersion", overdispersion_prior_dist)
-            elif self.mode == "C":
+            overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
+
+            if self.mode == "C":
                 # TODO Doesn't work for C yet, since we somehow would need to have access to the mean of each clone
                 with npy.plate("clone_axis", c_nof):
-                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist)
+                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
+                alpha = npy.deterministic("alpha", q.mean() ** 2 / (q.mean() * overdispersion - q.mean()))
             else:
                 with npy.plate("cluster_axis", K):
-                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist)
-            # NB cannot be underdispersed, e.g., overdispersion < 1
-            overdispersion = overdispersion + 1
-            alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
+                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
+                alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
 
         elif self.alpha_model == "kmeans":
             # Variance should roughly follow my guessed "uncertainty" around my prior point in percent,
@@ -973,15 +973,13 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             sigma_alpha_hyperprior = jnp.sqrt(sigma2_alpha_hyperprior)
 
             mu_alpha_prior = jnp.log(alpha_deltas) - sigma2_alpha_hyperprior / 2
-            alpha_dist = npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hyperprior)
-            if self.mode == "H":
-                alpha = npy.sample("alpha", alpha_dist)
-            elif self.mode == "C":
+
+            if self.mode == "C":
                 with npy.plate("clone_axis", c_nof):
-                    alpha = npy.sample("alpha", alpha_dist)
+                    alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior.mean(), scale=sigma_alpha_hyperprior[0]))
             else:
                 with npy.plate("cluster_axis", K):
-                    alpha = npy.sample("alpha", alpha_dist)
+                    alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hyperprior))
 
         else:
             raise NotImplementedError(f" {self.alpha_model} not implemented")
