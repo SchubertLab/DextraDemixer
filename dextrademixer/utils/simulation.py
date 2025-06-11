@@ -589,8 +589,8 @@ class DextramerSimulator:
         hue = pd.Series(df["binder"]).map({0: "non-binder", 1: "binder"})
         x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
         zscore = (x_log - x_log.mean()) / x_log.std()
-        x_no_outliers = x[zscore < 3]  # TODO determine which threshold works the best
-        hue_no_outliers = hue[zscore < 3]
+        x_no_outliers = x[zscore < 4]
+        hue_no_outliers = hue[zscore < 4]
         outlier_thr = x_no_outliers.max()
 
         if "x_neg" in df:
@@ -606,14 +606,14 @@ class DextramerSimulator:
         i = 1
 
         plt.subplot(n_rows, n_cols, i)
-        sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, legend=False)
+        sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
         plt.axvline(outlier_thr, ls='--', c='r')
         sns.despine()
         plt.title(f'Linear (outlier threshold in red)')
         i += 1
 
         plt.subplot(n_rows, n_cols, i)
-        ax = sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers)
+        ax = sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers, hue_order=['non-binder', 'binder', 'Neg control'])
         sns.despine()
         plt.title(f'Linear no outliers (log-transformed z-score > 3)')
         i += 1
@@ -621,14 +621,14 @@ class DextramerSimulator:
         sns.move_legend(ax, "upper center", bbox_to_anchor=(0.5, 1.4), ncol=3, frameon=False, title='Binding status')
 
         plt.subplot(n_rows, n_cols, i)
-        sns.histplot(x=x, discrete=True, stat='percent', binrange=(0, 100), element='step', hue=hue, legend=False)
+        sns.histplot(x=x, discrete=True, stat='percent', binrange=(0, 100), element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
         plt.title(f'Linear x < 100')
         sns.despine()
         i += 1
 
         # Log scale
         plt.subplot(n_rows, n_cols, i)
-        sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, legend=False)
+        sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
         plt.yscale('log')
         plt.axvline(outlier_thr, ls='--', c='r')
         plt.title(f'Log-scale (outlier threshold in red)')
@@ -636,14 +636,14 @@ class DextramerSimulator:
         i += 1
 
         plt.subplot(n_rows, n_cols, i)
-        sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers, legend=False)
+        sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
         plt.yscale('log')
         plt.title(f'Log-scale no outliers (log-transformed z-score > 3)')
         sns.despine()
         i += 1
 
         plt.subplot(n_rows, n_cols, i)
-        sns.histplot(x=x, discrete=True, stat='percent', binrange=(0, 100), element='step', hue=hue, legend=False)
+        sns.histplot(x=x, discrete=True, stat='percent', binrange=(0, 100), element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
         plt.yscale('log')
         plt.title(f'Log-scale x < 100')
         sns.despine()

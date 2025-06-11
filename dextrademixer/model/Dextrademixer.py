@@ -353,7 +353,7 @@ class DextraDemixer(ApMHCDeconvolution):
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
 
-    def plot_results(self, assignment, p_pred, y_true, seed, config):
+    def plot_results(self, assignment, p_pred, y_true=None, seed=42, config=''):
         plt.figure(figsize=(16, 12))
 
         # Plot data colored in predicted class assignment
@@ -496,8 +496,8 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.ylabel("Probability")
 
         # Save plot
-        f1 = f1_score(assignment, y_true)
-        plt.suptitle(config.replace("_", " ").replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}")
+        f1 = f1_score(assignment, y_true) if y_true is not None else -1
+        plt.suptitle(config.replace("_", " ").replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}",)
         os.makedirs("figs", exist_ok=True)
         plt.savefig(f"figs/{config}.png")
         plt.show()
@@ -551,15 +551,16 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         """
         x = self.data["x"].copy()
         # remove outliers
-        zscore = (x - x.mean()) / x.std()
-        x = x[zscore < 20]  # TODO determine which threshold works the best
+        x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
+        zscore = (x_log - x_log.mean()) / x_log.std()
+        x_no_outliers = x[zscore < 4]
         clone = self.data.get("clone", None)
         sigma = self.data.get("sigma", None)
         n_clusters = 2  # KMeans with 2 clusters
 
         # Perform KMeans clustering
-        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x), np.max(x)]), n_init="auto").fit(x.reshape(-1, 1))
-        labels = kmeans.labels_
+        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x), np.max(x)]), n_init="auto").fit(x_no_outliers.reshape(-1, 1))
+        labels = kmeans.predict(x.reshape(-1, 1))
 
         # Initialize lists for cluster attributes
         cluster_means = []
