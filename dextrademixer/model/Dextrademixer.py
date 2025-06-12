@@ -527,10 +527,12 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                               **kwargs):
         """
         """
-
+        clone = None if c is None else jnp.array(c, dtype=INT_DTYPE)
         self.data = {"x": jnp.array(x, dtype=INT_DTYPE),
                      "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=FLOAT_DTYPE),
-                     "clone": None if c is None else jnp.array(c, dtype=INT_DTYPE),
+                     "clone": clone,
+                     # If clone is not contiuous, then there will be problems with indexing
+                     "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
                      "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE),
                      }
 
@@ -554,7 +556,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
         zscore = (x_log - x_log.mean()) / x_log.std()
         x_no_outliers = x[zscore < 4]
-        clone = self.data.get("clone", None)
+        clone = self.data.get("clone_continuous", None)
         sigma = self.data.get("sigma", None)
         n_clusters = 2  # KMeans with 2 clusters
 
@@ -734,7 +736,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
 
         x = self.data["x"]
         x_neg = self.data["x_neg"]
-        clone = self.data["clone"]
+        clone = self.data["clone_continuous"]
         sigma = self.data["sigma"]
 
         # plates
@@ -882,7 +884,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
         x = self.data["x"]
         x_neg = self.data["x_neg"]
-        clone = self.data["clone"]
+        clone = self.data["clone_continuous"]
         sigma = self.data["sigma"]
         N_sample = x.shape[0]
         c_nof = np.unique(clone).size if clone is not None else 0
