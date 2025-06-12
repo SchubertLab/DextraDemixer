@@ -13,7 +13,6 @@ from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, p
 
 import sys
 
-
 sys.path.append("../../")
 from dextrademixer.model import DextraDemixer
 from dextrademixer.utils import convert_str_to_bool_and_none
@@ -24,28 +23,37 @@ multiprocessing.set_start_method("spawn", force=True)
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Run tool on multiple simulation files and average results.")
+    # Data parameters
     parser.add_argument("input_files", nargs="+", help="List of input .h5mu files")
     parser.add_argument("output_file", help="Output CSV file for averaged results")
+    parser.add_argument("--pmhc_key", type=str, default="LTDEMIAQY", help="Processing mode")
+    parser.add_argument("--gex_key", type=str, default="dex", help="Key for multimer counts")
+    parser.add_argument("--label_key", type=str, default=None, help="Key for labels")
+
+    # Model parameters
     parser.add_argument("--model_type", default='mixturemodelkmeans', help="Model type",
                         choices=["mixturemodelkmeans", "mixturemodel"])
-    parser.add_argument("--mode", type=str, default='I', help="Processing mode")
-    parser.add_argument("--pmhc_key", type=str, default="LTDEMIAQY", help="Processing mode")
-    parser.add_argument("--gex_key", type=str, default="dex", help="Processing mode")
+    parser.add_argument("--mode", type=str, default="C", help="Processing mode")
     parser.add_argument("--neg_ctrl_key", type=str, default=None, help="Negative control parameter")
-    parser.add_argument("--ir_clone_key", type=str, default=None, help="Clonotype parameter")
-    parser.add_argument("--threads", type=int, default=None, help="Number of threads")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
-    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
-    parser.add_argument("--n_trials", type=int, default=5, help="Number of trials, in this case number of seeds")
-    parser.add_argument("--mp", type=str, default=True, help="Use multiprocessing")
-    parser.add_argument("--alpha_model", type=str, default='kmeans',
+    parser.add_argument("--ir_clone_key", type=str, default="clone_id", help="Clonotype parameter")
+    parser.add_argument("--alpha_model", type=str, default="overdispersion",
                         choices=["overdispersion", "kmeans"],
                         help="Modeling of the alpha parameter. Options: 'overdispersion', 'kmeans'.")
     parser.add_argument("--overdispersion_scale_prior", type=float, default=1,
                         help="Prior for scale parameter of HalfCauchy for overdispersion model. Not used for kmeans.")
-    parser.add_argument("--var_hyperprior", type=float, default=1000,
+    parser.add_argument("--var_hyperprior", type=float, default=10,
                         help="Prior for scale parameter of kmeans model. Not used for overdispersion.")
+    parser.add_argument("--target_fdr", type=float, default=0.05,
+                        help="Target FDR for posterior class assignment. If None, uses threshold instead.")
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="Threshold for posterior class assignment. If None, uses target_fdr instead.")
+
+    # Optimization parameters
+    parser.add_argument("--threads", type=int, default=None, help="Number of threads")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
+    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
+    parser.add_argument("--mp", type=str, default=True, help="Use multiprocessing")
     return parser.parse_args()
 
 
@@ -77,7 +85,7 @@ def run_inference(f_in, args):
                                      nof_inits=opt_params["nof_inits"],
                                      rng_key=args.seed,
                                      return_loss=True)
-    p_pred, assignment = mixer.predict_posterior_class(target_fdr=0.05)
+    p_pred, assignment = mixer.predict_posterior_class(target_fdr=args.target_fdr, threshold=args.threshold)
 
     config = (f"{args.model_type}_{args.mode}_{args.neg_ctrl_key}_{args.ir_clone_key}_{args.alpha_model}_{opt_params['overdispersion_scale_prior']},{opt_params['var_hyperprior']}_lr={opt_params['adam']['init_value']}\n"
               f"{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}")
