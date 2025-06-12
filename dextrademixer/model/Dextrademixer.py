@@ -861,10 +861,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
             # target pMHC
             if self.mode == "C":
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
-                                                                         concentration=alpha[clone].reshape(
-                                                                             (N_sample, 1))
-                                                                         )
-                                                )
+                                                                         concentration=alpha[clone].reshape((N_sample, 1))))
             else:
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
                                                                          concentration=alpha))
@@ -1040,27 +1037,23 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         # Sample from the mixture model
         with npy.plate("sample_axis", N_sample):
             if x_neg is not None:
-                if self.mode == "H":
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha),
-                                          obs=x_neg)
-                elif self.mode == "C":
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=q[0],
-                                                                concentration=alpha[clone]),
-                                          obs=x_neg)
+                if self.mode == "C":
+                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                                          fn=npd.NegativeBinomial2(mean=q[0],
+                                                                concentration=alpha[clone]),)
+                elif self.mode == "C+":
+                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                                          fn=npd.NegativeBinomial2(mean=q[0],
+                                                                concentration=alpha[clone, 0]),)
                 else:
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha[0]),
-                                          obs=x_neg)
+                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                                          fn=npd.NegativeBinomial2(mean=q[0], concentration=alpha[0]),)
 
             # target pMHC
             if self.mode == "C":
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
-                                                                         concentration=alpha[clone].reshape(
-                                                                             (N_sample, 1))
-                                                                         )
-                                                )
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q, concentration=alpha[clone, np.newaxis]))
+            elif self.mode == "C+":
+                    mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q, concentration=alpha[clone]))
             else:
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
                                                                          concentration=alpha))
