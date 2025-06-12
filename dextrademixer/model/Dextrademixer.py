@@ -134,7 +134,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         if self.mode == "C":
             if c is None:
-                raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
+                raise ValueError("If `mode`= C a clonotype vector `ir_clone_key` must be specified.")
 
         self._check_parameters(x, x_neg, c, sigma)
         self.model.preprocess_model_data(x=x, neg_cont=x_neg, c=c, sigma=sigma, mode=self.mode,
@@ -983,53 +983,74 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
 
             if self.mode == "C":
-                # TODO Doesn't work for C yet, since we somehow would need to have access to the mean of each clone
+                # For each clonotype, we have one alpha parameter
                 with npy.plate("clone_axis", c_nof):
                     overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
                 alpha = npy.deterministic("alpha", q.mean() ** 2 / (q.mean() * overdispersion - q.mean()))
             else:
+                # For each mixture component, we have one alpha parameter
                 with npy.plate("cluster_axis", K):
                     overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
                 alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
 
         elif self.alpha_model == "kmeans":
-            # Variance should roughly follow my guessed "uncertainty" around my prior point in percent,
-            # and put adjust the standard deviation at those point sigma^2=(log(1+p))**2
-            # e.g., if I think x=30, and I think it should be around 50% of it [15, 45], then I would have
-            # sigma^2=log(1+0.5)**2=0.164
-
-            # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and hyperprior variances
-            var_hyperprior_deltas = jnp.array([var_hyperprior, 1])  # 1 in delta to have the similar variance for both
+            # NB mean parameter: q ~ LogNormal(mu_q, sigma_q),
+            # with prior on cluster means and hyperprior variances
             mean_deltas = jnp.array([cluster_means[0], cluster_means[1] - cluster_means[0]])
 
-            sigma2_q_hyperprior = jnp.log(var_hyperprior_deltas / mean_deltas ** 2 + 1)
+            sigma2_q_hyperprior = jnp.log(var_hyperprior / mean_deltas ** 2 + 1)
             sigma_q_hyperprior = jnp.sqrt(sigma2_q_hyperprior)
             mu_q_prior = jnp.log(mean_deltas) - sigma2_q_hyperprior / 2
 
             delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_hyperprior))
             q = jnp.cumsum(delta_q, axis=0)
 
-            # NB concentration parameter: convert to alpha, alpha_prior ~ LogNormal(mu_alpha, sigma_alpha), with cluster variance and hyperprior variances
-            # Calculate alpha parameter with target variance
-            alpha_prior = cluster_means**2 / (cluster_variances - cluster_means)
-            # In case of underdispersion (negative alpha), set to a high number
-            alpha_prior[alpha_prior <= 0] = 100
+            # NB concentration parameter alpha: convert kmeans variance priors to Gamma parameters,
+            # alpha ~ Gamma(a, b),
+            # with a, b so that mean = cluster_variance and var = hyperprior_variances of the LogNormal
 
-            var_hyperprior_deltas = jnp.array([var_hyperprior, 1])  # 1 in delta to have similar variance for both
-            # Due to cumsum ordering, second component cannot be smaller than first
-            alpha_deltas = jnp.array([alpha_prior[0], jnp.maximum(alpha_prior[1] - alpha_prior[0], 1e-5)])
+            # Convert kmeans cluster variance to alpha parameter (also dependent on cluster mean)
+            if self.mode == "C":
+                # Use mean between both clusters as prior
+                alpha_prior = cluster_means.mean()**2 / (cluster_variances.mean() - cluster_means.mean())
+                alpha_prior = alpha_prior if alpha_prior > 0 else 100
+            elif self.mode == "I" or self.mode == "C+":
+                alpha_prior = cluster_means**2 / (cluster_variances - cluster_means)
+                # In case of underdispersion (negative alpha), set to a high number, so var ~ mean
+                alpha_prior[alpha_prior <= 0] = 100
 
-            sigma2_alpha_hyperprior = jnp.log(var_hyperprior_deltas / alpha_deltas ** 2 + 1)
-            sigma_alpha_hyperprior = jnp.sqrt(sigma2_alpha_hyperprior)
+            # LogNormal
+            # sigma2_alpha_hyperprior = jnp.log(var_hyperprior / alpha_prior ** 2 + 1)
+            # sigma_alpha_hyperprior = jnp.sqrt(sigma2_alpha_hyperprior)
+            #
+            # mu_alpha_prior = jnp.log(alpha_prior) - sigma2_alpha_hyperprior / 2
 
-            mu_alpha_prior = jnp.log(alpha_deltas) - sigma2_alpha_hyperprior / 2
+            # if self.mode == "C":
+            #     with npy.plate("clone_axis", c_nof):
+            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hyperprior))
+            # elif self.mode == "C+":
+            #     with npy.plate("clone_axis", c_nof):
+            #         alpha = npy.sample("alpha",
+            #                            npd.LogNormal(mu_alpha_prior, sigma_alpha_hyperprior).expand([K]).to_event(1))
+            # elif self.mode == 'I':
+            #     with npy.plate("cluster_axis", K):
+            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hyperprior))
+
+            # Gamma distribution
+            # compute Gamma parameters
+            a = alpha_prior ** 2 / var_hyperprior
+            b = alpha_prior / var_hyperprior
 
             if self.mode == "C":
                 with npy.plate("clone_axis", c_nof):
                     alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior.mean(), scale=sigma_alpha_hyperprior[0]))
             else:
+                    # shape = (c_nof, 1)
+                    alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
+            elif self.mode == 'I':
                 with npy.plate("cluster_axis", K):
-                    alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hyperprior))
+                    # shape = (2, )
+                    alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
 
         else:
             raise NotImplementedError(f" {self.alpha_model} not implemented")
