@@ -392,8 +392,7 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.title("True class assignment log-scale")
 
         plt.subplot(3, 4, 10)
-        sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true,
-                        style=y_true, markers={False: ".", True: "X"})
+        sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true)
         sns.despine()
         plt.ylabel("Posterior probability")
         plt.title("Predicted probability of UMI count with true label")
@@ -404,61 +403,108 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # Extract mean from posterior samples
         q = posterior_samples["q"].mean(0)
-        if self.alpha_model == 'overdispersion':
-            overdispersion = posterior_samples["overdispersion"].mean(0)
-            alpha = q**2 / (q * (overdispersion + 1) - q)
-        else:
-            alpha = posterior_samples["alpha"].mean(0)
         w = posterior_samples["w"].mean(0)
-
-        # If mode is C, we average over the clonotypes
-        if self.mode == "C":
-            # TODO visualize distribution for each clonotype
-            alpha = alpha.mean(0)
-
         x = np.arange(0, self.model.data["x"].max())
-        if self.mode == "H" or self.mode == "C":
-            alpha0 = alpha
-            alpha1 = alpha
-        elif self.mode == "I":
-            alpha0 = alpha[0]
-            alpha1 = alpha[1]
 
-        prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha0).log_prob(x))
-        prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha1).log_prob(x))
-
-        if self.model.data["clone"] is not None:
-            # w.shape = (#clonotypes, 2)
-            # probX = (max UMI)
-            prob0_mix = prob0[None,] * w[:, 0:1]
-            prob1_mix = prob1[None,] * w[:, 1:2]
-            w_mean = w.mean(0)
-            x = np.tile(np.arange(0, self.model.data["x"].max()), (prob0_mix.shape[0]))
+        # extract alpha, which depends on the mode and alpha_model
+        if self.alpha_model == 'kmeans':
+            # shape will be defined by mode, C (C, 1), C+ (C, 2), I (1, 2)
+            alpha = posterior_samples["alpha"].mean(0)
         else:
-            # w.shape = (2,)
-            prob0_mix = prob0 * w[0]
-            prob1_mix = prob1 * w[1]
-            w_mean = w
-        # Mixture of Negative Binomial
-        plt.subplot(3, 4, 4)
-        sns.lineplot(x=x, y=prob0_mix.reshape(-1),
-                     label=f"q={q[0]:.2f} alpha={alpha0:.2f}", linewidth=3)
-        sns.lineplot(x=x, y=prob1_mix.reshape(-1),
-                    label=f"q={q[1]:.2f} alpha={alpha1:.2f}", linewidth=3)
-        sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
-                     label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
-        sns.despine()
-        plt.title("Posterior Mixture NB")
-        plt.ylabel("Probability")
+            overdispersion = posterior_samples["overdispersion"].mean(0)
+            if self.mode == "C":
+                # alpha.shape = (C, 1)
+                alpha = q.mean()**2 / (q.mean() * (overdispersion + 1) - q.mean())
+            elif self.mode == "C+":
+                # alpha.shape = (C, 2)
+                alpha = q**2 / (q * (overdispersion[:, np.newaxis] + 1) - q)
+            elif self.mode == "I":
+                # alpha.shape = (1, 2)
+                alpha = q**2 / (q * (overdispersion + 1) - q)
 
-        # Individual Negative Binomial
-        plt.subplot(3, 4, 8)
-        sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0, label=f"q={q[0]:.2f} alpha={alpha0:.2f}")
-        sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, label=f"q={q[1]:.2f} alpha={alpha1:.2f}")
-        sns.despine()
-        plt.title("Posterior NB without mixing weights")
-        plt.ylabel("Probability")
+        if self.mode == "C":
+            prob0 = jnp.exp(npd.NegativeBinomial2(mean=q[0], concentration=alpha[:, np.newaxis]).log_prob(x))
+            prob1 = jnp.exp(npd.NegativeBinomial2(mean=q[1], concentration=alpha[:, np.newaxis]).log_prob(x))
 
+            # Individual Negative Binomial
+            plt.subplot(3, 4, 8)
+            sns.lineplot(x=x, y=prob0.mean(0), c=sns.color_palette('tab10')[0], label=f"q={q[0]:.2f} alpha={alpha.mean():.2f}")
+            sns.lineplot(x=x, y=prob1.mean(0), c=sns.color_palette('tab10')[1], label=f"q={q[1]:.2f} alpha={alpha.mean():.2f}")
+            plt.fill_between(x, np.quantile(prob0, 0.05, axis=0), np.quantile(prob0, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
+            plt.fill_between(x, np.quantile(prob1, 0.05, axis=0), np.quantile(prob1, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
+            plt.legend()
+            sns.despine()
+            plt.title("Posterior NB without mixing weights")
+            plt.ylabel("Probability")
+
+            # Mixture model
+            # Use different w for each clonotype: w.shape = (#clonotypes, 2)
+            prob0_mix = prob0 * w[:, 0:1]
+            prob1_mix = prob1 * w[:, 1:2]
+            w_mean = w.mean(0)  # mean over all clonotypes
+
+            plt.subplot(3, 4, 4)
+            sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0], label=f"q={q[0]:.2f} alpha={alpha.mean():.2f}")
+            sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1], label=f"q={q[1]:.2f} alpha={alpha.mean():.2f}")
+            sns.lineplot(x=x, y=prob0_mix.mean(0)+prob1_mix.mean(0), c="k", linestyle=":", label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
+            plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.90, axis=0), alpha=0.3, label='5%-95% percentile')
+            plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.90, axis=0), alpha=0.3, label='5%-95% percentile')
+            plt.legend()
+            sns.despine()
+            plt.title("Posterior Mixture NB")
+            plt.ylabel("Probability")
+
+        elif self.mode == "C+":
+            npd.NegativeBinomial2(mean=q, concentration=alpha)
+        elif self.mode == "I":
+            npd.NegativeBinomial2(mean=q, concentration=alpha)
+            prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha[0]).log_prob(x))
+            prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha[1]).log_prob(x))
+
+            # Individual Negative Binomial
+            plt.subplot(3, 4, 8)
+            sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0, label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}")
+            sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}")
+            sns.despine()
+            plt.title("Posterior NB without mixing weights")
+            plt.ylabel("Probability")
+
+            # Mixture model
+            plt.subplot(3, 4, 4)
+            if self.model.data["clone_continuous"] is not None:
+                # Use different w for each clonotype: w.shape = (#clonotypes, 2)
+                # probX = (max UMI)
+                prob0_mix = prob0[None,] * w[:, 0:1]
+                prob1_mix = prob1[None,] * w[:, 1:2]
+                w_mean = w.mean(0)
+                sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
+                             label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}")
+                sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1],
+                             label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}")
+                sns.lineplot(x=x, y=prob0_mix.mean(0) + prob1_mix.mean(0), c="k", linestyle=":",
+                             label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
+                plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0),
+                                 alpha=0.3, label='5%-95% percentile')
+                plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
+                                 alpha=0.3, label='5%-95% percentile')
+                plt.legend()
+            else:
+                # w.shape = (2,)
+                prob0_mix = prob0 * w[0]
+                prob1_mix = prob1 * w[1]
+                w_mean = w
+
+                sns.lineplot(x=x, y=prob0_mix.reshape(-1),
+                             label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", linewidth=3)
+                sns.lineplot(x=x, y=prob1_mix.reshape(-1),
+                            label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", linewidth=3)
+                sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
+                             label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
+            sns.despine()
+            plt.title("Posterior Mixture NB")
+            plt.ylabel("Probability")
+
+        # Plot kmeans clusters
         if self.model_type == "mixturemodelkmeans":
             cluster_means = self.model._kmeans_dict["cluster_means"]
             cluster_vars = self.model._kmeans_dict["cluster_variances"]
@@ -496,7 +542,11 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.ylabel("Probability")
 
         # Save plot
-        f1 = f1_score(assignment, y_true) if y_true is not None else -1
+        try:
+            f1 = f1_score(assignment, y_true)
+        except:
+            # if y_true is None or str
+            f1 = -1
         plt.suptitle(config.replace("_", " ").replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}",)
         os.makedirs("figs", exist_ok=True)
         plt.savefig(f"figs/{config}.png")
