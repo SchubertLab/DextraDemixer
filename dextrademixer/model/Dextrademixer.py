@@ -1015,16 +1015,12 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
 
             if self.mode == "C":
-                # For each clonotype, we have one alpha parameter
                 # For each clonotype, we have one alpha parameter, weight should adjust itself so that one alpha
                 # parameter is actually used
                 with npy.plate("clone_axis", c_nof):
                     overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
                     q_weighted = (w * q).mean(1)
                 alpha = npy.deterministic("alpha", q_weighted ** 2 / (q_weighted * overdispersion - q_weighted))
-                with npy.plate("clone_axis", c_nof):
-                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
-                alpha = npy.deterministic("alpha", q.mean() ** 2 / (q.mean() * overdispersion - q.mean()))
             else:
                 # For each mixture component, we have one alpha parameter
                 with npy.plate("cluster_axis", K):
@@ -1038,9 +1034,6 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             # Cumsum also cumsums the variances, use a small value to be added
             var_hp_deltas = jnp.array([var_hp, 1])
 
-            sigma2_q_hyperprior = jnp.log(var_hyperprior / mean_deltas ** 2 + 1)
-            sigma_q_hyperprior = jnp.sqrt(sigma2_q_hyperprior)
-            mu_q_prior = jnp.log(mean_deltas) - sigma2_q_hyperprior / 2
             sigma2_q_hp = jnp.log(var_hp_deltas / mean_deltas ** 2 + 1)
             sigma_q_hp = jnp.sqrt(sigma2_q_hp)
             mu_q_prior = jnp.log(mean_deltas) - sigma2_q_hp / 2
@@ -1065,31 +1058,29 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             alpha_prior[alpha_prior <= 0] = 100
 
             # LogNormal
-            # sigma2_alpha_hyperprior = jnp.log(var_hyperprior / alpha_prior ** 2 + 1)
-            # sigma_alpha_hyperprior = jnp.sqrt(sigma2_alpha_hyperprior)
+            # sigma2_alpha_hp = jnp.log(var_hp / alpha_prior ** 2 + 1)
+            # sigma_alpha_hp = jnp.sqrt(sigma2_alpha_hp)
             #
-            # mu_alpha_prior = jnp.log(alpha_prior) - sigma2_alpha_hyperprior / 2
+            # mu_alpha_prior = jnp.log(alpha_prior) - sigma2_alpha_hp / 2
 
             # if self.mode == "C":
             #     with npy.plate("clone_axis", c_nof):
-            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hyperprior))
+            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hp))
             # elif self.mode == "C+":
             #     with npy.plate("clone_axis", c_nof):
             #         alpha = npy.sample("alpha",
-            #                            npd.LogNormal(mu_alpha_prior, sigma_alpha_hyperprior).expand([K]).to_event(1))
+            #                            npd.LogNormal(mu_alpha_prior, sigma_alpha_hp).expand([K]).to_event(1))
             # elif self.mode == 'I':
             #     with npy.plate("cluster_axis", K):
-            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hyperprior))
+            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hp))
 
             # Gamma distribution
             # compute Gamma parameters
-            a = alpha_prior ** 2 / var_hyperprior
-            b = alpha_prior / var_hyperprior
+            a = alpha_prior ** 2 / var_hp
+            b = alpha_prior / var_hp
 
             if self.mode == "C":
                 with npy.plate("clone_axis", c_nof):
-                    alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior.mean(), scale=sigma_alpha_hyperprior[0]))
-            else:
                     # shape = (c_nof, 1)
                     alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
             elif self.mode == 'I':
