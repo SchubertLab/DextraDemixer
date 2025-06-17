@@ -13,7 +13,6 @@ from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, p
 
 import sys
 
-
 sys.path.append("../../")
 from dextrademixer.model import DextraDemixer
 from dextrademixer.utils import convert_str_to_bool_and_none
@@ -24,70 +23,105 @@ multiprocessing.set_start_method("spawn", force=True)
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Run tool on multiple simulation files and average results.")
+    # Data parameters
     parser.add_argument("input_files", nargs="+", help="List of input .h5mu files")
     parser.add_argument("output_file", help="Output CSV file for averaged results")
-    parser.add_argument("--mode", required=True, help="Processing mode")
-    parser.add_argument("--neg", required=True, help="Negative control parameter")
-    parser.add_argument("--clonotype", required=True, help="Clonotype parameter")
+    parser.add_argument("--pmhc_key", type=str, default="pmhc1", help="Key for pMHC counts")
+    parser.add_argument("--gex_key", type=str, default="gex", help="Key for pMHC count modality. "
+                                                                   "Usually saved in 'gex' modality.")
+    parser.add_argument("--label_key", type=str, default="is_binder", help="Key for binder labels")
+
+    # Model parameters
     parser.add_argument("--model_type", default='mixturemodelkmeans', help="Model type",
                         choices=["mixturemodelkmeans", "mixturemodel"])
+    parser.add_argument("--mode", type=str, default="C", help="Processing mode")
+    parser.add_argument("--neg_ctrl_key", type=str, default=None, help="Negative control key. "
+                                                                       "If none, no negative control is used.")
+    parser.add_argument("--ir_clone_key", type=str, default='clone_id', help="Clonotype id key. "
+                                                                             "If None, no clonotype id is used.")
+    parser.add_argument("--alpha_model", type=str, default="overdispersion",
+                        choices=["overdispersion", "kmeans"],
+                        help="Modeling of the alpha parameter. Options: 'overdispersion', 'kmeans'.")
+    parser.add_argument("--overdispersion_scale_prior", type=float, default=None,
+                        help="Prior for scale parameter of HalfCauchy for overdispersion model. "
+                             "Not used if alpha_model == kmeans. None for optuna to suggest.")
+    parser.add_argument("--prior_value", type=float, default=None,
+                        help="Prior for scale parameter if alpha_model == kmeans "
+                             "or scale for HalfCauchy if alpha_model == overdispersion. "
+                             "None for optuna to suggest.")
+    parser.add_argument("--target_fdr", type=float, default=0.05,
+                        help="Target FDR for posterior class assignment. If None, uses threshold instead.")
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="Threshold for posterior class assignment. If None, uses target_fdr instead.")
+
+    # Optimization parameters
     parser.add_argument("--threads", type=int, default=None, help="Number of threads")
+    parser.add_argument("--n_trials", type=int, default=100, help="Number of optuna trials")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
     parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
     parser.add_argument("--n_trials", type=int, default=5, help="Number of trials, in this case number of seeds")
+    parser.add_argument("--n_inits", type=int, default=10, help="Number of initializations for SVI."
+                                                                "Can be set low, if using k-means to initialize.")
+    parser.add_argument("--maxiter", type=int, default=10000,
+                        help="Maximum number of iterations for optimization."
+                             "If None, uses optuna to suggest.")
+    parser.add_argument("--lr", type=float, default=None,
+                        help="Learning rate for Adam optimizer. If None, uses optuna to suggest.")
     parser.add_argument("--mp", type=str, default=True, help="Use multiprocessing")
-    parser.add_argument("--alpha_model", type=str, default='overdispersion',
-                        choices=["overdispersion", "kmeans"],
-                        help="Modeling of the alpha parameter. Options: 'overdispersion', 'kmeans'.")
-    parser.add_argument("--overdispersion_scale_prior", type=float, default=1,
-                        help="Prior for scale parameter of HalfCauchy for overdispersion model. Not used for kmeans.")
-    parser.add_argument("--var_hyperprior", type=float, default=10,
-                        help="Prior for scale parameter of kmeans model. Not used for overdispersion.")
     return parser.parse_args()
 
 
-def run_inference(opt_params, f_in, model_type, m, alpha_model, neg_ctrl, ir_clone, seed, trial_number):
+def run_inference(f_in: str, args: argparse.Namespace, opt_params: dict, trial_number: int=-1):
     numpyro.set_host_device_count(1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         mdata = mu.read(f_in)
-    y_true = mdata.mod["airr"].obs["is_binder"]
+    y_true = mdata.mod["airr"].obs[args.label_key]
 
-    mixer = DextraDemixer(model_type=model_type, mode=m, alpha_model=alpha_model)
-    mixer.preprocess_model_data(mdata, "pmhc1",
-                                neg_ctrl_key=neg_ctrl,
-                                ir_clone_key=ir_clone)
+    mixer = DextraDemixer(model_type=args.model_type, mode=args.mode, alpha_model=args.alpha_model)
+    mixer.preprocess_model_data(mdata,
+                                pmhc_key=args.pmhc_key,
+                                gex_key=args.gex_key,
+                                neg_ctrl_key=args.neg_ctrl_key,
+                                ir_clone_key=args.ir_clone_key)
 
-    mixer.model._model_config["overdispersion_scale_prior"] = opt_params["overdispersion_scale_prior"]
-    mixer.model._model_config["var_hyperprior"] = opt_params["var_hyperprior"]
+    mixer.model._model_config["overdispersion_scale_prior"] = opt_params["prior_value"]
+    mixer.model._model_config["var_hyperprior"] = opt_params["prior_value"]
 
     trace, best_loss = mixer.fit_svi(svi_config=opt_params,
-                                     nof_inits=opt_params["nof_inits"],
-                                     rng_key=seed,
+                                     nof_inits=opt_params["n_inits"],
+                                     rng_key=args.seed,
                                      return_loss=True)
-    p_pred, assignment_fdr = mixer.predict_posterior_class(threshold=0.5)
+    p_pred, assignment = mixer.predict_posterior_class(target_fdr=args.target_fdr, threshold=args.threshold)
 
     config = (f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{alpha_model}_{opt_params['overdispersion_scale_prior']},{opt_params['var_hyperprior']}_lr={opt_params['adam']['init_value']}"
               f"{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}"
+    config = (f"{args.model_type}_{args.mode}_neg={args.neg_ctrl_key}_clone={args.ir_clone_key}_{args.alpha_model}_"
+              f"prior={opt_params['prior_value']}_"
+              f"lr{opt_params['adam']['init_value']}_"
+              f"{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}_"
               f"_Trial={trial_number}")
+    config = config.replace("/", "_").replace(":", "_")
 
-    mixer.plot_results(assignment_fdr, p_pred, y_true, seed, config)
+    mixer.plot_results(assignment, p_pred, y_true, args.seed, config)
 
     os.makedirs("saved_models", exist_ok=True)
     with open(f"saved_models/{config}.pkl", "wb") as f:
         pickle.dump(mixer, f)
 
-    return y_true, p_pred, assignment_fdr, best_loss
+    return y_true, p_pred, assignment, best_loss
 
 
-def worker(dataset, opt_params, model_type, mode, alpha_model, neg, clonotype, seed, trial_number):
-    try:
-        y_true, p_pred, assignment_fdr, best_loss = run_inference(opt_params, dataset, model_type, mode,
-                                                                  alpha_model, neg, clonotype, seed, trial_number)
-    except Exception as e:
-        raise RuntimeError(f"Failed on {dataset}") from e
-
+def worker(f_in, args, opt_params, trial_number=-1):
+    # If multiprocessing is enabled, the following is needed to track which dataset failed
+    if args.mp:
+        try:
+            y_true, p_pred, assignment_fdr, best_loss = run_inference(f_in, args, opt_params, trial_number=trial_number)
+        except Exception as e:
+            raise RuntimeError(f"Failed on {f_in}") from e
+    else:
+        y_true, p_pred, assignment_fdr, best_loss = run_inference(f_in, args, opt_params, trial_number=trial_number)
     return y_true, p_pred, assignment_fdr, best_loss
 
 
@@ -95,31 +129,25 @@ def main():
     args = parse_arguments()
     args = convert_str_to_bool_and_none(args)
 
-    def objective(trial):
+    def objective(trial: optuna.Trial) -> float:
         """Optuna objective function."""
-        init_value = trial.suggest_float("init_value", 1e-4, 1e0, log=True) if args.lr is None else args.lr
-
-        opt_params = {"maxiter": args.maxiter,
-                      "nof_inits": 10,
-                      "adam":
-                          {
-                              "init_value": init_value,
-                          },
-                      "overdispersion_scale_prior": args.overdispersion_scale_prior,
-                      "var_hyperprior": args.var_hyperprior,
-                      }
-
         # Evaluate over multiple datasets
+        opt_params = {"maxiter": trial.suggest_int("maxiter", 500, 50000, log=True)
+                                 if args.maxiter is None else args.maxiter,
+                      "n_inits": args.n_inits,
+                      "adam": {"init_value": trial.suggest_float("init_value", 1e-4, 1e0, log=True)
+                                             if args.lr is None else args.lr, },
+                      "prior_value": trial.suggest_float("prior_value", 1e-2, 1e1, log=True)
+                                     if args.prior_value is None else args.prior_value,
+                      }
         if args.mp:
             with multiprocessing.Pool(processes=args.threads) as pool:
-                results = pool.starmap(worker, [(dataset, opt_params, args.model_type, args.mode,
-                                                 args.alpha_model, args.neg, args.clonotype, args.seed, trial.number)
-                                                for dataset in args.input_files], chunksize=1)
+                results = pool.starmap(worker, [(f_in, args, opt_params, trial.number)
+                                                for f_in in args.input_files], chunksize=1)
         else:
             results = []
-            for dataset in args.input_files:
-                results.append(worker(dataset, opt_params, args.model_type, args.mode,
-                                      args.alpha_model, args.neg, args.clonotype, args.seed, trial.number))
+            for f_in in args.input_files:
+                results.append(worker(f_in, args, opt_params, trial.number))
 
         y_true, p_pred, assignment_fdr, best_loss = zip(*results)
 
@@ -148,7 +176,9 @@ def main():
         return mean_f1
 
     sampler = optuna.samplers.GPSampler(seed=args.seed)
-    study_name = f"{strftime('%Y%m%d-%H%M%S')}_mode{args.mode}_neg{args.neg}_clonotype{args.clonotype}_lr{args.lr}_alpha_model{args.alpha_model}_priors{args.overdispersion_scale_prior},{args.var_hyperprior}"
+    study_name = (f"{strftime('%Y%m%d-%H%M%S')}_mode={args.mode}_neg={args.neg_ctrl_key}_clone={args.ir_clone_key}_"
+                  f"lr={args.lr}_alpha_model={args.alpha_model}_"
+                  f"prior={args.prior_value}")
     os.makedirs("optuna_study", exist_ok=True)
 
     study = optuna.create_study(storage=f"sqlite:///optuna_study/{study_name}.db",
