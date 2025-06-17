@@ -606,6 +606,14 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
         zscore = (x_log - x_log.mean()) / x_log.std()
         x_no_outliers = x[zscore < 4]
+        x_no_outliers = x_no_outliers.sort()
+        diffs = np.diff(x_no_outliers, prepend=x_no_outliers[0])
+        # TODO What value to define a huge gap?
+        huge_gap_indices = np.where(diffs > x_no_outliers.max() / 3)[0]
+        if len(huge_gap_indices) > 0:
+            first_gap_index = huge_gap_indices[0]
+            x_no_outliers = x_no_outliers[:first_gap_index]
+
         clone = self.data.get("clone_continuous", None)
         sigma = self.data.get("sigma", None)
         n_clusters = 2  # KMeans with 2 clusters
