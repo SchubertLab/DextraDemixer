@@ -10,6 +10,8 @@ import optuna
 import numpy as np
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
                              accuracy_score)
+from optuna.storages import JournalStorage
+from optuna.storages.journal import JournalFileBackend
 
 import sys
 
@@ -58,9 +60,6 @@ def parse_arguments():
     parser.add_argument("--threads", type=int, default=None, help="Number of threads")
     parser.add_argument("--n_trials", type=int, default=100, help="Number of optuna trials")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
-    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
-    parser.add_argument("--n_trials", type=int, default=5, help="Number of trials, in this case number of seeds")
     parser.add_argument("--n_inits", type=int, default=10, help="Number of initializations for SVI."
                                                                 "Can be set low, if using k-means to initialize.")
     parser.add_argument("--maxiter", type=int, default=10000,
@@ -95,8 +94,6 @@ def run_inference(f_in: str, args: argparse.Namespace, opt_params: dict, trial_n
                                      return_loss=True)
     p_pred, assignment = mixer.predict_posterior_class(target_fdr=args.target_fdr, threshold=args.threshold)
 
-    config = (f"{model_type}_{m}_{neg_ctrl}_{ir_clone}_{alpha_model}_{opt_params['overdispersion_scale_prior']},{opt_params['var_hyperprior']}_lr={opt_params['adam']['init_value']}"
-              f"{f_in.replace('simulation/sim_', '').replace('.h5mu', '')}"
     config = (f"{args.model_type}_{args.mode}_neg={args.neg_ctrl_key}_clone={args.ir_clone_key}_{args.alpha_model}_"
               f"prior={opt_params['prior_value']}_"
               f"lr{opt_params['adam']['init_value']}_"
@@ -181,8 +178,9 @@ def main():
                   f"prior={args.prior_value}")
     os.makedirs("optuna_study", exist_ok=True)
 
-    study = optuna.create_study(storage=f"sqlite:///optuna_study/{study_name}.db",
-                                sampler=sampler, direction="maximize", study_name=study_name)
+    storage = JournalStorage(JournalFileBackend(f"optuna_study/{study_name}.log"))
+    study = optuna.create_study(storage=storage,
+                                sampler=sampler, direction="maximize", study_name=study_name,)
     study.optimize(objective, n_trials=args.n_trials)
 
     df = study.trials_dataframe()
