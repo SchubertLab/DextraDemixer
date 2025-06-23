@@ -411,16 +411,18 @@ class DextraDemixer(ApMHCDeconvolution):
             # shape will be defined by mode, C (C, 1), C+ (C, 2), I (1, 2)
             alpha = posterior_samples["alpha"].mean(0)
         else:
-            overdispersion = posterior_samples["overdispersion"].mean(0)
+            overdispersion = posterior_samples["overdispersion"].mean(0) + 1
             if self.mode == "C":
                 # alpha.shape = (C, 1)
-                alpha = q.mean()**2 / (q.mean() * (overdispersion + 1) - q.mean())
-            elif self.mode == "C+":
-                # alpha.shape = (C, 2)
-                alpha = q**2 / (q * (overdispersion[:, np.newaxis] + 1) - q)
+                q_weighted = (w * q).mean(1)
+                alpha = q_weighted**2 / (q_weighted * (overdispersion) - q_weighted)
+                alpha_weighted = (w[self.model.data["clone_continuous"]] * alpha[self.model.data["clone_continuous"]][:, None])
+                # weighted alpha is the mean of alpha weighted by w, as this reflects better the contribution of
+                # each alpha on average for this component
+                alpha_weighted = alpha_weighted.mean(0) / w.mean(0)
             elif self.mode == "I":
                 # alpha.shape = (1, 2)
-                alpha = q**2 / (q * (overdispersion + 1) - q)
+                alpha = q**2 / (q * (overdispersion) - q)
 
         if self.mode == "C":
             prob0 = jnp.exp(npd.NegativeBinomial2(mean=q[0], concentration=alpha[:, np.newaxis]).log_prob(x))
@@ -428,8 +430,8 @@ class DextraDemixer(ApMHCDeconvolution):
 
             # Individual Negative Binomial
             plt.subplot(3, 4, 8)
-            sns.lineplot(x=x, y=prob0.mean(0), c=sns.color_palette('tab10')[0], label=f"q={q[0]:.2f} alpha={alpha.mean():.2f}")
-            sns.lineplot(x=x, y=prob1.mean(0), c=sns.color_palette('tab10')[1], label=f"q={q[1]:.2f} alpha={alpha.mean():.2f}")
+            sns.lineplot(x=x, y=prob0.mean(0), c=sns.color_palette('tab10')[0], label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
+            sns.lineplot(x=x, y=prob1.mean(0), c=sns.color_palette('tab10')[1], label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
             plt.fill_between(x, np.quantile(prob0, 0.05, axis=0), np.quantile(prob0, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
             plt.fill_between(x, np.quantile(prob1, 0.05, axis=0), np.quantile(prob1, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
             plt.legend()
