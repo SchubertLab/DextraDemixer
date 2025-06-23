@@ -611,7 +611,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         x_no_outliers = x_no_outliers.sort()
         diffs = np.diff(x_no_outliers, prepend=x_no_outliers[0])
         # TODO What value to define a huge gap?
-        huge_gap_indices = np.where(diffs > x_no_outliers.max() / 3)[0]
+        huge_gap_indices = np.where(diffs > x.max() / 3)[0]
         if len(huge_gap_indices) > 0:
             first_gap_index = huge_gap_indices[0]
             x_no_outliers = x_no_outliers[:first_gap_index]
@@ -621,7 +621,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         n_clusters = 2  # KMeans with 2 clusters
 
         # Perform KMeans clustering
-        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x), np.max(x)]), n_init="auto").fit(x_no_outliers.reshape(-1, 1))
+        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x_no_outliers), np.max(x_no_outliers)]), n_init="auto").fit(x_no_outliers.reshape(-1, 1))
         labels = kmeans.predict(x.reshape(-1, 1))
 
         # Initialize lists for cluster attributes
@@ -999,8 +999,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         # Variant 1: Model alpha as through overdispersion
         if self.alpha_model == "overdispersion":
             # Convert kmeans priors to deltas, due to cumsum ordering
-            mean_deltas = jnp.array([cluster_means[0], cluster_means[1] - cluster_means[0]])
-            var_deltas = jnp.array([cluster_variances[0], max(cluster_variances[1] - cluster_variances[0], 1)])
+            mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
+            var_deltas = jnp.array([max(cluster_variances[0], 1e-1), max(cluster_variances[1] - cluster_variances[0], 1)])
 
             # Convert kmeans parameters to lognormal parameters with target mean and variance
             # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
@@ -1032,7 +1032,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         elif self.alpha_model == "kmeans":
             # NB mean parameter: q ~ LogNormal(mu_q, sigma_q),
             # with prior on cluster means and hyperprior variances
-            mean_deltas = jnp.array([cluster_means[0], cluster_means[1] - cluster_means[0]])
+            mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
             # Cumsum also cumsums the variances, use a small value to be added
             var_hp_deltas = jnp.array([var_hp, 1])
 
@@ -1058,6 +1058,9 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
             # In case of underdispersion (negative alpha), set to a high number, so var ~ mean
             alpha_prior[alpha_prior <= 0] = 100
+
+            # Set prior to 1 if between 0 and 1 to avoid numerical issues
+            alpha_prior[(alpha_prior > 0) & (alpha_prior < 1)] = 1
 
             # LogNormal
             # sigma2_alpha_hp = jnp.log(var_hp / alpha_prior ** 2 + 1)
