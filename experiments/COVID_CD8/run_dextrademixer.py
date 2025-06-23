@@ -35,8 +35,6 @@ def parse_arguments():
                         choices=["mixturemodelkmeans", "mixturemodel"])
     parser.add_argument("--mode", type=str, default="I", help="Processing mode")
     parser.add_argument("--neg_ctrl_key", type=str, default=None, help="Negative control parameter")
-    parser.add_argument("--ir_clone_key", type=str, default="clone_id", help="Clonotype parameter")
-    parser.add_argument("--alpha_model", type=str, default="overdispersion",
     parser.add_argument("--ir_clone_key", type=str, default='clone_id', help="Clonotype parameter")
     parser.add_argument("--alpha_model", type=str, default="kmeans",
                         choices=["overdispersion", "kmeans"],
