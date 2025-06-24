@@ -1051,10 +1051,10 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             # Convert kmeans cluster variance to alpha parameter (also dependent on cluster mean)
             if self.mode == "C":
                 # Use mean and variance of each clone as prior, alpha_prior.shape = (c_nof)
-                alpha_prior = clone_means**2 / (clone_variances - clone_means - 1e-8)
+                alpha_prior = clone_means**2 / (np.maximum(clone_variances, 1e-1) - clone_means - 1e-8)
             elif self.mode == "I" or self.mode == "C+":
                 # Use kmeans cluster mean and variance as prior, alpha_prior.shape = (2)
-                alpha_prior = cluster_means**2 / (cluster_variances - cluster_means)
+                alpha_prior = cluster_means**2 / (np.maximum(cluster_variances, 1e-1) - cluster_means)
 
             # In case of underdispersion (negative alpha), set to a high number, so var ~ mean
             alpha_prior[alpha_prior <= 0] = 100
