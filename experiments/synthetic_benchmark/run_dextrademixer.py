@@ -3,11 +3,8 @@ import multiprocessing
 import os
 import warnings
 import pickle
-from time import strftime
 import pandas as pd
 import numpyro
-import optuna
-import numpy as np
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
                              accuracy_score, classification_report)
 import sys
@@ -26,9 +23,12 @@ def parse_arguments():
     parser.add_argument("--input_file", type=str, default="simulation/test.h5mu", help="Input .h5mu file")
     parser.add_argument("--output_file", type=str, default="output.csv",
                         help="Output CSV file for averaged results")
-    parser.add_argument("--pmhc_key", type=str, default="pmhc1", help="Processing mode")
-    parser.add_argument("--gex_key", type=str, default="gex", help="Key for multimer counts")
-    parser.add_argument("--label_key", type=str, default="is_binder", help="Key for labels")
+    parser.add_argument("--pmhc_key", type=str, default="pmhc1", help="Key for pMHC counts")
+    parser.add_argument("--gex_key", type=str, default="gex",
+                        help="Key for modality where pMHC counts are stored")
+    parser.add_argument("--label_key", type=str, default=None, help="Key for labels")
+    parser.add_argument("--airr_key", type=str, default='airr',
+                        help="Key for modality where TCR data is stored")
 
     # Model parameters
     parser.add_argument("--model_type", default='mixturemodelkmeans', help="Model type",
@@ -52,7 +52,7 @@ def parse_arguments():
 
     # Optimization parameters
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--maxiter", type=int, default=1000, help="Upper limit for maxiter for optuna")
+    parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
     parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
     return parser.parse_args()
 
@@ -69,7 +69,10 @@ def run_inference(f_in, args):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         mdata = mu.read(f_in)
-    y_true = mdata.mod["airr"].obs[args.label_key]
+    if args.label_key is None:
+        y_true = pd.Series(0, index=mdata.mod["airr"].obs.index)
+    else:
+        y_true = mdata.mod[args.airr_key].obs[args.label_key]
 
     mixer = DextraDemixer(model_type=args.model_type, mode=args.mode, alpha_model=args.alpha_model)
     mixer.preprocess_model_data(mdata,
