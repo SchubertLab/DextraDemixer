@@ -22,20 +22,28 @@ def parse_arguments():
     # Data parameters
     parser.add_argument("--input_file", type=str, default="simulation/test.h5mu", help="Input .h5mu file")
     parser.add_argument("--output_file", type=str, default="output.csv",
-                        help="Output CSV file for averaged results")
-    parser.add_argument("--pmhc_key", type=str, default="pmhc1", help="Key for pMHC counts")
+                        help="Output CSV file for performance results")
     parser.add_argument("--gex_key", type=str, default="gex",
                         help="Key for modality where pMHC counts are stored")
-    parser.add_argument("--label_key", type=str, default=None, help="Key for labels")
     parser.add_argument("--airr_key", type=str, default='airr',
                         help="Key for modality where TCR data is stored")
+    parser.add_argument("--pmhc_key", type=str, default="pmhc1",
+                        help="Key for pMHC counts, expected to be in 'gex' modality")
+    parser.add_argument("--label_key", type=str, default=None,
+                        help="Key for labels, expected to be in 'airr' modality")
 
     # Model parameters
     parser.add_argument("--model_type", default='mixturemodelkmeans', help="Model type",
                         choices=["mixturemodelkmeans", "mixturemodel"])
-    parser.add_argument("--mode", type=str, default="I", help="Processing mode")
-    parser.add_argument("--neg_ctrl_key", type=str, default=None, help="Negative control parameter")
-    parser.add_argument("--ir_clone_key", type=str, default='clone_id', help="Clonotype parameter")
+    parser.add_argument("--mode", type=str, default="I",
+                        help="Processing mode. 'I' -> independent concentration parameter for signal and noise data. "
+                             "'C' -> clonotype level concentration parameter", choices=["I", "C"])
+    parser.add_argument("--neg_ctrl_key", type=str, default=None,
+                        help="Key for negative control counts. If not None, enables model to use negative control data for "
+                             "fitting. Expected to be in 'gex' modality. If None, no negative control data is used.")
+    parser.add_argument("--ir_clone_key", type=str, default='clone_id',
+                        help="Key for clonotype information. If not None, enables model to have different "
+                             "mixture coefficients for each clonotype. Expected to be in 'airr' modality. ")
     parser.add_argument("--alpha_model", type=str, default="kmeans",
                         choices=["overdispersion", "kmeans"],
                         help="Modeling of the alpha parameter. Options: 'overdispersion', 'kmeans'.")
@@ -52,7 +60,7 @@ def parse_arguments():
 
     # Optimization parameters
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--maxiter", type=int, default=5000, help="Upper limit for maxiter for optuna")
+    parser.add_argument("--maxiter", type=int, default=5000, help="Number of iterations for optimization")
     parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
     return parser.parse_args()
 
