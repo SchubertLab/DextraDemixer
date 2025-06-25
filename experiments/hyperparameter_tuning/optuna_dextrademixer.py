@@ -51,6 +51,8 @@ def parse_arguments():
                         help="Prior for scale parameter if alpha_model == kmeans "
                              "or scale for HalfCauchy if alpha_model == overdispersion. "
                              "None for optuna to suggest.")
+    parser.add_argument("--outlier_threshold", type=float, default=4.0,
+                        help="Threshold for outlier removal based on log transformed z-score.")
     parser.add_argument("--target_fdr", type=float, default=0.05,
                         help="Target FDR for posterior class assignment. If None, uses threshold instead.")
     parser.add_argument("--threshold", type=float, default=None,
@@ -83,7 +85,8 @@ def run_inference(f_in: str, args: argparse.Namespace, opt_params: dict, trial_n
                                 pmhc_key=args.pmhc_key,
                                 gex_key=args.gex_key,
                                 neg_ctrl_key=args.neg_ctrl_key,
-                                ir_clone_key=args.ir_clone_key)
+                                ir_clone_key=args.ir_clone_key,
+                                outlier_threshold=args.outlier_threshold,)
 
     mixer.model._model_config["overdispersion_scale_prior"] = opt_params["prior_value"]
     mixer.model._model_config["var_hyperprior"] = opt_params["prior_value"]

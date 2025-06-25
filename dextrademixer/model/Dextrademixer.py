@@ -591,7 +591,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         self.mode = mode
         self.alpha_model = alpha_model
 
-    def _init_kmeans(self, scale_factor=1.0) -> Dict:
+    def _init_kmeans(self, scale_factor=1.0, outlier_threshold=4.0) -> Dict:
         """
         Initialize KMeans with 2 clusters and compute all necessary prior parameters
         for mu_q, sigma_q, alpha, and tau priors.
@@ -607,7 +607,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         # remove outliers
         x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
         zscore = (x_log - x_log.mean()) / x_log.std()
-        x_no_outliers = x[zscore < 4]
+        x_no_outliers = x[zscore < outlier_threshold]
         x_no_outliers = x_no_outliers.sort()
         diffs = np.diff(x_no_outliers, prepend=x_no_outliers[0])
         # TODO What value to define a huge gap?
@@ -943,7 +943,9 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
         super().preprocess_model_data(x=x, neg_cont=neg_cont, c=c, sigma=sigma, mode=mode,
                                       alpha_model=alpha_model, **kwargs)
-        self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor)
+        self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor,
+                                              outlier_threshold=kwargs['outlier_threshold']
+                                              if 'outlier_threshold' in kwargs else 4.0)
         self._model_config.update(self._kmeans_dict)
 
     def get_default_model_config(self) -> Dict:

@@ -43,6 +43,8 @@ def parse_arguments():
                         help="Prior for scale parameter of HalfCauchy for overdispersion model. Not used for kmeans.")
     parser.add_argument("--var_hyperprior", type=float, default=10,
                         help="Prior for scale parameter of kmeans model. Not used for overdispersion.")
+    parser.add_argument("--outlier_threshold", type=float, default=4.0,
+                        help="Threshold for outlier removal based on log transformed z-score.")
     parser.add_argument("--target_fdr", type=float, default=0.05,
                         help="Target FDR for posterior class assignment. If None, uses threshold instead.")
     parser.add_argument("--threshold", type=float, default=None,
@@ -76,7 +78,8 @@ def run_inference(f_in, args):
                                 pmhc_key=args.pmhc_key,
                                 gex_key=args.gex_key,
                                 neg_ctrl_key=args.neg_ctrl_key,
-                                ir_clone_key=args.ir_clone_key)
+                                ir_clone_key=args.ir_clone_key,
+                                outlier_threshold=args.outlier_threshold,)
 
     mixer.model._model_config["overdispersion_scale_prior"] = opt_params["overdispersion_scale_prior"]
     mixer.model._model_config["var_hyperprior"] = opt_params["var_hyperprior"]
