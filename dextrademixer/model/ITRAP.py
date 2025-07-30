@@ -74,9 +74,9 @@ class ITRAP(ApMHCDeconvolution):
         self.specificity_to_idx = {s: i for i, s in enumerate(self.umi_cols_mhc)}
         self.idx_to_specificity = {i: s for i, s in enumerate(self.umi_cols_mhc)}
 
-        data = mdata['airr'].obs.copy()
+        data = mdata[ir_key].obs.copy()
         for col in self.umi_cols_mhc:
-            data[col] = mdata['gex'][:, col].X.toarray().reshape(-1)
+            data[col] = mdata[gex_key][:, col].X.toarray().reshape(-1)
 
         def calc_delta(x):
             """ Calculate UMI ratio of two most abundant pMHCs, 0.25 is a small constant to avoid division by zero"""
