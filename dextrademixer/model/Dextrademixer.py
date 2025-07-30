@@ -408,7 +408,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # extract alpha, which depends on the mode and alpha_model
         if self.alpha_model == 'kmeans':
-            # shape will be defined by mode, C (C, 1), C+ (C, 2), I (1, 2)
+            # shape will be defined by mode, mode=='C': (C, 1), mode=='I': (1, 2)
             alpha = posterior_samples["alpha"].mean(0)
         else:
             overdispersion = posterior_samples["overdispersion"].mean(0) + 1
@@ -416,17 +416,19 @@ class DextraDemixer(ApMHCDeconvolution):
                 # alpha.shape = (C, 1)
                 q_weighted = (w * q).mean(1)
                 alpha = q_weighted**2 / (q_weighted * (overdispersion) - q_weighted)
-                alpha_weighted = (w[self.model.data["clone_continuous"]] * alpha[self.model.data["clone_continuous"]][:, None])
-                # weighted alpha is the mean of alpha weighted by w, as this reflects better the contribution of
-                # each alpha on average for this component
-                alpha_weighted = alpha_weighted.mean(0) / w.mean(0)
             elif self.mode == "I":
                 # alpha.shape = (1, 2)
                 alpha = q**2 / (q * (overdispersion) - q)
 
         if self.mode == "C":
-            prob0 = jnp.exp(npd.NegativeBinomial2(mean=q[0], concentration=alpha[:, np.newaxis]).log_prob(x))
-            prob1 = jnp.exp(npd.NegativeBinomial2(mean=q[1], concentration=alpha[:, np.newaxis]).log_prob(x))
+            # alpha_weighted is the mean of alpha weighted by w for each cell with shape (2, )
+            # This reflects better the contribution of each alpha on average for the binder and non-binder NB component
+            alpha_weighted = (w[self.model.data["clone_continuous"]] * alpha[self.model.data["clone_continuous"]][:, None])
+            alpha_weighted = alpha_weighted.mean(0) / w.mean(0)
+
+            # pdf for each cell
+            prob0 = jnp.exp(npd.NegativeBinomial2(mean=q[0], concentration=alpha[self.model.data["clone_continuous"]][:, np.newaxis]).log_prob(x))
+            prob1 = jnp.exp(npd.NegativeBinomial2(mean=q[1], concentration=alpha[self.model.data["clone_continuous"]][:, np.newaxis]).log_prob(x))
 
             # Individual Negative Binomial
             plt.subplot(3, 4, 8)
@@ -444,13 +446,17 @@ class DextraDemixer(ApMHCDeconvolution):
             prob0_mix = prob0 * w[:, 0:1]
             prob1_mix = prob1 * w[:, 1:2]
             w_mean = w.mean(0)  # mean over all clonotypes
+            # Use different w for each clonotype and hence cell: w.shape = (#clonotypes, 2)
+            prob0_mix = prob0 * w[self.model.data["clone_continuous"]][:, 0:1]
+            prob1_mix = prob1 * w[self.model.data["clone_continuous"]][:, 1:2]
+            w_mean = w[self.model.data["clone_continuous"]].mean(0)  # mean over all clonotypes
 
             plt.subplot(3, 4, 4)
-            sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0], label=f"q={q[0]:.2f} alpha={alpha.mean():.2f}")
-            sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1], label=f"q={q[1]:.2f} alpha={alpha.mean():.2f}")
+            sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0], label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
+            sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1], label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
             sns.lineplot(x=x, y=prob0_mix.mean(0)+prob1_mix.mean(0), c="k", linestyle=":", label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
-            plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.90, axis=0), alpha=0.3, label='5%-95% percentile')
-            plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.90, axis=0), alpha=0.3, label='5%-95% percentile')
+            plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
+            plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
             plt.legend()
             sns.despine()
             plt.title("Posterior Mixture NB")
