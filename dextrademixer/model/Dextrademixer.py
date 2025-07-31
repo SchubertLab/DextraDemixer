@@ -442,10 +442,6 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.ylabel("Probability")
 
             # Mixture model
-            # Use different w for each clonotype: w.shape = (#clonotypes, 2)
-            prob0_mix = prob0 * w[:, 0:1]
-            prob1_mix = prob1 * w[:, 1:2]
-            w_mean = w.mean(0)  # mean over all clonotypes
             # Use different w for each clonotype and hence cell: w.shape = (#clonotypes, 2)
             prob0_mix = prob0 * w[self.model.data["clone_continuous"]][:, 0:1]
             prob1_mix = prob1 * w[self.model.data["clone_continuous"]][:, 1:2]
