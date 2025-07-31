@@ -74,4 +74,4 @@ class BEAMT(ApMHCDeconvolution):
 
         # posterior probability of belonging to the binding class
         assignment = self._predict_posterior_class(self.p, threshold, target_fdr)
-        return self.p, assignment
+        return self.p.__array__(), assignment.__array__()
