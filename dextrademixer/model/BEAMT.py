@@ -48,9 +48,7 @@ class BEAMT(ApMHCDeconvolution):
 
         self._check_parameters(x, x_neg, None, None)
 
-        self.data = {"x": x,
-                     "x_neg": x_neg
-                     }
+        self.data = {"x": x, "x_neg": x_neg}
 
         self.params = {"alpha": x+1, "beta": x_neg+3}
 
