@@ -354,6 +354,10 @@ class DextraDemixer(ApMHCDeconvolution):
         return self.trace
 
     def plot_results(self, assignment, p_pred, y_true=None, seed=42, config=''):
+
+        if self.trace is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
+
         plt.figure(figsize=(16, 12))
 
         # Plot data colored in predicted class assignment
@@ -398,8 +402,11 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.title("Predicted probability of UMI count with true label")
 
         # Plot posterior distribution of Negative Binomial
-        predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=1000)
-        posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
+        if self.is_svi: # svi
+            predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=1000)
+            posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
+        else: # mcmc inference
+            posterior_samples = self.sampler.get_samples()
 
         # Extract mean from posterior samples
         q = posterior_samples["q"].mean(0)
