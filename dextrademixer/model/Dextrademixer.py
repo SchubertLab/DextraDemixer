@@ -875,8 +875,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
             w = npy.sample("w", npd.Dirichlet(jnp.ones(K)))
             z = npd.Categorical(probs=w)
 
-        with npy.plate("cluster_axis", K):
-            q = npy.sample("q",
+        q = npy.sample("q",
                            npd.TransformedDistribution(npd.LogNormal(loc=mu_q, scale=sigma_q).expand((K,)),
                                                        npd.transforms.OrderedTransform()))
 
