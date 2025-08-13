@@ -95,7 +95,7 @@ class MyTestCase(unittest.TestCase):
 
     def test_svi_model_C(self):
         sim = DextramerSimulator()
-        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=100,
                                                         nof_clones=10,
                                                         simulate_neg_control=False,
                                                         use_clonotype_cov=True,
@@ -113,7 +113,7 @@ class MyTestCase(unittest.TestCase):
         print()
         print(mixer.summary())
 
-        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        p, assignment = mixer.predict_posterior_class(threshold=0.5, clonotype_adherence=True)
         N = len(binder)
         accuracy = (binder == assignment).sum() / N
         print(list(binder))
@@ -135,7 +135,7 @@ class MyTestCase(unittest.TestCase):
 
         plt.show()
 
-        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="C")
         mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id")
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
         print()
@@ -359,10 +359,17 @@ class MyTestCase(unittest.TestCase):
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
 
-        p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
+        p_c, assignment_c = mixer.predict_posterior_class(threshold=0.5, clonotype_adherence=True)
+        p, assignment = mixer.predict_posterior_class(threshold=0.5, clonotype_adherence=False)
         N = len(self.binder)
         accuracy = (self.binder == assignment).sum() / N
-        print("Accuracy", accuracy)
+        accuracy_c = (self.binder == assignment_c).sum() / N
+        print(list(self.binder))
+        print(assignment.tolist())
+        print(assignment_c.tolist())
+        print(p.tolist())
+        print(p_c.tolist())
+        print("Accuracy", accuracy, accuracy_c)
 
     def test_simple_mixture_model_C_H(self):
         mixer = DextraDemixer(model_type="mixturemodel", mode="H")

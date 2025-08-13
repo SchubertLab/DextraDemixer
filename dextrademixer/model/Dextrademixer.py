@@ -288,7 +288,8 @@ class DextraDemixer(ApMHCDeconvolution):
 
     def predict_posterior_class(self,
                                 threshold: float = None,
-                                target_fdr: float = None
+                                target_fdr: float = None,
+                                clonotype_adherence: bool = False
                                 ) -> Tuple[Array, Array]:
         """
         Returns the binder assignments based on the inferred posterior class probabilities.
@@ -300,6 +301,8 @@ class DextraDemixer(ApMHCDeconvolution):
                         probabilities
             target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
                         class probability
+            clonotype_adherence: instead of using posterior class assignment per cell use clonotype probability vector
+                                if available.
         Returns:
             A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
             class assignment decision
@@ -309,15 +312,30 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # posterior probability of belonging to the binding class
         if self.is_svi:
-            predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
-                                              num_samples=500)
-            samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key
-            p = jnp.exp(jnp.nanmean(samples["log_p"], axis=0))[:, 1]
+            if clonotype_adherence and self.model.data["clone"] is not None:
+                #TODO ALTERNATIVE USE MAJORITY VOTING IN CLONE?
+                posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
+                                                                sample_shape=(500,))
+
+                # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
+                p = jnp.nanmean(posterior_samples["w"], axis=0)[:, 1]
+            else:
+                predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
+                                                  num_samples=500)
+                samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key
+                p = jnp.exp(jnp.nanmean(samples["log_p"], axis=0))[:, 1]
 
         else:
-            p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
+            if clonotype_adherence and self.model.data["clone"] is not None:
+                p = jnp.mean(self.sampler.get_samples()["w"], axis=0)[:,1]
+            else:
+                p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
 
         assignment = self._predict_posterior_class(p, threshold, target_fdr)
+
+        if clonotype_adherence and self.model.data["clone"] is not None:
+            assignment = assignment[self.model.data["clone"]]
+            p = p[self.model.data["clone"]]
 
         return p, assignment
 
