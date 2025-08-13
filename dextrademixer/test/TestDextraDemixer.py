@@ -107,7 +107,7 @@ class MyTestCase(unittest.TestCase):
 
         plt.show()
 
-        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="C")
         mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id")
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
         print()
@@ -135,7 +135,7 @@ class MyTestCase(unittest.TestCase):
 
         plt.show()
 
-        mixer = DextraDemixer(model_type="mixturemodel", mode="H")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="C")
         mixer.preprocess_model_data(mdat, "pmhc1", ir_clone_key="clone_id")
         trace = mixer.fit_svi(guide=npy.infer.autoguide.AutoNormal)
         print()
