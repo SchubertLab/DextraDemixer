@@ -679,7 +679,7 @@ class DextramerSimulator:
             adata.var["feature_types"] = ["Antigen Capture"]
 
         adata.obs["fold_increase"] = d["fold_increase"]
-        adata.obs.index = adata.obs.index.astype("int64")
+        adata.obs.index = adata.obs.index.astype("int32")
 
         adata_tcr = ad.AnnData()
         adata_tcr.obs["is_binder"] = d["binder"]
