@@ -113,7 +113,7 @@ class MyTestCase(unittest.TestCase):
         print()
         print(mixer.summary())
 
-        p, assignment = mixer.predict_posterior_class(threshold=0.5, clonotyp_adherence=True)
+        p, assignment = mixer.predict_posterior_class(threshold=0.5, clonotype_adherence=True)
         N = len(binder)
         accuracy = (binder == assignment).sum() / N
         print(list(binder))
@@ -359,8 +359,8 @@ class MyTestCase(unittest.TestCase):
         trace = mixer.fit()
         print(az.summary(trace, var_names=["~log_p"]))
 
-        p_c, assignment_c = mixer.predict_posterior_class(threshold=0.5, clonotyp_adherence=True)
-        p, assignment = mixer.predict_posterior_class(threshold=0.5, clonotyp_adherence=False)
+        p_c, assignment_c = mixer.predict_posterior_class(threshold=0.5, clonotype_adherence=True)
+        p, assignment = mixer.predict_posterior_class(threshold=0.5, clonotype_adherence=False)
         N = len(self.binder)
         accuracy = (self.binder == assignment).sum() / N
         accuracy_c = (self.binder == assignment_c).sum() / N
