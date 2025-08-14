@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Tuple
 
 import os
 
+import numpy as np
+
 import mudata as md
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -62,7 +64,7 @@ class BEAMT(ApMHCDeconvolution):
 
         self.p = 1 - jax.scipy.stats.beta.cdf(percentile, self.params["alpha"], self.params["beta"])
 
-    def predict_posterior_class(self, threshold: float = None, target_fdr: float = None) -> Tuple[Array, Array]:
+    def predict_posterior_class(self, threshold: float = None, target_fdr: float = None) -> Tuple[np.array, np.array]:
         """
         Returns the binder assignments based on the inferred posterior class probabilities.
         Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
