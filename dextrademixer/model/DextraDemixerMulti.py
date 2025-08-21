@@ -344,10 +344,10 @@ class DextraDemixerMulti(DextraDemixer):
         for j in range(self.M):
             # posterior probability of belonging to the binding class
             if self.is_svi:
-                if clonotype_adherence and self.models[j].data["clone_continuous"] is not None:
+                if clonotype_adherence[j] and self.models[j].data["clone_continuous"] is not None:
                     # TODO ALTERNATIVE USE MAJORITY VOTING IN CLONE?
                     posterior_samples = self.guides[j].sample_posterior(random.PRNGKey(self.rng_key),
-                                                                    self.svi_result[j].params,
+                                                                    self.svi_results[j].params,
                                                                     sample_shape=(500,))
 
                     # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
@@ -369,7 +369,7 @@ class DextraDemixerMulti(DextraDemixer):
             assignment = self._predict_posterior_class(p, threshold[j], target_fdr[j])
 
             if clonotype_adherence[j] and self.models[j].data["clone_continuous"] is not None:
-                assignment = assignment[self.model[j].data["clone_continuous"]]
+                assignment = assignment[self.models[j].data["clone_continuous"]]
                 p = p[self.models[j].data["clone_continuous"]]
 
             ps.append(p)
