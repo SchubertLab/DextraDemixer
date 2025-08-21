@@ -323,7 +323,7 @@ class DextraDemixer(ApMHCDeconvolution):
                 predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
                                                   num_samples=500)
                 samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key
-                p = jnp.exp(jnp.nanmean(samples["log_p"], axis=0))[:, 1]
+                p = jnp.nanmean(jnp.exp(samples["log_p"]), axis=0)[:, 1]
 
         else:
             if clonotype_adherence and self.model.data["clone"] is not None:
