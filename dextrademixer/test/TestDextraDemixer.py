@@ -514,14 +514,15 @@ class MyTestCase(unittest.TestCase):
         mixer = DextraDemixerMulti(model_type="mixturemodel", mode="I")
         mixer.preprocess_model_data(mdat,
                                     ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
-                                    neg_ctrl_key="negative_control"
+                                    neg_ctrl_key="negative_control",
+                                    ir_clone_key="clone_id"
                                     )
 
-        out = mixer.fit_svi(guide=npy.infer.autoguide.AutoDiagonalNormal)
-        print(out)
+        out = mixer.fit_svi(guide=npy.infer.autoguide.AutoDiagonalNormal, svi_config={"maxiter": 500})
 
-        ps, ass = mixer.predict_posterior_class()
+        ps, ass = mixer.predict_posterior_class(clone_majority=False, clonotype_adherence=True)
 
+        print(ass)
         print(ps.shape, ass.shape)
 
     def test_dextramermulti_mixturemodel_mcmc(self):
@@ -550,6 +551,7 @@ class MyTestCase(unittest.TestCase):
 
         ps, ass = mixer.predict_posterior_class()
         print(ps.shape, ass.shape)
+
 
     def test_simulated_data_cov(self):
         sim = DextramerSimulator()
