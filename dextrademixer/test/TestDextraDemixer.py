@@ -242,7 +242,7 @@ class MyTestCase(unittest.TestCase):
                                                          nof_clones=50,
                                                          simulate_neg_control=True,
                                                          p_binding_outlier=0.01,
-                                                         binding_fold_increase_range=[100],
+                                                         binding_fold_increase_range=[5],
                                                          variance_fold_increase_range=[1.2],
                                                          plot_data=False)
 
@@ -319,6 +319,55 @@ class MyTestCase(unittest.TestCase):
         accuracy = (self.binder == assignment).sum() / N
         print("Accuracy", accuracy, "FDR", fdr, tpr)
         self.assertAlmostEquals(target_fdr, ((fdr * 10 ** 2) // 1) / (10 ** 2))
+
+    def test_simple_mixture_model_ppc_fdr_conservative(self):
+        def _performance(y_true, y_pred):
+            tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+            print(tn, fn, tp, fp)
+            tpr = tp / (tp + fn)
+            fdr = fp / (tp + fp)
+            acc = (y_true == y_pred).sum() / N
+            return fdr, tpr, acc
+
+        npy.set_platform("cpu")
+
+        sim = DextramerSimulator()
+        mdat, axis = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                        nof_clones=10,
+                                                        binding_ratio=0.3,
+                                                        simulate_neg_control=True,
+                                                        use_clonotype_cov=False,
+                                                        binding_fold_increase_range=[5],
+                                                        variance_fold_increase_range=[1.2],
+                                                        plot_data=True)
+
+        plt.show()
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+        mixer = DextraDemixer(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(mdat, "pmhc1", neg_ctrl_key="neg_control",  ir_clone_key="clone_id")
+        trace = mixer.fit()
+        print(az.summary(trace, var_names=["~log_p"]))
+
+        target_fdr = 0.05
+        p, assignment = mixer.predict_posterior_class(threshold=0.5)
+        #p_q05, assignment_q05 = mixer.predict_posterior_class(quantile=0.25, target_fdr=target_fdr)
+        p_cr90, assignment_cr90 = mixer.predict_posterior_class(cred_intvl=0.95, target_fdr=target_fdr)
+        N = len(binder)
+
+        print(p[0:10])
+        print(p_cr90[0:10])
+
+        fdr, tpr, acc = _performance(binder, assignment)
+        #fdr_q05, tpr_q05, acc_q05 = _performance(binder, assignment_q05)
+        fdr_cr90, tpr_cr90, acc_cr90 = _performance(binder, assignment_cr90)
+
+        print("Accuracy", acc, "FDR", fdr, tpr)
+        #print("Accuracy", acc_q05, "FDR", fdr_q05, tpr_q05)
+        print("Accuracy", acc_cr90, "FDR", fdr_cr90, tpr_cr90)
+        #self.assertAlmostEquals(target_fdr, ((fdr * 10 ** 2) // 1) / (10 ** 2))
+
+
 
     def test_simple_mixture_model_I(self):
         mixer = DextraDemixer(model_type="mixturemodel", mode="I")
