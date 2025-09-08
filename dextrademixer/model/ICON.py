@@ -1,17 +1,8 @@
-import warnings
 from typing import List, Union
-
+import numpy as np
 import pandas as pd
 import mudata as md
-import scanpy as sc
-import scipy.stats
-from scipy.stats import zscore
 
-import jax
-import jax.lax
-import jax.numpy as jnp
-
-from dextrademixer.utils import calculate_pmhc_clonal_purity
 
 
 def icon_assign_pmhc(mdata: md.MuData,
@@ -32,7 +23,7 @@ def icon_assign_pmhc(mdata: md.MuData,
         threshold_type: A string specifiying whether the threshold is absolut or relative. if relative than X in gex_key
                         will be normalized by the column means
         pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `gex_key` modality`s `X` which should be
-                   deconvolved. If None is given, the full X is used
+                   deconvolved. If None is given, the full X is used, excluding the negative control if specified.
         gex_key: the MuData transcriptome module key
         neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
         ir_key: the MuData AIRR module key
@@ -47,44 +38,37 @@ def icon_assign_pmhc(mdata: md.MuData,
     air = mdata.mod[ir_key]
 
     if pmhc_keys is None:
-        pmhc_keys = gex.var_names
+        pmhc_keys = gex.var_names[gex.var_names != neg_ctrl_key]
 
-    if bg_noise is None and neg_ctrl_key is None:
-        bg_noise = 10
+    if bg_noise is None:
+        bg_noise = gex[:, neg_ctrl_key].X.max() if neg_ctrl_key is not None else 10
 
-    X = jnp.array(gex[:, pmhc_keys].X.toarray())
-    x_neg = gex.X[:, neg_ctrl_key].max() if bg_noise is None else bg_noise
+    X = gex[:, pmhc_keys].X.toarray()
     c = air.obs[ir_clone_key].to_numpy().astype("int32")
 
-    # Subtract background noise
-    E = X - x_neg
-    E = E.at[E < 0].set(0)
+    # substract background
+    E = np.maximum(0, X - bg_noise)
+    ge0 = E.sum(axis=1) > 0 # 0 mask
 
     # calc pMHC ratio per cell
-    C = E / (E.sum(axis=1, keepdims=True) + 1)
+    C = E.copy()
+    C[ge0] = E[ge0] / E[ge0].sum(axis=1, keepdims=True)
 
-    # raw assignment with UMI > 0
-    rA = (E > 0).astype("int32")
+    # clone purity
+    R = pd.DataFrame(E > 0).groupby(c).sum()
+    R = R.div(R.sum(axis=1), axis=0).fillna(0).loc[c].values
+    
+    # Dextramer signal correction (rows that summed 0 remain as 0)
+    S = np.log(E+0.01) * R * C**2
 
-    # calc clonotype purity
-    R = calculate_pmhc_clonal_purity(rA, c)
-
-    S = jnp.log(E + 0.01) * (C ** 2) * R
-    S = jnp.nan_to_num(S)
-    S = S.at[S < 1].set(0)
-
-    # pMHC-wise log-ratio normalization per cell
-    colSum = S.sum(axis=1, keepdims=True)
-    colSum = colSum.at[colSum <= 0].set(1)
-    S = S / colSum
-
-    # cell-wise z-score normalization
-    S = (S - jnp.nanmean(S, axis=0, keepdims=True)) / jnp.nanstd(S, axis=0, keepdims=True)
-    S = jnp.nan_to_num(S, nan=jnp.nanmin(S))
+    # Per cell normalization: pMHC-wise log-ratio normalization
+    S[ge0] = S[ge0] / S[ge0].sum(axis=1, keepdims=True)
+    
+    # Dextramer normalization: cell-wise z-score normalization
+    S = (S - S.mean(axis=0, keepdims=True)) / S.std(axis=0, keepdims=True)
 
     assignment = (S > threshold).astype("uint8")
-
     if inplace:
-        mdata.mod[gex_key].obsm["pMHC_assignment"] = assignment
+        mdata.mod[gex_key].obsm["icon_pMHC_assignment"] = assignment
     else:
         return assignment
