@@ -61,6 +61,7 @@ def icon_assign_pmhc(mdata: md.MuData,
     # Dextramer signal correction (rows that summed 0 remain as 0)
     S = np.log(E+0.01) * R * C**2
     S[S<1] = 0
+    S_raw = S.copy()
 
     # Per cell normalization: pMHC-wise log-ratio normalization
     cellnorm = S.sum(axis=1, keepdims=True)
@@ -68,9 +69,9 @@ def icon_assign_pmhc(mdata: md.MuData,
     S = S / cellnorm
     
     # Dextramer normalization: cell-wise z-score normalization
-    S = (S - S.mean(axis=0, keepdims=True)) / S.std(axis=0, keepdims=True)
+    S = (S - S.mean(axis=0, keepdims=True)) / S.std(axis=0, ddof=1, keepdims=True)
     S[np.isnan(S)] = np.nanmin(S) # set NA's to smalles observed value
-    
+
     assignment = (S > threshold).astype("uint8")
     if inplace:
         mdata.mod[gex_key].obsm["icon_pMHC_assignment"] = assignment
