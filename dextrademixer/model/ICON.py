@@ -48,11 +48,11 @@ def icon_assign_pmhc(mdata: md.MuData,
 
     # substract background
     E = np.maximum(0, X - bg_noise)
-    ge0 = E.sum(axis=1) > 0 # 0 mask
 
     # calc pMHC ratio per cell
-    C = E.copy()
-    C[ge0] = E[ge0] / E[ge0].sum(axis=1, keepdims=True)
+    cellnorm = E.sum(axis=1, keepdims=True)
+    cellnorm[cellnorm == 0] = 1
+    C = E / cellnorm
 
     # clone purity
     R = pd.DataFrame(E > 0).groupby(c).sum()
@@ -60,13 +60,17 @@ def icon_assign_pmhc(mdata: md.MuData,
     
     # Dextramer signal correction (rows that summed 0 remain as 0)
     S = np.log(E+0.01) * R * C**2
+    S[S<1] = 0
 
     # Per cell normalization: pMHC-wise log-ratio normalization
-    S[ge0] = S[ge0] / S[ge0].sum(axis=1, keepdims=True)
+    cellnorm = S.sum(axis=1, keepdims=True)
+    cellnorm[cellnorm == 0] = 1
+    S = S / cellnorm
     
     # Dextramer normalization: cell-wise z-score normalization
     S = (S - S.mean(axis=0, keepdims=True)) / S.std(axis=0, keepdims=True)
-
+    S[np.isnan(S)] = np.nanmin(S) # set NA's to smalles observed value
+    
     assignment = (S > threshold).astype("uint8")
     if inplace:
         mdata.mod[gex_key].obsm["icon_pMHC_assignment"] = assignment
