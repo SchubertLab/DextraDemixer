@@ -463,8 +463,7 @@ class DextramerSimulator:
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
                                                     random_state=rng)
 
-            x = npd.NegativeBinomial2(mean, concentration).sample(key, sample_shape=(n_cells,))
-
+            x = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
             if p_binding_outlier > 0 and is_binder:
                 outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells, random_state=rng)
                 outlier_idx = np.where(outlier)
@@ -473,7 +472,9 @@ class DextramerSimulator:
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
                                                     random_state=rng)
 
-                x = x.at[outlier_idx].set( npd.NegativeBinomial2(mean, concentration).sample(key, sample_shape=(np.sum(outlier),)))
+                x = x.at[outlier_idx].set(
+                    DextramerSimulator.generate_nb_val(mean, concentration, size=np.sum(outlier), rng_key=key)
+                )
                 d["outlier"].extend(outlier.tolist())
             else:
                 d["outlier"].extend([0]*n_cells)
@@ -481,7 +482,7 @@ class DextramerSimulator:
             if simulate_neg_control:
                 key, subkey = jax.random.split(key)
                 mean = neg_mean
-                x_neg = npd.NegativeBinomial2(mean, neg_concentration).sample(key, sample_shape=(n_cells,))
+                x_neg = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
                 d["x_neg"].extend(x_neg.tolist())
 
             d["x"].extend(x.tolist())
@@ -685,6 +686,8 @@ class DextramerSimulator:
             mu: the mean parameter (must be positive)
             alpha: the inverse overdispersion parameter (must be positive)
             size: the number of iid draws
-            rng_key: an integer to initialize the random key generator.
+            rng_key: int or jax.random.PRNGKey as random seed
         """
-        return npd.NegativeBinomial2(mu, alpha).sample(jax.random.PRNGKey(rng_key), sample_shape=(size,))
+        if isinstance(rng_key, int):
+            rng_key = jax.random.PRNGKey(rng_key)
+        return npd.NegativeBinomial2(mu, alpha).sample(rng_key, sample_shape=(size,))
