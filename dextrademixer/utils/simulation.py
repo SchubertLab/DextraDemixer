@@ -439,7 +439,9 @@ class DextramerSimulator:
         cells_per_clone_p = raw_cells_per_clone/raw_cells_per_clone.sum()
         cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
-        d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
+        d = {"x": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
+        if simulate_neg_control:
+            d["x_neg"] = []
         key = jax.random.PRNGKey(rng_key)  # set starting rng_key
         for i in range(nof_clones):
             # Propagate the key to create new subkeys for each clone, else the same distribution will always be sampled
@@ -538,8 +540,9 @@ class DextramerSimulator:
         if binding_fold_increase_range is None:
             binding_fold_increase_range = [2, 5, 10, 50, 100, 150, 200, 500]
 
-        d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": []}
-
+        d = {"x": [], "binder": [], "clone": [], "fold_increase": []}
+        if simulate_neg_control:
+            d["x_neg"] = []
         if use_clonotype_cov:
             # sample covariance matrix
             ltridist = rng.choice(clonotype_dist, size=int(nof_clones * (nof_clones - 1) / 2), replace=False)
