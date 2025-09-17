@@ -439,10 +439,15 @@ class DextraDemixer(ApMHCDeconvolution):
 
             # Individual Negative Binomial
             plt.subplot(3, 4, 8)
-            sns.lineplot(x=x, y=prob0.mean(0), c=sns.color_palette('tab10')[0], label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
-            sns.lineplot(x=x, y=prob1.mean(0), c=sns.color_palette('tab10')[1], label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
-            plt.fill_between(x, np.quantile(prob0, 0.05, axis=0), np.quantile(prob0, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
-            plt.fill_between(x, np.quantile(prob1, 0.05, axis=0), np.quantile(prob1, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
+            ax1 = sns.lineplot(x=x, y=prob0.mean(0), c=sns.color_palette('tab10')[0],
+							   label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
+            plt.fill_between(x, np.quantile(prob0, 0.05, axis=0), np.quantile(prob0, 0.95, axis=0), alpha=0.3,
+							 label='5%-95% percentile')
+            ax2 = ax1.twinx()
+            sns.lineplot(x=x, y=prob1.mean(0), ax=ax2, c=sns.color_palette('tab10')[1],
+						 label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
+            plt.fill_between(x, np.quantile(prob1, 0.05, axis=0), np.quantile(prob1, 0.95, axis=0), alpha=0.3,
+							 label='5%-95% percentile')
             plt.legend()
             sns.despine()
             plt.title("Posterior NB without mixing weights")
@@ -455,11 +460,16 @@ class DextraDemixer(ApMHCDeconvolution):
             w_mean = w[self.model.data["clone_continuous"]].mean(0)  # mean over all clonotypes
 
             plt.subplot(3, 4, 4)
-            sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0], label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
-            sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1], label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
-            sns.lineplot(x=x, y=prob0_mix.mean(0)+prob1_mix.mean(0), c="k", linestyle=":", label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
-            plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
-            plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0), alpha=0.3, label='5%-95% percentile')
+            sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
+						 label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}", color=sns.color_palette('tab10')[0])
+            sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1],
+						 label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}", color=sns.color_palette('tab10')[0])
+            sns.lineplot(x=x, y=prob0_mix.mean(0)+prob1_mix.mean(0), c="k", linestyle=":",
+						 label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
+            plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0),
+							 alpha=0.3, label='5%-95% percentile')
+            plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
+							 alpha=0.3, label='5%-95% percentile')
             plt.legend()
             sns.despine()
             plt.title("Posterior Mixture NB")
@@ -474,8 +484,11 @@ class DextraDemixer(ApMHCDeconvolution):
 
             # Individual Negative Binomial
             plt.subplot(3, 4, 8)
-            sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0, label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}")
-            sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}")
+            ax1 = sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0,
+							   label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", color=sns.color_palette('tab10')[0])
+            ax2 = ax1.twinx()
+            sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, ax=ax2,
+						 label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
             sns.despine()
             plt.title("Posterior NB without mixing weights")
             plt.ylabel("Probability")
@@ -558,11 +571,14 @@ class DextraDemixer(ApMHCDeconvolution):
         except:
             # if y_true is None or str
             f1 = -1
-        plt.suptitle(config.replace("_", " ").replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}",)
+        plt.suptitle(config.replace("_", " ")
+					 .replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}",)
         os.makedirs("figs", exist_ok=True)
         plt.savefig(f"figs/{config}.png")
         plt.show()
         plt.close()
+
+        return q, alpha, w
 
 
 class ADextraDemixerModel(metaclass=RegisteredModel):
