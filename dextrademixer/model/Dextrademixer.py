@@ -475,8 +475,6 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.title("Posterior Mixture NB")
             plt.ylabel("Probability")
 
-        elif self.mode == "C+":
-            npd.NegativeBinomial2(mean=q, concentration=alpha)
         elif self.mode == "I":
             npd.NegativeBinomial2(mean=q, concentration=alpha)
             prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha[0]).log_prob(x))
@@ -1078,7 +1076,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             if self.mode == "C":
                 # Use mean and variance of each clone as prior, alpha_prior.shape = (c_nof)
                 alpha_prior = clone_means**2 / (np.maximum(clone_variances, 1e-1) - clone_means - 1e-8)
-            elif self.mode == "I" or self.mode == "C+":
+            elif self.mode == "I":
                 # Use kmeans cluster mean and variance as prior, alpha_prior.shape = (2)
                 alpha_prior = cluster_means**2 / (np.maximum(cluster_variances, 1e-1) - cluster_means)
 
@@ -1097,10 +1095,6 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             # if self.mode == "C":
             #     with npy.plate("clone_axis", c_nof):
             #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hp))
-            # elif self.mode == "C+":
-            #     with npy.plate("clone_axis", c_nof):
-            #         alpha = npy.sample("alpha",
-            #                            npd.LogNormal(mu_alpha_prior, sigma_alpha_hp).expand([K]).to_event(1))
             # elif self.mode == 'I':
             #     with npy.plate("cluster_axis", K):
             #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hp))
@@ -1129,10 +1123,6 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                     yhat_neg = npy.sample("yhat_neg", obs=x_neg,
                                           fn=npd.NegativeBinomial2(mean=q[0],
                                                                 concentration=alpha[clone]),)
-                elif self.mode == "C+":
-                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
-                                          fn=npd.NegativeBinomial2(mean=q[0],
-                                                                concentration=alpha[clone, 0]),)
                 else:
                     yhat_neg = npy.sample("yhat_neg", obs=x_neg,
                                           fn=npd.NegativeBinomial2(mean=q[0], concentration=alpha[0]),)
@@ -1140,8 +1130,6 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             # target pMHC
             if self.mode == "C":
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q, concentration=alpha[clone, None]))
-            elif self.mode == "C+":
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q, concentration=alpha[clone]))
             else:
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q, concentration=alpha))
 
