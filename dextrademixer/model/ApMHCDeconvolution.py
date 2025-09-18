@@ -89,6 +89,9 @@ class ApMHCDeconvolution:
         """
         N = x.shape[0]
 
+        if jnp.isnan(x).any():
+            raise ValueError("Input data `x` contains NaN values. Please remove them before fitting the model.")
+
         if c is not None:
             if c.shape[0] != N:
                 raise ValueError(f"`c` and count data `x` require the same size but got {c.shape[0]} and {N}")

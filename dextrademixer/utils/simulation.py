@@ -16,9 +16,8 @@ import mudata as md
 import numpyro as npy
 import numpyro.distributions as npd
 import statsmodels.formula.api as smf
-from mudata import MuData
-from numpy.ma.core import shape
 
+from mudata import MuData
 from scipy import stats
 from scipy.special import expit
 
@@ -98,27 +97,29 @@ def t_cell_simulation(n_clones=3,
     d_neg = {"avidity": [], "binder": [], "clone": []}
     binder_assignment = rng.binomial(1, binding_ratio, size=n_clones)
 
+    key = jax.random.PRNGKey(rng_key)  # set starting rng_key
     for i in range(n_clones):
+        key, subkey = jax.random.split(key)
         is_binder = binder_assignment[i]
 
         if is_binder:
             n_cell = rng.randint(*n_cells_per_binder, size=1)[0]
             mean = rng.uniform(*mean_binder_range, size=1)[0]
             shape = rng.uniform(*shape_binder_range, size=1)[0]
-            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean, shape, size=n_cell, rng_key=rng_key).tolist())
+            d["avidity"].extend(DextramerSimulator.generate_nb_val(mean, shape, size=n_cell, rng_key=key).tolist())
 
         else:
             n_cell = rng.randint(*n_cells_per_non_binder, size=1)[0]
             d["avidity"].extend(
                 DextramerSimulator.generate_nb_val(mean_non_binder, shape_non_binder, size=n_cell,
-                                                   rng_key=rng_key).tolist())
+                                                   rng_key=key).tolist())
 
         d["binder"].extend([is_binder] * n_cell)
         d["clone"].extend([i] * n_cell)
 
         d_neg["avidity"].extend(DextramerSimulator.generate_nb_val(mean_non_binder,
                                                                    shape_non_binder, size=n_cell,
-                                                                   rng_key=rng_key).tolist())
+                                                                   rng_key=key).tolist())
         d_neg["binder"].extend([0] * n_cell)
         d_neg["clone"].extend([i] * n_cell)
 
@@ -485,9 +486,14 @@ class DextramerSimulator:
         cells_per_clone_p = raw_cells_per_clone/raw_cells_per_clone.sum()
         cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
-        d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
-
+        d = {"x": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
+        if simulate_neg_control:
+            d["x_neg"] = []
+        key = jax.random.PRNGKey(rng_key)  # set starting rng_key
         for i in range(nof_clones):
+            # Propagate the key to create new subkeys for each clone, else the same distribution will always be sampled
+            key, subkey = jax.random.split(key)
+
             is_binder = int(binder_assignment[i])
             n_cells = cells_per_clone[i]
 
@@ -506,8 +512,7 @@ class DextramerSimulator:
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
                                                     random_state=rng)
 
-            x = self.generate_nb_val(mean, concentration, size=n_cells, rng_key=rng_key)
-
+            x = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
             if p_binding_outlier > 0 and is_binder:
                 outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells, random_state=rng)
                 outlier_idx = np.where(outlier)
@@ -516,16 +521,17 @@ class DextramerSimulator:
                 concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
                                                     random_state=rng)
 
-                x = x.at[outlier_idx].set(self.generate_nb_val(mean, concentration, size=np.sum(outlier),
-                                                               rng_key=rng_key))
-
+                x = x.at[outlier_idx].set(
+                    DextramerSimulator.generate_nb_val(mean, concentration, size=np.sum(outlier), rng_key=key)
+                )
                 d["outlier"].extend(outlier.tolist())
             else:
                 d["outlier"].extend([0]*n_cells)
 
             if simulate_neg_control:
+                key, subkey = jax.random.split(key)
                 mean = neg_mean
-                x_neg = self.generate_nb_val(mean, neg_concentration, size=n_cells, rng_key=rng_key)
+                x_neg = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
                 d["x_neg"].extend(x_neg.tolist())
 
             d["x"].extend(x.tolist())
@@ -574,7 +580,6 @@ class DextramerSimulator:
 
         rng = np.random.RandomState(seed=rng_key)
 
-
         # params
         neg_x = self.params["neg_x"]
         cells_per_clonotype = self.params["cells_per_clonotype"]
@@ -590,7 +595,9 @@ class DextramerSimulator:
         else:
             nof_clonotype_cluster = rng.randint(2, nof_clones)
 
-        d = {"x": [], "x_neg": [], "binder": [], "clone": [], "fold_increase": []}
+        d = {"x": [], "binder": [], "clone": [], "fold_increase": []}
+        if simulate_neg_control:
+            d["x_neg"] = []
 
         binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
         K = None
@@ -636,35 +643,75 @@ class DextramerSimulator:
 
     @staticmethod
     def __plot_simulated_data(d):
-
-        fig_params = {'legend.fontsize': 'x-small',
-                      'figure.figsize': (8.27, 5.845),
-                      'figure.dpi': 100,
-                      'axes.labelsize': 'x-small',
-                      'axes.titlesize': 'x-small',
-                      'xtick.labelsize': 'x-small',
-                      'ytick.labelsize': 'x-small'
-                      }
-        plt.rcParams.update(fig_params)
-
-        fig, axs = plt.subplots(2, 2, layout='tight')  #gridspec_kw={'height_ratios': [1, 1, 2, 0]}
-        if not len(d["x_neg"]):
-            del d["x_neg"]
-
         df = pd.DataFrame.from_dict(d)
 
-        axs[0, 0].set_title("pMHC Dextramer")
-        sns.histplot(data=df, x="x", hue="binder", log_scale=True, ax=axs[0, 0])
-        if "x_neg" in d:
-            axs[0, 1].set_title("Negative Control")
-            sns.histplot(data=df, x="x_neg", log_scale=True, ax=axs[0, 1])
-        else:
-            axs[0, 1].axis('off')
-        axs[1, 0].set_title("Clonal distribution of Non-binder")
-        sns.histplot(data=df[df.binder == 0], x="x", hue="clone", log_scale=True, legend=False, ax=axs[1, 0])
-        axs[1, 1].set_title("Clonal distribution of Binder")
-        sns.histplot(data=df[df.binder == 1], x="x", hue="clone", log_scale=True, legend=False, ax=axs[1, 1])
-        return axs
+        x = df["x"].values.reshape(-1, )
+        hue = pd.Series(df["binder"]).map({0: "non-binder", 1: "binder"})
+        x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
+        zscore = (x_log - x_log.mean()) / x_log.std()
+        x_no_outliers = x[zscore < 4]
+        hue_no_outliers = hue[zscore < 4]
+        outlier_thr = x_no_outliers.max()
+
+        if "x_neg" in df:
+            x_neg = df["x_neg"].values.reshape(-1, )
+            x = np.concatenate((x, x_neg), axis=0)
+            x_no_outliers = np.concatenate((x_no_outliers, x_neg), axis=0)
+            hue = pd.concat([hue, pd.Series(["Neg control"]*len(x_neg))], axis=0)
+            hue_no_outliers = pd.concat([hue_no_outliers, pd.Series(["Neg control"]*len(x_neg))], axis=0)
+
+        n_cols = 3
+        n_rows = 2
+        fig = plt.figure(figsize=(3 * n_cols, 2.4 * n_rows))
+        i = 1
+
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
+        plt.axvline(outlier_thr, ls='--', c='r')
+        sns.despine()
+        plt.title(f'Linear (outlier threshold in red)')
+        i += 1
+
+        plt.subplot(n_rows, n_cols, i)
+        ax = sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers, hue_order=['non-binder', 'binder', 'Neg control'])
+        sns.despine()
+        plt.title(f'Linear no outliers (log-transformed z-score > 3)')
+        i += 1
+
+        sns.move_legend(ax, "upper center", bbox_to_anchor=(0.5, 1.4), ncol=3, frameon=False, title='Binding status')
+
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x, discrete=True, stat='percent', binrange=(0, 100), element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
+        plt.title(f'Linear x < 100')
+        sns.despine()
+        i += 1
+
+        # Log scale
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
+        plt.yscale('log')
+        plt.axvline(outlier_thr, ls='--', c='r')
+        plt.title(f'Log-scale (outlier threshold in red)')
+        sns.despine()
+        i += 1
+
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
+        plt.yscale('log')
+        plt.title(f'Log-scale no outliers (log-transformed z-score > 3)')
+        sns.despine()
+        i += 1
+
+        plt.subplot(n_rows, n_cols, i)
+        sns.histplot(x=x, discrete=True, stat='percent', binrange=(0, 100), element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
+        plt.yscale('log')
+        plt.title(f'Log-scale x < 100')
+        sns.despine()
+        i += 1
+
+        plt.show()
+
+        return fig
 
     @staticmethod
     def __generate_mdata(d, simulate_neg_control, cov, cc_assignment) -> MuData:
@@ -701,9 +748,11 @@ class DextramerSimulator:
             mu: the mean parameter (must be positive)
             alpha: the inverse overdispersion parameter (must be positive)
             size: the number of iid draws
-            rng_key: an integer to initialize the random key generator.
+            rng_key: int or jax.random.PRNGKey as random seed
         """
-        return npd.NegativeBinomial2(mu, alpha).sample(jax.random.PRNGKey(rng_key), sample_shape=(size,))
+        if isinstance(rng_key, int):
+            rng_key = jax.random.PRNGKey(rng_key)
+        return npd.NegativeBinomial2(mu, alpha).sample(rng_key, sample_shape=(size,))
 
     @staticmethod
     def __cc_assignment(binder_assignment, nof_clones, nof_clonotype_cluster, p_nonbinding_clone_outlier, rng):

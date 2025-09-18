@@ -4,7 +4,14 @@
 /papers
 /manuscript
 /logs
-
+.snakemake
+experiments/*/figs
+experiments/*/optuna_study
+experiments/*/optuna
+experiments/*/saved_models
+experiments/*/simulation
+*.db
+*pkl
 
 # Editors
 .vscode/

@@ -1,4 +1,5 @@
 import unittest
+import os
 
 import muon as mu
 
@@ -10,42 +11,58 @@ from dextrademixer.utils import DextramerSimulator
 class TestSimulation(unittest.TestCase):
 
     def setUp(self):
-        # adata_tcr = ir.io.read_10x_vdj(
-        #     "../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_Multiplex_vdj_t_all_contig_annotations.csv")
-        #
-        # adata = sc.read_10x_h5(
-        #     "../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_Multiplex_count_raw_feature_bc_matrix.h5",
-        #     gex_only=False)
-        # adata.var_names_make_unique()
-        # mdata = MuData({"gex": adata, "airr": adata_tcr})
-        # ir.pp.index_chains(mdata)
-        # ir.tl.chain_qc(mdata)
-        #
-        # # filter TCRs only and antigen barcodes only
-        # mdata = mdata[mdata.obs["airr:receptor_type"] == "TCR"]
-        # mdata = mdata[:, mdata.var["gex:feature_types"] == "Antigen Capture"]
-        #
-        # # minimal pMHC QC filtering
-        # sc.pp.filter_cells(mdata["gex"], min_genes=1)
-        # sc.pp.filter_genes(mdata["gex"], min_cells=10)
-        #
-        # mdata.update()
-        #
-        # mu.pp.filter_obs(mdata, "airr:chain_pairing", lambda x: ~np.isin(x, ["orphan VDJ", "orphan VJ"]))
-        # ir.pp.ir_dist(mdata)
-        # ir.tl.define_clonotypes(mdata, receptor_arms="all", dual_ir="primary_only")
-        #
-        # ir.pp.ir_dist(mdata, metric="alignment", sequence="aa", cutoff=250)
-        # ir.tl.define_clonotype_clusters(mdata, sequence="aa", metric="alignment", receptor_arms="all", dual_ir="any")
-        # ir.tl.clonotype_network(mdata, min_cells=3, sequence="aa", metric="alignment")
-        #
-        # self.mdata = mdata
-        # dist = self.mdata.mod["airr"].uns["cc_aa_alignment"]["distances"].toarray()
-        # self.mdata.mod["airr"].uns["ir_dist_aa_full"] = dist - 1
-        # self.mdata.write("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
-        self.mdata = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
-        #print(self.mdata)
-        pass
+        self.data_path = os.path.join(os.path.dirname(__file__), '../../data')
+        test_h5mu_path = os.path.join(self.data_path, "10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+        if os.path.exists(test_h5mu_path):
+            import scanpy as sc
+            import scirpy as ir
+            from muon import MuData
+            import numpy as np
+
+            # Please download the data and rename the files accordingly:
+            # https://www.10xgenomics.com/datasets/10k-human-a0201-pbmcs-with-cmv-flu-and-sars-cov2-spike-in-beam-t-2-standard
+
+            # VDJ TCR - Filtered contig annotations (CSV)
+            # https://cf.10xgenomics.com/samples/cell-vdj/7.1.0/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_vdj_t_filtered_contig_annotations.csv
+            adata_tcr = ir.io.read_10x_vdj(os.path.join(
+                self.data_path,
+                "10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_Multiplex_vdj_t_all_contig_annotations.csv"))
+
+            # Gene Expression - Feature / cell matrix HDF5 (per-sample)
+            # https://cf.10xgenomics.com/samples/cell-vdj/7.1.0/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_count_sample_filtered_feature_bc_matrix.h5
+            adata = sc.read_10x_h5(os.path.join(
+                self.data_path,
+                "10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_5pv2_Multiplex_count_raw_feature_bc_matrix.h5"),
+                gex_only=False)
+            adata.var_names_make_unique()
+            mdata = MuData({"gex": adata, "airr": adata_tcr})
+            ir.pp.index_chains(mdata)
+            ir.tl.chain_qc(mdata)
+
+            # filter TCRs only and antigen barcodes only
+            mdata = mdata[mdata.obs["airr:receptor_type"] == "TCR"]
+            mdata = mdata[:, mdata.var["gex:feature_types"] == "Antigen Capture"]
+
+            # minimal pMHC QC filtering
+            sc.pp.filter_cells(mdata["gex"], min_genes=1)
+            sc.pp.filter_genes(mdata["gex"], min_cells=10)
+
+            mdata.update()
+
+            mu.pp.filter_obs(mdata, "airr:chain_pairing", lambda x: ~np.isin(x, ["orphan VDJ", "orphan VJ"]))
+            ir.pp.ir_dist(mdata)
+            ir.tl.define_clonotypes(mdata, receptor_arms="all", dual_ir="primary_only")
+
+            ir.pp.ir_dist(mdata, metric="alignment", sequence="aa", cutoff=250)
+            ir.tl.define_clonotype_clusters(mdata, sequence="aa", metric="alignment", receptor_arms="all", dual_ir="any")
+            ir.tl.clonotype_network(mdata, min_cells=3, sequence="aa", metric="alignment")
+
+            self.mdata = mdata
+            dist = self.mdata.mod["airr"].uns["cc_aa_alignment"]["distances"].toarray()
+            self.mdata.mod["airr"].uns["ir_dist_aa_full"] = dist - 1
+            self.mdata.write(test_h5mu_path)
+
+        self.mdata = mu.read(test_h5mu_path)
 
     def test_estimating_params(self):
         sim = DextramerSimulator()
@@ -79,8 +96,6 @@ class TestSimulation(unittest.TestCase):
                                             ir_dist_key="ir_dist_aa_full",
                                             filter_extreme_values=[True, True, False, True],
                                             plot_qc=True)
-        print()
-        print(DextramerSimulator.default_params())
         print(sim.dist_params)
         plt.savefig("10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein_fitted_model_filtered.pdf")
         plt.show()
@@ -148,7 +163,7 @@ class TestSimulation(unittest.TestCase):
     def test_simulating_params_nctrl(self):
         sim = DextramerSimulator()
         mdat = sim.simulate_pmhc_data_from_distribution(simulate_neg_control=True,
-                                                         rng_key=3443)
+                                                        rng_key=3443)
         print(mdat)
 
     def test_simulating_params_write_read(self):

@@ -1,4 +1,5 @@
 import unittest
+import os
 
 import jax
 import muon as mu
@@ -462,8 +463,9 @@ class MyTestCase(unittest.TestCase):
         accuracy = (self.binder == assignment).sum() / N
         print("Accuracy", accuracy)
 
-    def test_ture_data_cov(self):
-        mdat = mu.read("../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+    def test_true_data_cov(self):
+        data_path = os.path.dirname(os.path.abspath(__file__))
+        mdat = mu.read(os.path.join(data_path, f"../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu"))
 
         mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
         #print(mdat)

@@ -1,27 +1,28 @@
 cluster:
-  mkdir -p ../../logs/slurm_logs/{rule} &&
+  mkdir -p ./logs/slurm_logs/{rule} &&
   sbatch
     --partition=cpu_p
     --qos=cpu_normal
-    --nice=10000 
+    --nice=0
     -t 3-00:00:00
     --mem={resources.mem_mb}
     -c {resources.c}
-    --job-name=smk-{rule}-{wildcards} 
-    --output=../../logs/slurm_logs/{rule}/{rule}-{wildcards}.out 
-    --error=../../logs/slurm_logs/{rule}/{rule}-{wildcards}.err
+    --job-name={rule}-{wildcards} 
+    --output=./logs/slurm_logs/{rule}/{rule}-{wildcards}.out 
+    --error=./logs/slurm_logs/{rule}/{rule}-{wildcards}.err
     --parsable
 
 default-resources:
-  - c=8
-  - mem_mb=24000
-  - mem="24G"
+  - c=16
+  - mem_mb=64000
+  - mem="64G"
   - disk_mb=250000
 
 set-resources:
   - dummy_rule:c=32
   - dummy_rule:mem=128000
   - dummy_rule:mem_mb=128000
+  - run_simulation:c=1
 
 set-threads:
   - dummy_rule=20
@@ -30,7 +31,7 @@ restart-times: 1
 max-jobs-per-second: 10
 max-status-checks-per-second: 1
 latency-wait: 60
-jobs: 50 
+jobs: 1000
 keep-going: True
 printshellcmds: True
 scheduler: greedy

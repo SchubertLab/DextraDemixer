@@ -20,7 +20,4 @@ dependencies:
       - optax>=0.2.2
       - scanpy>=1.9.8
       - scirpy>=0.13.0
-      - scikit-learn 
-
-
-# TODO: fix scikit-learn version
+      - scikit-learn>=1.6.1  # TODO: fix scikit-learn version

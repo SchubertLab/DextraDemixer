@@ -296,3 +296,21 @@ def hook_optax(optimizer):
         return optimizer.update(grads, state, params=params)
 
     return optax.GradientTransformation(optimizer.init, update_fn), gradient_norms
+
+
+def convert_str_to_bool_and_none(args):
+    def str_to_bool(s):
+        if not isinstance(s, str):
+            return s
+        if s.lower() == 'true':
+            return True
+        elif s.lower() == 'false':
+            return False
+        elif s.lower() == 'none':
+            return None
+        else:
+            return s
+    for key, value in vars(args).items():
+        setattr(args, key, str_to_bool(value))
+
+    return args

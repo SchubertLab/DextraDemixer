@@ -2,31 +2,30 @@ from __future__ import annotations
 
 import abc
 import warnings
+import os
 
 from typing import TYPE_CHECKING, Union, Dict, Tuple
 
 import arviz as az
 
 import numpy as np
-import optax
 import pandas as pd
 import mudata as md
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 import jax
 import jax.lax
-from jax import random, jit, lax
+from jax import random, jit
 from jax.nn import logsumexp
-
 import jax.numpy as jnp
-
-from optax import exponential_decay, linear_schedule
 
 import numpyro as npy
 import numpyro.distributions as npd
 
-import statsmodels.formula.api as smf
 from numpyro.infer.svi import SVIRunResult
 from sklearn.cluster import KMeans
+from sklearn.metrics import f1_score
 import tqdm
 
 from dextrademixer.model import ApMHCDeconvolution
@@ -63,7 +62,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
     """
 
-    def __init__(self, model_type: str = "mixturemodel", mode: str = "H"):
+    def __init__(self, model_type: str = "mixturemodel", mode: str = "H", alpha_model="overdispersion"):
         super().__init__()
 
         if mode.upper() not in ("H", "I", "C"):
@@ -77,6 +76,7 @@ class DextraDemixer(ApMHCDeconvolution):
         self.rng_key = None
         self.guide = None
         self.mode = mode.upper()
+        self.alpha_model = alpha_model
 
         if model_type not in ADextraDemixerModel.registry.keys():
             raise warnings.warn(f"`model_type` {model_type} not supported using the standard model.")
@@ -134,10 +134,11 @@ class DextraDemixer(ApMHCDeconvolution):
 
         if self.mode == "C":
             if c is None:
-                raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
+                raise ValueError("If `mode`= C a clonotype vector `ir_clone_key` must be specified.")
 
         self._check_parameters(x, x_neg, c, sigma)
-        self.model.preprocess_model_data(x, x_neg, c, sigma, self.mode, **kwargs)
+        self.model.preprocess_model_data(x=x, neg_cont=x_neg, c=c, sigma=sigma, mode=self.mode,
+                                         alpha_model=self.alpha_model, **kwargs)
 
     @staticmethod
     def get_default_sampler_config():
@@ -194,7 +195,9 @@ class DextraDemixer(ApMHCDeconvolution):
         return self.__make_arvis()
 
     def fit_svi(self, guide=npy.infer.autoguide.AutoNormal, svi_config: Dict[str, Union[int, float]] = None,
-                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777) -> az.InferenceData:
+                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
+                return_loss: bool = False) \
+            -> az.InferenceData:
         """
         Implements stochastic variational inference
 
@@ -221,28 +224,32 @@ class DextraDemixer(ApMHCDeconvolution):
         svi_config.pop("tracer", None)
 
         # check for custom guide in self.model otherwise use autoguide
-        if callable(getattr(self.model, "guide", None)):
-            self.guide = self.model.guide
-        else:
-            self.guide = guide(self.model.model)
-
-        adam_config["transition_steps"] = svi_config.get("maxiter", 1000) // 2
-
-        optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config))
-        svi = npy.infer.SVI(self.model.model, self.guide, optimizer, loss=npy.infer.TraceGraph_ELBO(**tracer_config))
+        # optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config),
+        #                                   b1=svi_config["adam_beta"]["b1"], b2=svi_config["adam_beta"]["b2"])
+        optimizer = npy.optim.ClippedAdam(adam_config["init_value"])
 
         # find good random initialization
-        best_loss, best_key = min((svi.evaluate(svi.init(key)), key) for key in
-                                  random.split(random.PRNGKey(rng_key), nof_inits))
+        random_init = []
+        for i, key in enumerate(random.split(random.PRNGKey(rng_key), nof_inits)):
+            if callable(getattr(self.model, "guide", None)):
+                self.guide = self.model.guide
+            else:
+                self.guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
+            svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
+                                loss=npy.infer.TraceGraph_ELBO(**tracer_config))
+            init_state = svi.init(key)
+            loss = svi.evaluate(init_state)
 
-        # DEBUG
-        # print("best_loss:", best_loss, "best_key:", best_key)
+            # Initialization depends on the guide, so need to save the best guide
+            random_init.append((loss, key, self.guide))
 
-        # Old implementation
-        # self.svi_result = svi.run(rng_key=random.PRNGKey(best_key),
-        #                           num_steps=svi_config.get("maxiter", 1000),
-        #                           stable_update=True,
-        #                           progress_bar=svi_config.get("progress_bar", False))
+        init_losses = np.array([x[0] for x in random_init])
+        best_idx = jnp.nanargmin(init_losses)
+        best_loss, best_key, best_guide = random_init[best_idx]
+
+        self.guide = best_guide
+        svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
+                            loss=npy.infer.TraceGraph_ELBO(**tracer_config))
 
         def body_fn(svi_state, step):
             svi_state, loss = svi.stable_update(svi_state, step=step)
@@ -252,7 +259,7 @@ class DextraDemixer(ApMHCDeconvolution):
         losses = []
         params = []
         with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
-                         disable=(not svi_config.get("progress_bar", False))) as t:
+                         disable=(not svi_config.get("progress_bar", False)), mininterval=10) as t:
             batch = max(svi_config.get("maxiter", 1000) // 20, 1)
             for i in t:
                 svi_state, loss, param = jit(body_fn)(svi_state, i)
@@ -273,8 +280,7 @@ class DextraDemixer(ApMHCDeconvolution):
                         refresh=False,
                     )
         losses = jnp.stack(losses)
-
-        params = params[jnp.argmin(losses)] if use_minimal_loss else params[-1]
+        params = params[jnp.nanargmin(losses)] if use_minimal_loss else params[-1]
         self.svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
 
         posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
@@ -284,7 +290,14 @@ class DextraDemixer(ApMHCDeconvolution):
         posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
         inference_data = az.from_dict(posterior=posterior_samples_np)
 
-        return inference_data
+        if return_loss:
+            converged = not jnp.isnan(losses).all()
+            best_iteration = jnp.nanargmin(losses)
+            best_loss = losses[best_iteration]
+            return inference_data, {"init_loss": losses[0], "converged": converged,
+                                    "best_loss": best_loss, "best_iteration": best_iteration}
+        else:
+            return inference_data
 
     def predict_posterior_class(self,
                                 threshold: float = None,
@@ -338,6 +351,7 @@ class DextraDemixer(ApMHCDeconvolution):
             p = p[self.model.data["clone"]]
 
         return p, assignment
+        # return p.__array__(), assignment.__array__()
 
     def summary(self):
         if self.trace is None and self.svi_result is None:
@@ -358,6 +372,231 @@ class DextraDemixer(ApMHCDeconvolution):
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
 
+    def plot_results(self, assignment, p_pred, y_true=None, seed=42, config=''):
+
+        if self.trace is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
+
+        plt.figure(figsize=(16, 12))
+
+        # Plot data colored in predicted class assignment
+        plt.subplot(3, 4, 1)
+        sns.histplot(x=self.model.data["x"], hue=assignment,
+                     discrete=True, element="step", alpha=0.7)
+        sns.despine()
+        plt.title("Predicted class assignment")
+
+        plt.subplot(3, 4, 5)
+        sns.histplot(x=self.model.data["x"], hue=assignment,
+                     discrete=True, element="step", alpha=0.7)
+        sns.despine()
+        plt.yscale("log")
+        plt.title("Predicted class assignment log-scale")
+
+        plt.subplot(3, 4, 9)
+        sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=assignment,
+                        markers={0: ".", 1: "X"})
+        sns.despine()
+        plt.ylabel("Posterior probability")
+        plt.title("Predicted probability and label of UMI count")
+
+        # Plot data colored in true class assignment
+        plt.subplot(3, 4, 2)
+        sns.histplot(x=self.model.data["x"], hue=y_true,
+                     discrete=True, element="step", alpha=0.7)
+        sns.despine()
+        plt.title("True class assignment")
+
+        plt.subplot(3, 4, 6)
+        sns.histplot(x=self.model.data["x"], hue=y_true,
+                     discrete=True, element="step", alpha=0.7)
+        sns.despine()
+        plt.yscale("log")
+        plt.title("True class assignment log-scale")
+
+        plt.subplot(3, 4, 10)
+        sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true)
+        sns.despine()
+        plt.ylabel("Posterior probability")
+        plt.title("Predicted probability of UMI count with true label")
+
+        # Plot posterior distribution of Negative Binomial
+        if self.is_svi: # svi
+            predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=1000)
+            posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
+        else: # mcmc inference
+            posterior_samples = self.sampler.get_samples()
+
+        # Extract mean from posterior samples
+        q = posterior_samples["q"].mean(0)
+        w = posterior_samples["w"].mean(0)
+        x = np.arange(0, self.model.data["x"].max())
+
+        # extract alpha, which depends on the mode and alpha_model
+        if self.alpha_model == 'kmeans':
+            # shape will be defined by mode, mode=='C': (C, 1), mode=='I': (1, 2)
+            alpha = posterior_samples["alpha"].mean(0)
+        else:
+            overdispersion = posterior_samples["overdispersion"].mean(0) + 1
+            if self.mode == "C":
+                # alpha.shape = (C, 1)
+                q_weighted = (w * q).mean(1)
+                alpha = q_weighted**2 / (q_weighted * (overdispersion) - q_weighted)
+            elif self.mode == "I":
+                # alpha.shape = (1, 2)
+                alpha = q**2 / (q * (overdispersion) - q)
+
+        if self.mode == "C":
+            # alpha_weighted is the mean of alpha weighted by w for each cell with shape (2, )
+            # This reflects better the contribution of each alpha on average for the binder and non-binder NB component
+            alpha_weighted = (w[self.model.data["clone_continuous"]] * alpha[self.model.data["clone_continuous"]][:, None])
+            alpha_weighted = alpha_weighted.mean(0) / w.mean(0)
+
+            # pdf for each cell
+            prob0 = jnp.exp(npd.NegativeBinomial2(mean=q[0], concentration=alpha[self.model.data["clone_continuous"]][:, np.newaxis]).log_prob(x))
+            prob1 = jnp.exp(npd.NegativeBinomial2(mean=q[1], concentration=alpha[self.model.data["clone_continuous"]][:, np.newaxis]).log_prob(x))
+
+            # Individual Negative Binomial
+            plt.subplot(3, 4, 8)
+            ax1 = sns.lineplot(x=x, y=prob0.mean(0), c=sns.color_palette('tab10')[0],
+							   label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
+            plt.fill_between(x, np.quantile(prob0, 0.05, axis=0), np.quantile(prob0, 0.95, axis=0), alpha=0.3,
+							 label='5%-95% percentile')
+            ax2 = ax1.twinx()
+            sns.lineplot(x=x, y=prob1.mean(0), ax=ax2, c=sns.color_palette('tab10')[1],
+						 label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
+            plt.fill_between(x, np.quantile(prob1, 0.05, axis=0), np.quantile(prob1, 0.95, axis=0), alpha=0.3,
+							 label='5%-95% percentile')
+            plt.legend()
+            sns.despine()
+            plt.title("Posterior NB without mixing weights")
+            plt.ylabel("Probability")
+
+            # Mixture model
+            # Use different w for each clonotype and hence cell: w.shape = (#clonotypes, 2)
+            prob0_mix = prob0 * w[self.model.data["clone_continuous"]][:, 0:1]
+            prob1_mix = prob1 * w[self.model.data["clone_continuous"]][:, 1:2]
+            w_mean = w[self.model.data["clone_continuous"]].mean(0)  # mean over all clonotypes
+
+            plt.subplot(3, 4, 4)
+            sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
+						 label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}", color=sns.color_palette('tab10')[0])
+            sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1],
+						 label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}", color=sns.color_palette('tab10')[0])
+            sns.lineplot(x=x, y=prob0_mix.mean(0)+prob1_mix.mean(0), c="k", linestyle=":",
+						 label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
+            plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0),
+							 alpha=0.3, label='5%-95% percentile')
+            plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
+							 alpha=0.3, label='5%-95% percentile')
+            plt.legend()
+            sns.despine()
+            plt.title("Posterior Mixture NB")
+            plt.ylabel("Probability")
+
+        elif self.mode == "I":
+            npd.NegativeBinomial2(mean=q, concentration=alpha)
+            prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha[0]).log_prob(x))
+            prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha[1]).log_prob(x))
+
+            # Individual Negative Binomial
+            plt.subplot(3, 4, 8)
+            ax1 = sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0,
+							   label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", color=sns.color_palette('tab10')[0])
+            ax2 = ax1.twinx()
+            sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, ax=ax2,
+						 label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
+            sns.despine()
+            plt.title("Posterior NB without mixing weights")
+            plt.ylabel("Probability")
+
+            # Mixture model
+            plt.subplot(3, 4, 4)
+            if self.model.data["clone_continuous"] is not None:
+                # Use different w for each clonotype: w.shape = (#clonotypes, 2)
+                # probX = (max UMI)
+                prob0_mix = prob0[None,] * w[:, 0:1]
+                prob1_mix = prob1[None,] * w[:, 1:2]
+                w_mean = w.mean(0)
+                sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
+                             label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}")
+                sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1],
+                             label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}")
+                sns.lineplot(x=x, y=prob0_mix.mean(0) + prob1_mix.mean(0), c="k", linestyle=":",
+                             label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
+                plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0),
+                                 alpha=0.3, label='5%-95% percentile')
+                plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
+                                 alpha=0.3, label='5%-95% percentile')
+                plt.legend()
+            else:
+                # w.shape = (2,)
+                prob0_mix = prob0 * w[0]
+                prob1_mix = prob1 * w[1]
+                w_mean = w
+
+                sns.lineplot(x=x, y=prob0_mix.reshape(-1),
+                             label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", linewidth=3)
+                sns.lineplot(x=x, y=prob1_mix.reshape(-1),
+                            label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", linewidth=3)
+                sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
+                             label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
+            sns.despine()
+            plt.title("Posterior Mixture NB")
+            plt.ylabel("Probability")
+
+        # Plot kmeans clusters
+        if self.model_type == "mixturemodelkmeans":
+            cluster_means = self.model._kmeans_dict["cluster_means"]
+            cluster_vars = self.model._kmeans_dict["cluster_variances"]
+            dists = jnp.abs(self.model.data["x"][:, None].repeat(2, axis=1) - cluster_means)
+            labels = np.argmin(dists, axis=1)
+
+            plt.subplot(3, 4, 3)
+            sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            plt.axvline(cluster_means[0], color="red", linestyle="--")
+            plt.axvline(cluster_means[1], color="red", linestyle="--")
+            sns.despine()
+            plt.title("KMeans clustering")
+            plt.ylabel("Percent")
+
+            plt.subplot(3, 4, 7)
+            sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            plt.yscale("log")
+            plt.axvline(cluster_means[0], color="red", linestyle="--")
+            plt.axvline(cluster_means[1], color="red", linestyle="--")
+            sns.despine()
+            plt.title("KMeans cluster log-scale")
+            plt.ylabel("Percent")
+
+            plt.subplot(3, 4, 12)
+            alpha = cluster_means**2 / (cluster_vars - cluster_means)
+            alpha[alpha < 0] = 100
+            x = np.arange(0, self.model.data["x"].max())
+            prob0 = jnp.exp(npd.NegativeBinomial2(cluster_means[0], alpha[0]).log_prob(x))
+            prob1 = jnp.exp(npd.NegativeBinomial2(cluster_means[1], alpha[1]).log_prob(x))
+
+            sns.lineplot(x=x, y=prob0, label=f"q={cluster_means[0]:.2f} alpha={alpha[0]:.2f}")
+            sns.lineplot(x=x, y=prob1, label=f"q={cluster_means[1]:.2f} alpha={alpha[1]:.2f}")
+            sns.despine()
+            plt.title("kMeans determined distribution")
+            plt.ylabel("Probability")
+
+        # Save plot
+        try:
+            f1 = f1_score(assignment, y_true)
+        except:
+            # if y_true is None or str
+            f1 = -1
+        plt.suptitle(config.replace("_", " ")
+					 .replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}",)
+        os.makedirs("figs", exist_ok=True)
+        plt.savefig(f"figs/{config}.png")
+        plt.show()
+        plt.close()
+
+        return q, alpha, w
+
 
 class ADextraDemixerModel(metaclass=RegisteredModel):
     """
@@ -370,6 +609,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         self._version = "0.0.0"
         self._data = None
         self._kmeans_dict = None
+        self.alpha_model = None
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
@@ -377,39 +617,54 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                               c: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[np.ndarray, Array] = None,
                               mode: str = "H",
+                              alpha_model="overdispersion",
                               **kwargs):
         """
         """
-
+        clone = None if c is None else jnp.array(c, dtype=INT_DTYPE)
         self.data = {"x": jnp.array(x, dtype=INT_DTYPE),
                      "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=FLOAT_DTYPE),
-                     "clone": None if c is None else jnp.array(c, dtype=INT_DTYPE),
+                     "clone": clone,
+                     # If clone is not contiuous, then there will be problems with indexing
+                     "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
                      "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE),
                      }
 
         self.mode = mode
+        self.alpha_model = alpha_model
 
-    def _init_kmeans(self, scale_factor=1.0) -> Dict:
+    def _init_kmeans(self, scale_factor=1.0, outlier_threshold=4.0) -> Dict:
         """
         Initialize KMeans with 2 clusters and compute all necessary prior parameters
         for mu_q, sigma_q, alpha, and tau priors.
 
         This method calculates the following priors:
-        - mu_q_mean_prior: Mean of each cluster (KMeans cluster centers)
-        - mu_q_var_prior: Variance of each cluster (spread of the cluster points)
-        - alpha_var_prior: Dispersion (or precision) for each cluster
+        - cluster_means: Mean of each cluster (KMeans cluster centers)
+        - cluster_variances: Variance of each cluster (spread of the cluster points)
         - tau_concentration_prior: Proportion of each cluster in the dataset
 
         returns: Dict with params estimates and  k-mean labels,
         """
-        x = self.data["x"]
-        clone = self.data.get("clone", None)
+        x = self.data["x"].copy()
+        # remove outliers
+        x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
+        zscore = (x_log - x_log.mean()) / x_log.std()
+        x_no_outliers = x[zscore < outlier_threshold]
+        x_no_outliers = x_no_outliers.sort()
+        diffs = np.diff(x_no_outliers, prepend=x_no_outliers[0])
+        # TODO What value to define a huge gap?
+        huge_gap_indices = np.where(diffs > x.max() / 3)[0]
+        if len(huge_gap_indices) > 0:
+            first_gap_index = huge_gap_indices[0]
+            x_no_outliers = x_no_outliers[:first_gap_index]
+
+        clone = self.data.get("clone_continuous", None)
         sigma = self.data.get("sigma", None)
         n_clusters = 2  # KMeans with 2 clusters
 
         # Perform KMeans clustering
-        kmeans = KMeans(n_clusters=n_clusters, random_state=0, n_init="auto").fit(x.reshape(-1, 1))
-        labels = kmeans.labels_
+        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x_no_outliers), np.max(x_no_outliers)]), n_init="auto").fit(x_no_outliers.reshape(-1, 1))
+        labels = kmeans.predict(x.reshape(-1, 1))
 
         # Initialize lists for cluster attributes
         cluster_means = []
@@ -447,10 +702,14 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                                 "mu_w_var_prior": jnp.clip(scale_factor * np.std(cluster_proportions),
                                                            0.1, 10.0)})
 
-        # Set mode-specific parameters (mode "C" for cloneotypes)
+        # Set mode-specific parameters (mode "C" for clonotypes)
         if clone is not None:
             unique_clones = jnp.unique(clone)
             clone_proportions = []
+            clone_means = []
+            clone_means_per_cluster = []
+            clone_variances = []
+            clone_variances_per_cluster = []
 
             for unique_clone in unique_clones:
                 clone_points = x[clone == unique_clone]
@@ -460,15 +719,29 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                 clone_cluster_counts = np.bincount(clone_labels, minlength=2)[sorted_indices]
                 clone_proportions.append(clone_cluster_counts / len(clone_points))
 
+                # Clone-specific means and variances
+                clone_means.append(np.mean(clone_points))
+                clone_means_per_cluster.append([np.mean(clone_points[clone_labels == 0]), np.mean(clone_points[clone_labels == 1])])
+                clone_variances.append(np.var(clone_points))
+                clone_variances_per_cluster.append([np.var(clone_points[clone_labels == 0]), np.var(clone_points[clone_labels == 1])])
+
             cluster_proportions = np.array(clone_proportions)
+            clone_means = np.array(clone_means)
+            clone_variances = np.array(clone_variances)
+            clone_means_per_cluster = np.array(clone_means_per_cluster)
+            clone_variances_per_cluster = np.array(clone_variances_per_cluster)
 
         # Update model configuration with calculated priors
         kmeans_dict.update({
             "z": labels,
-            "mu_q_mean_prior": cluster_means,  # Mean for each cluster
-            "mu_q_var_prior": np.sqrt(cluster_variances),  # Standard deviation for each cluster
+            "cluster_means": cluster_means,  # Mean for each cluster
+            "cluster_variances": cluster_variances,  # variance for each cluster
             "cluster_proportion": cluster_proportions,
             "tau_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
+            "clone_means": clone_means if clone is not None else None,  # Mean for each clonotype
+            "clone_variances": clone_variances if clone is not None else None,  # Variance for each clonotype
+            "clone_means_per_cluster": clone_means_per_cluster if clone is not None else None,  # Mean for each clonotype per cluster
+            "clone_variances_per_cluster": clone_variances_per_cluster if clone is not None else None,  # Variance for each clonotype per cluster
         })
 
         return kmeans_dict
@@ -555,7 +828,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
             "mu_w_mean_prior": 0.0,
             "mu_w_var_prior": 10.0,
             "mu_q_mean_prior": 0.0,
-            "mu_q_var_prior": 10.0,
+            "mu_q_var_prior": 5.0,
             "sigma_q_var_prior": 10.0,
             "alpha_var_prior": 10.0,
         }
@@ -583,7 +856,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
 
         x = self.data["x"]
         x_neg = self.data["x_neg"]
-        clone = self.data["clone"]
+        clone = self.data["clone_continuous"]
         sigma = self.data["sigma"]
 
         # plates
@@ -595,7 +868,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
         mu_w_mean_prior = model_config.get("mu_w_mean_prior", 0.0)
         mu_w_var_prior = model_config.get("mu_w_var_prior", 10.0)
         mu_q_mean_prior = model_config.get("mu_q_mean_prior", 0.0)
-        mu_q_var_prior = model_config.get("mu_q_var_prior", 10.0)
+        mu_q_var_prior = model_config.get("mu_q_var_prior", 5.0)
         sigma_q_var_prior = model_config.get("sigma_q_var_prior", 10.0)
         alpha_var_prior = model_config.get("alpha_var_prior", 10.0)
 
@@ -658,10 +931,7 @@ class DextraDemixerMixtureModel(ADextraDemixerModel):
             # target pMHC
             if self.mode == "C":
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
-                                                                         concentration=alpha[clone].reshape(
-                                                                             (N_sample, 1))
-                                                                         )
-                                                )
+                                                                         concentration=alpha[clone].reshape((N_sample, 1))))
             else:
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
                                                                          concentration=alpha))
@@ -690,6 +960,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             "mu_q_var_prior": 10.0,
             "sigma_q_var_prior": 10.0,
             "alpha_var_prior": 10.0,
+            "var_hyperprior": 10.0,
+            "overdispersion_scale_prior": 1.0,
         }
 
     @property
@@ -705,12 +977,16 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[np.ndarray, Array] = None,
+                              alpha_model="overdispersion",
                               mode: str = "H",
                               scale_factor: float = 1.0,
                               **kwargs):
 
-        super().preprocess_model_data(x, neg_cont, c, sigma, mode, **kwargs)
-        self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor)
+        super().preprocess_model_data(x=x, neg_cont=neg_cont, c=c, sigma=sigma, mode=mode,
+                                      alpha_model=alpha_model, **kwargs)
+        self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor,
+                                              outlier_threshold=kwargs['outlier_threshold']
+                                              if 'outlier_threshold' in kwargs else 4.0)
         self._model_config.update(self._kmeans_dict)
 
     def get_default_model_config(self) -> Dict:
@@ -727,7 +1003,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
         x = self.data["x"]
         x_neg = self.data["x_neg"]
-        clone = self.data["clone"]
+        clone = self.data["clone_continuous"]
         sigma = self.data["sigma"]
         N_sample = x.shape[0]
         c_nof = np.unique(clone).size if clone is not None else 0
@@ -736,22 +1012,15 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         # Extract hyperpriors
         mu_w_mean_prior = model_config["mu_w_mean_prior"]
         mu_w_var_prior = model_config["mu_w_var_prior"]
-        mu_q_mean_prior = model_config["mu_q_mean_prior"]
-        mu_q_var_prior = model_config["mu_q_var_prior"]
-        alpha_var_prior = model_config["alpha_var_prior"]
+        cluster_means = model_config["cluster_means"]
+        cluster_variances = model_config["cluster_variances"]
+        var_hp = model_config["var_hyperprior"]  # Variance for priors if using alpha_model = kmeans
         tau_concentration_prior = model_config["tau_concentration_prior"]
+        overdispersion_scale_prior = model_config["overdispersion_scale_prior"]
 
-        if self.mode == "H":
-            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                    npd.transforms.PowerTransform(-2.0)))
-        elif self.mode == "C":
-            with npy.plate("clone_axis", c_nof):
-                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                    npd.transforms.PowerTransform(-2.0)))
-        else:
-            with npy.plate("cluster_axis", K):
-                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                        npd.transforms.PowerTransform(-2.0)))
+        clone_means = model_config.get("clone_means", None)  # Mean for each clonotype
+        clone_variances = model_config.get("clone_variances", None)
+        cluster_proportion = model_config.get("cluster_proportion", None)  # Variance for priors if using alpha_model = kmeans
 
         # Cluster probability prior
         if clone is not None:
@@ -770,36 +1039,118 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
             z = npd.Categorical(probs=w)
 
-        q = npy.sample("q", npd.TransformedDistribution(npd.LogNormal(loc=mu_q_mean_prior, scale=mu_q_var_prior),
-                                                        npd.transforms.OrderedTransform()))
+        # Variant 1: Model alpha as through overdispersion
+        if self.alpha_model == "overdispersion":
+            # Convert kmeans priors to deltas, due to cumsum ordering
+            mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
+            var_deltas = jnp.array([max(cluster_variances[0], 1e-1), max(cluster_variances[1] - cluster_variances[0], 1)])
+
+            # Convert kmeans parameters to lognormal parameters with target mean and variance
+            # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
+            sigma2_q_prior = jnp.log(var_deltas / mean_deltas ** 2 + 1)
+            sigma_q_prior = jnp.sqrt(sigma2_q_prior)
+            mu_q_prior = jnp.log(mean_deltas) - sigma2_q_prior / 2
+
+            # Sample delta_q from lognormal distribution and cumsum to create ordered q
+            with npy.plate("cluster_axis", K):
+                delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
+            q = jnp.cumsum(delta_q, axis=0)
+
+            # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
+            overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
+
+            if self.mode == "C":
+                # For each clonotype, we have one alpha parameter, weight should adjust itself so that one alpha
+                # parameter is actually used
+                with npy.plate("clone_axis", c_nof):
+                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
+                    q_weighted = (w * q).mean(1)
+                alpha = npy.deterministic("alpha", q_weighted ** 2 / (q_weighted * overdispersion - q_weighted))
+            else:
+                # For each mixture component, we have one alpha parameter
+                with npy.plate("cluster_axis", K):
+                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
+                alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
+
+        elif self.alpha_model == "kmeans":
+            # NB mean parameter: q ~ LogNormal(mu_q, sigma_q),
+            # with prior on cluster means and hyperprior variances
+            mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
+            # Cumsum also cumsums the variances, use a small value to be added
+            var_hp_deltas = jnp.array([var_hp, 1])
+
+            sigma2_q_hp = jnp.log(var_hp_deltas / mean_deltas ** 2 + 1)
+            sigma_q_hp = jnp.sqrt(sigma2_q_hp)
+            mu_q_prior = jnp.log(mean_deltas) - sigma2_q_hp / 2
+
+            with npy.plate("cluster_axis", K):
+                delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_hp))
+            q = jnp.cumsum(delta_q, axis=0)
+
+            # NB concentration parameter alpha: convert kmeans variance priors to Gamma parameters,
+            # alpha ~ Gamma(a, b),
+            # with a, b so that mean = cluster_variance and var = hyperprior_variances of the LogNormal
+
+            # Convert kmeans cluster variance to alpha parameter (also dependent on cluster mean)
+            if self.mode == "C":
+                # Use mean and variance of each clone as prior, alpha_prior.shape = (c_nof)
+                alpha_prior = clone_means**2 / (np.maximum(clone_variances, 1e-1) - clone_means - 1e-8)
+            elif self.mode == "I":
+                # Use kmeans cluster mean and variance as prior, alpha_prior.shape = (2)
+                alpha_prior = cluster_means**2 / (np.maximum(cluster_variances, 1e-1) - cluster_means)
+
+            # In case of underdispersion (negative alpha), set to a high number, so var ~ mean
+            alpha_prior[alpha_prior <= 0] = 100
+
+            # Set prior to 1 if between 0 and 1 to avoid numerical issues
+            alpha_prior[(alpha_prior > 0) & (alpha_prior < 1)] = 1
+
+            # LogNormal
+            # sigma2_alpha_hp = jnp.log(var_hp / alpha_prior ** 2 + 1)
+            # sigma_alpha_hp = jnp.sqrt(sigma2_alpha_hp)
+            #
+            # mu_alpha_prior = jnp.log(alpha_prior) - sigma2_alpha_hp / 2
+
+            # if self.mode == "C":
+            #     with npy.plate("clone_axis", c_nof):
+            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hp))
+            # elif self.mode == 'I':
+            #     with npy.plate("cluster_axis", K):
+            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hp))
+
+            # Gamma distribution
+            # compute Gamma parameters
+            a = alpha_prior ** 2 / var_hp
+            b = alpha_prior / var_hp
+
+            if self.mode == "C":
+                with npy.plate("clone_axis", c_nof):
+                    # shape = (c_nof, 1)
+                    alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
+            elif self.mode == 'I':
+                with npy.plate("cluster_axis", K):
+                    # shape = (2, )
+                    alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
+
+        else:
+            raise NotImplementedError(f" {self.alpha_model} not implemented")
 
         # Sample from the mixture model
         with npy.plate("sample_axis", N_sample):
             if x_neg is not None:
-                if self.mode == "H":
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha),
-                                          obs=x_neg)
-                elif self.mode == "C":
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=q[0],
-                                                                concentration=alpha[clone]),
-                                          obs=x_neg)
+                if self.mode == "C":
+                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                                          fn=npd.NegativeBinomial2(mean=q[0],
+                                                                concentration=alpha[clone]),)
                 else:
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=q[0], concentration=alpha[0]),
-                                          obs=x_neg)
+                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                                          fn=npd.NegativeBinomial2(mean=q[0], concentration=alpha[0]),)
 
             # target pMHC
             if self.mode == "C":
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
-                                                                         concentration=alpha[clone].reshape(
-                                                                             (N_sample, 1))
-                                                                         )
-                                                )
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q, concentration=alpha[clone, None]))
             else:
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q,
-                                                                         concentration=alpha))
+                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=q, concentration=alpha))
 
             yhat = npy.sample("yhat", mixture, obs=x)
 
