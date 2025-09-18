@@ -5,23 +5,19 @@ from collections import defaultdict
 from typing import Union, Tuple, Optional, Any
 
 import jax
-import scipy.special
-
 import seaborn as sns
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import anndata as ad
 import mudata as md
-import numpyro as npy
 import numpyro.distributions as npd
 import statsmodels.formula.api as smf
+import matplotlib.pyplot as plt
 
 from mudata import MuData
 from scipy import stats
-from scipy.special import expit
+from sklearn.metrics import precision_recall_curve
 
-import matplotlib.pyplot as plt
 
 from dextrademixer.utils.utils import remove_outliers, convert_neg_binom_params, \
     convert_to_invdispersion, convert_to_variance, dist_to_sim, generate_sim_from_ltridist, \
@@ -402,8 +398,12 @@ class DextramerSimulator:
                                              total_cells: int = 5000,
                                              nof_clones: int = 150,
                                              binding_ratio: float = 0.05,
-                                             binding_fold_increase_range: list[float] = None,
-                                             variance_fold_increase_range: list[float] = None,
+                                             mean_non_binder: float = None,
+                                             concentration_non_binder: float = None,
+                                             mean_neg_ctrl: float = None,
+                                             concentration_neg_ctrl: float = None,
+                                             mean_inc: float = None,
+                                             var_inc: float = None,
                                              p_nonbinding_clone_outlier=0.0,
                                              p_binding_outlier=0.0,
                                              nof_clonotype_cluster=None,
@@ -413,21 +413,24 @@ class DextramerSimulator:
                                              rng_key: int = 42
                                              ) -> Union[Tuple[MuData, Any], MuData]:
         """
-        Given negative control mean and concentration parameters (estimated from real data) generate binding data for
-        one pMHC with predefined positive fold-change.
+        Given distribution parameters generate binding data for one pMHC. If certain parameters are not specified,
+        they will be sampled from fitted distributions of real data.
 
         Args:
             total_cells: number of total cell to generate
             nof_clones: number of clones measured in experiments.
             binding_ratio: ratio of binder vs non-binder
-            binding_fold_increase_range: list of fold increase for pMHC binding cells
-            variance_fold_increase_range: list of fold increase of the variance to the mean of a negative binomial
-                                          (i.e. variance_fold_increase_range=[1] => mean = var).
-                                          If not specified estimated inverdispersion of clonotypes will be used
-            p_nonbinding_clone_outlier: The probability that a non-binding clone is clustered together with binding clones
-            p_binding_outlier: the probability of a cell of binding clonotype to have low pMHC counts
-            nof_clonotype_cluster: number of clonotype clusters to simulate in case covariance matrix should be
-                                   simulated (if None than randomly sampled between [2, nof_clones]
+            mean_non_binder: mean of non-binder, if specified use this value, else sampled from fitted distribution
+            concentration_non_binder: concentration parameter of non-binder, if specified use this value,
+                                      else sampled from fitted distribution
+            mean_neg_ctrl: mean of negative control, if specified use this value, else sampled from fitted distribution
+            concentration_neg_ctrl: concentration parameter of negative control, if specified use this value,
+                                    else sampled from fitted distribution
+            mean_inc: fold increase of mean of binder vs non-binder, if specified use this value,
+                      else sampled from fitted distribution
+            var_inc: fold increase of variance of binder vs non-binder, if specified use this value,
+                     else sampled from fitted distribution
+            p_binding_outlier: the probability of a cell of binding clonotype to have low (noise-level) counts
             use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
             simulate_neg_control: whether to simulate a negative control pMHC for each cell (default: False)
             plot_data: boolean whether to plot simulated data (default: False)
@@ -443,10 +446,6 @@ class DextramerSimulator:
         else:
             params = DextramerSimulator.default_params()
 
-        if variance_fold_increase_range is not None and any(v <= 1 for v in variance_fold_increase_range):
-            raise ValueError("`variance_fold_increase_range` contains fold increases <= 1. " +
-                             "Fold increases must be > 1")
-
         if nof_clonotype_cluster is not None:
             if nof_clonotype_cluster > nof_clones:
                 raise ValueError("`nof_clonotype_cluster` must be smaller than `nof_clones`")
@@ -456,13 +455,27 @@ class DextramerSimulator:
             nof_clonotype_cluster = rng.randint(2, nof_clones)
 
         # params
-        neg_mean = params["neg_mean"]
-        neg_concentration = params["neg_concentration"]
         cells_per_clonotype = params["cells_per_clonotype"]
-        concentration_param = params["concentration_param"]
 
-        if binding_fold_increase_range is None:
-            binding_fold_increase_range = [2, 5, 10, 50, 100, 150, 200, 500]
+        # Sample parameters if not provided
+        if mean_neg_ctrl is None:
+            mean_neg_ctrl = np.exp(stats.truncnorm(-1.0539178917389445, 1.8375518345106903, loc=1.018115879390079, scale=0.4175162931163312).rvs(random_state=rng))
+        if concentration_neg_ctrl is None:
+            overdisp_neg_ctrl = stats.gamma(a=4.186062616134899, scale=1.2384303396204106).rvs(random_state=rng) + 1
+            var_neg_ctrl = mean_neg_ctrl * overdisp_neg_ctrl
+            concentration_neg_ctrl = convert_to_invdispersion(mean_neg_ctrl, var_neg_ctrl)
+        if mean_non_binder is None:
+            mean_non_binder = np.exp(stats.truncnorm(-1.4325807532116341, 1.9485510504360735, loc=2.0461540382126118, scale=0.6019089551720753).rvs(random_state=rng))
+        if concentration_non_binder is None:
+            overdisp_non_binder = stats.gamma(a=0.802396044662406, scale=6.554415080004114).rvs(random_state=rng) + 1
+            var_non_binder = mean_non_binder * overdisp_non_binder
+            concentration_non_binder = convert_to_invdispersion(mean_non_binder, var_non_binder)
+        if mean_inc is None:
+            mean_inc = stats.uniform(50, 450).rvs(random_state=rng)  # between [50, 450+50]
+        mean_pos = mean_inc * mean_non_binder
+        if var_inc is None:
+            var_inc = stats.uniform(100, 400).rvs(random_state=rng)  # between [100, 400+100]
+        concentration_pos = convert_to_invdispersion(mean_pos, mean_pos * var_inc)
 
         binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
         K = None
@@ -470,7 +483,6 @@ class DextramerSimulator:
 
         # simulate TCR similarity clusters
         if use_clonotype_cov:
-
             cc_assignment = self.__cc_assignment(binder_assignment,
                                                        nof_clones,
                                                        nof_clonotype_cluster,
@@ -489,6 +501,7 @@ class DextramerSimulator:
         d = {"x": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
         if simulate_neg_control:
             d["x_neg"] = []
+
         key = jax.random.PRNGKey(rng_key)  # set starting rng_key
         for i in range(nof_clones):
             # Propagate the key to create new subkeys for each clone, else the same distribution will always be sampled
@@ -498,28 +511,24 @@ class DextramerSimulator:
             n_cells = cells_per_clone[i]
 
             if is_binder:
-                fold_change = float(rng.choice(binding_fold_increase_range))
-                mean = fold_change * neg_mean
-                if variance_fold_increase_range is None:
-                    concentration = stats.gamma.rvs(*concentration_param, random_state=rng)
-                else:
-                    concentration = convert_to_invdispersion(mean, mean*rng.choice(variance_fold_increase_range))
+                mean = mean_pos
+                concentration = concentration_pos
             else:
-                fold_change = 0.0
-                mean = neg_mean
+                mean = mean_non_binder
                 # add some noise to neg_concentration
-                a = (0.001 - neg_concentration) / (neg_concentration / 3)
-                concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
-                                                    random_state=rng)
+                a = (0.001 - concentration_non_binder) / (concentration_non_binder / 3)
+                concentration = stats.truncnorm.rvs(a, np.inf, loc=concentration_non_binder,
+                                                    scale=concentration_non_binder / 3, random_state=rng)
 
             x = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
+
             if p_binding_outlier > 0 and is_binder:
                 outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells, random_state=rng)
                 outlier_idx = np.where(outlier)
 
-                a = (0.001 - neg_concentration) / (neg_concentration / 3)
-                concentration = stats.truncnorm.rvs(a, np.inf, loc=neg_concentration, scale=neg_concentration / 3,
-                                                    random_state=rng)
+                a = (0.001 - concentration_non_binder) / (concentration_non_binder / 3)
+                concentration = stats.truncnorm.rvs(a, np.inf, loc=concentration_non_binder,
+                                                    scale=concentration_non_binder / 3, random_state=rng)
 
                 x = x.at[outlier_idx].set(
                     DextramerSimulator.generate_nb_val(mean, concentration, size=np.sum(outlier), rng_key=key)
@@ -530,20 +539,47 @@ class DextramerSimulator:
 
             if simulate_neg_control:
                 key, subkey = jax.random.split(key)
-                mean = neg_mean
                 x_neg = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
                 d["x_neg"].extend(x_neg.tolist())
 
             d["x"].extend(x.tolist())
             d["binder"].extend([is_binder] * n_cells)
             d["clone"].extend([i] * n_cells)
-            d["fold_increase"].extend([fold_change] * n_cells)
+            d["fold_increase"].extend([mean_inc] * n_cells)
 
         mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, K, cc_assignment)
+        # Best theoretical F1
+        precision, recall, thresholds = precision_recall_curve(mdat['airr'].obs['is_binder'], mdat['gex'].X[:, 0])
+        f1 = 2 * precision * recall / (precision + recall + 1e-12)
+        best_idx = np.argmax(f1)
+        best_threshold = thresholds[best_idx]
+        best_f1 = f1[best_idx]
+
+        sim_params = {
+            'mean_non_binder': mean_non_binder,
+            'concentration_non_binder': concentration_non_binder,
+            'mean_neg_ctrl': mean_neg_ctrl,
+            'concentration_neg_ctrl': concentration_neg_ctrl,
+            'mean_inc': mean_inc,
+            'var_inc': var_inc,
+            'mean_pos': mean_pos,
+            'concentration_pos': concentration_pos,
+            'total_cells': total_cells,
+            'nof_clones': nof_clones,
+            'binding_ratio': binding_ratio,
+            'p_binding_outlier': p_binding_outlier,
+            'use_clonotype_cov': use_clonotype_cov,
+            'rng_key': rng_key,
+            'best_f1': best_f1,
+            'best_threshold': best_threshold,
+        }
+        mdat['gex'].uns['sim_params'] = sim_params
+
         if plot_data:
             return mdat, DextramerSimulator.__plot_simulated_data(d)
         else:
             return mdat
+
 
     def simulate_pmhc_data_from_sample(self,
                                        total_cells: int = 5000,

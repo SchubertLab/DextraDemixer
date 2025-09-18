@@ -106,8 +106,8 @@ class TestSimulation(unittest.TestCase):
                                                              binding_ratio=0.1,
                                                              nof_clones=100,
                                                              p_binding_outlier=0.1,
-                                                             binding_fold_increase_range=[100],
-                                                             variance_fold_increase_range=[1.2],
+                                                             mean_inc=100,
+                                                             var_inc=100,
                                                              simulate_neg_control=True,
                                                              plot_data=True,
                                                              rng_key=3443)
@@ -120,8 +120,8 @@ class TestSimulation(unittest.TestCase):
                                                          binding_ratio=0.1,
                                                          nof_clones=5,
                                                          p_binding_outlier=0.1,
-                                                         binding_fold_increase_range=[100],
-                                                         variance_fold_increase_range=[1.2],
+                                                         mean_inc=100,
+                                                         var_inc=100,
                                                          simulate_neg_control=True,
                                                          rng_key=3443)
 
@@ -129,8 +129,8 @@ class TestSimulation(unittest.TestCase):
                                                          binding_ratio=0.1,
                                                          nof_clones=5,
                                                          p_binding_outlier=0.1,
-                                                         binding_fold_increase_range=[100],
-                                                         variance_fold_increase_range=[1.2],
+                                                         mean_inc=100,
+                                                         var_inc=100,
                                                          simulate_neg_control=True,
                                                          rng_key=3443)
 
@@ -143,8 +143,8 @@ class TestSimulation(unittest.TestCase):
                                                          binding_ratio=0.1,
                                                          nof_clones=5,
                                                          p_binding_outlier=0.1,
-                                                         binding_fold_increase_range=[100],
-                                                         variance_fold_increase_range=[1.2],
+                                                         mean_inc=100,
+                                                         var_inc=100,
                                                          simulate_neg_control=True,
                                                          rng_key=3443)
 
@@ -152,8 +152,8 @@ class TestSimulation(unittest.TestCase):
                                                          binding_ratio=0.1,
                                                          nof_clones=5,
                                                          p_binding_outlier=0.1,
-                                                         binding_fold_increase_range=[100],
-                                                         variance_fold_increase_range=[1.2],
+                                                         mean_inc=100,
+                                                         var_inc=100,
                                                          simulate_neg_control=True,
                                                          rng_key=58673628)
 
@@ -204,14 +204,14 @@ class TestSimulation(unittest.TestCase):
 
         sim = DextramerSimulator()
         mdat = sim.simulate_pmhc_data_from_distribution(total_cells=5000,
-                                                             binding_ratio=0.1,
-                                                             nof_clones=150,
-                                                             binding_fold_increase_range=[5],
-                                                             variance_fold_increase_range=[2],
-                                                             simulate_neg_control=False,
-                                                             use_clonotype_cov=True,
-                                                             nof_clonotype_cluster=50,
-                                                             plot_data=False)
+                                                        binding_ratio=0.1,
+                                                        nof_clones=150,
+                                                        mean_inc=100,
+                                                        var_inc=100,
+                                                        simulate_neg_control=False,
+                                                        use_clonotype_cov=True,
+                                                        nof_clonotype_cluster=50,
+                                                        plot_data=False)
         K = mdat.mod["airr"].uns["clone_cov"]
 
         idx = np.random.randint(0, K.shape[0], size=[20])
