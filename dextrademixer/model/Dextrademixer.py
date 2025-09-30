@@ -194,7 +194,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         return self.__make_arvis()
 
-    def fit_svi(self, guide=npy.infer.autoguide.AutoNormal, svi_config: Dict[str, Union[int, float]] = None,
+    def fit_svi(self, guide=npy.infer.autoguide.AutoMultivariateNormal, svi_config: Dict[str, Union[int, float]] = None,
                 nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
                 return_loss: bool = False) \
             -> az.InferenceData:
