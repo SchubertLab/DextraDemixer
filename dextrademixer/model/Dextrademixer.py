@@ -302,6 +302,8 @@ class DextraDemixer(ApMHCDeconvolution):
     def predict_posterior_class(self,
                                 threshold: float = None,
                                 target_fdr: float = None,
+                                quantile: float = None,
+                                cred_intvl: float = None,
                                 clonotype_adherence: bool = False
                                 ) -> Tuple[Array, Array]:
         """
@@ -314,12 +316,24 @@ class DextraDemixer(ApMHCDeconvolution):
                         probabilities
             target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
                         class probability
-            clonotype_adherence: instead of using posterior class assignment per cell use clonotype probability vector
-                                if available.
+            quantile: (Optional) whether and what lower quantile should be used instead of the population mean as conservative
+                      measure of p. quantile should be in (0, 0.5]
+            cred_intvl: (Optional) instead of using the summarized class probability we estimate a distribution
+                        over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
+            clonotype_adherence: (Optional) instead of using posterior class assignment per cell use clonotype
+                                 probability vector if available.
         Returns:
             A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
             class assignment decision
         """
+        def __return_p_summary(p_sample):
+            if quantile:
+                return jnp.quantile(p_sample, quantile, axis=0)[:, 1]
+            elif cred_intvl:
+                return p_sample
+            else:
+                return jnp.nanmean(p_sample, axis=0)[:, 1]
+
         if self.sampler is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
 
@@ -329,29 +343,30 @@ class DextraDemixer(ApMHCDeconvolution):
                 #TODO ALTERNATIVE USE MAJORITY VOTING IN CLONE?
                 posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
                                                                 sample_shape=(500,))
+                p = __return_p_summary(posterior_samples["w"])
 
-                # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
-                p = jnp.nanmean(posterior_samples["w"], axis=0)[:, 1]
             else:
                 predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
                                                   num_samples=500)
                 samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key
-                p = jnp.nanmean(jnp.exp(samples["log_p"]), axis=0)[:, 1]
+                p = __return_p_summary(jnp.exp(samples["log_p"]))
 
         else:
             if clonotype_adherence and self.model.data["clone"] is not None:
-                p = jnp.mean(self.sampler.get_samples()["w"], axis=0)[:,1]
+                p = __return_p_summary(self.sampler.get_samples()["w"])
             else:
-                p = jnp.mean(jnp.exp(self.sampler.get_samples()["log_p"][..., 1]), axis=0)
+                p = __return_p_summary(jnp.exp(self.sampler.get_samples()["log_p"][..., [0,1]]))
 
-        assignment = self._predict_posterior_class(p, threshold, target_fdr)
+        if cred_intvl is not None:
+            p, assignment, threshold = self._predict_posterior_class_dist(p, target_fdr, cred_intvl)
+        else:
+            assignment = self._predict_posterior_class(p, threshold, target_fdr)
 
         if clonotype_adherence and self.model.data["clone"] is not None:
             assignment = assignment[self.model.data["clone"]]
             p = p[self.model.data["clone"]]
 
         return p, assignment
-        # return p.__array__(), assignment.__array__()
 
     def summary(self):
         if self.trace is None and self.svi_result is None:
@@ -371,6 +386,78 @@ class DextraDemixer(ApMHCDeconvolution):
     def __make_arvis(self):
         self.trace = az.from_numpyro(self.sampler)
         return self.trace
+
+    @staticmethod
+    def _predict_posterior_class_dist(p_samples,  target_fdr, cred_intvl, nof_thresh=100):
+        """
+        Posterior BFDR thresholding (Newton et al. 2004, extended with posterior uncertainty).
+
+        Given posterior draws of signal probabilities \(p_i^{(s)}\), this method computes
+        the posterior distribution of the global FDR across candidate thresholds \(\tau\).
+        For each \(\tau\), the per-draw FDR is
+
+        \[
+        \text{FDR}^{(s)}(\tau) =
+        \frac{\sum_i (1 - p_i^{(s)}) \mathbf{1}[p_i^{(s)} \geq \tau]}
+             {\sum_i \mathbf{1}[p_i^{(s)} \geq \tau]} .
+        \]
+
+        The selected threshold is the largest \(\tau\) such that
+        \(\Pr(\text{FDR}(\tau) \leq \alpha \mid \text{data}) \geq \text{cred\_level}\).
+        This provides a conservative extension of the DPP rule that accounts for
+        posterior uncertainty in posterior class probabilities.
+
+        Args:
+            p_samples (Array): Posterior samples of signal probabilities,
+                shape (n_draws, n_samples).
+            target_fdr (float): Target false discovery rate \(\alpha \in [0,1]\).
+            cred_intvl (float, optional): Credibility requirement for
+                FDR control, \(cred_intvl \in [0.5,1)\)
+
+        returns:
+            Tuple[Array, Array, float]:
+                - Posterior mean posterior class probabilities (\( \hat{p}_i \)), shape (n_samples,)
+                - Hard assignments (0/1), shape (n_samples,)
+                - Selected threshold \(\tau\)
+        """
+        p_samples = p_samples[:,:, 1]
+        p_mean = jnp.mean(p_samples, axis=0) # (n, )
+
+        # Candidate thresholds = unique posterior means
+        # or even grid in (0, 1)
+        #candidate_thresh = jnp.sort(jnp.unique(p_mean))  # (T,)
+        candidate_thresh = jnp.linspace(0.0, 1.0, nof_thresh+2)[1:-1]
+
+        # Expand shapes: (n_draws, n) vs (T,)
+        # -> mask has shape (T, n_draws, n)
+        mask = p_samples[None, :, :] >= candidate_thresh[:, None, None]
+
+        # number of discoveries per draw: (T, n_draws)
+        n_disc = mask.sum(axis=2)
+
+        # local fdr = 1 - p
+        lfdr = 1.0 - p_samples  # (n_draws, n)
+
+        # numerator = sum of lfdr among discoveries: (T, n_draws)
+        num = jnp.einsum("tns,ns->tn", mask, lfdr)
+
+        # avoid div-by-zero: set fdr_draws=0 where n_disc=0
+        fdr_draws = jnp.where(n_disc > 0, num / n_disc, 0.0)
+
+        # posterior probability that FDR ≤ target: (T,)
+        # keep thresholds that pass cred_level
+        valid = (fdr_draws <= target_fdr).mean(axis=1) >= cred_intvl
+
+        if valid.any():
+            n_discoveries = n_disc.mean(axis=1)
+            # select threshold that passes credibility interval on FDR with the largest number of discoveries
+            threshold_idx = jnp.argmax(jnp.where(valid, n_discoveries, -1))
+            threshold = candidate_thresh[threshold_idx]
+        else:
+            threshold = 1.0
+
+        assignment = (p_mean >= threshold).astype(jnp.int32)
+        return p_mean, assignment, threshold
 
     def plot_results(self, assignment, p_pred, y_true=None, seed=42, config=''):
 
