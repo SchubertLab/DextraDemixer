@@ -12,6 +12,7 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import confusion_matrix
 
 from dextrademixer.model import DextraDemixer
+from dextrademixer.model.DextraDemixerMulti import DextraDemixerMulti
 from dextrademixer.utils import DextramerSimulator, dist_to_sim
 from dextrademixer.utils.simulation import t_cell_simulation
 
@@ -526,12 +527,153 @@ class MyTestCase(unittest.TestCase):
         trace = mixer.fit(sampler_config={"nuts": {"dense_mass": True}})
         print(mixer.summary())
         #print(mdat.mod["airr"].obs.is_binder)
-        return True
+
 
         p, assignment = mixer.predict_posterior_class(target_fdr=0.001)
         N = len(mdat.mod["airr"].obs.is_binder)
         accuracy = (mdat.mod["airr"].obs.is_binder == assignment).sum() / N
         print("Accuracy", accuracy)
+
+    def test_dextramermulti_preprocessing(self):
+
+        mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+
+        mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
+
+        mixer = DextraDemixerMulti(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(mdat,
+                                    ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
+                                    neg_ctrl_key="negative_control"
+                                    )
+
+        print(mixer.models[0].data)
+        s = mixer.models[0].data["s"]
+        print(f"Size factor min:{jnp.min(s)}, max:{jnp.max(s)}")
+
+        assert jnp.min(s) > 0
+        assert ~jnp.isinf(jnp.max(s))
+
+    def test_dextramermulti_mixturemodel_svi(self):
+        import numpy as np
+
+        mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+
+        mdat = mdat[np.random.choice(a=mdat.obs.index, size=500),:]
+
+        mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
+
+        mixer = DextraDemixerMulti(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(mdat,
+                                    ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
+                                    neg_ctrl_key="negative_control",
+                                    ir_clone_key="clone_id"
+                                    )
+
+        out = mixer.fit_svi(guide=npy.infer.autoguide.AutoDiagonalNormal, svi_config={"maxiter": 500})
+
+        ps, ass = mixer.predict_posterior_class(clone_majority=False, clonotype_adherence=True)
+
+        print(ass)
+        print(ps.shape, ass.shape)
+        print(mixer.summary())
+
+    def test_dextramermulti_mixturemodel_mcmc(self):
+        import numpy as np
+
+        npy.set_platform("cpu")
+        npy.set_host_device_count(4)
+
+        mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+
+        mdat = mdat[np.random.choice(a=mdat.obs.index, size=500),:]
+
+        mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
+
+        mixer = DextraDemixerMulti(model_type="mixturemodel", mode="I")
+        mixer.preprocess_model_data(mdat,
+                                    ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
+                                    neg_ctrl_key="negative_control"
+                                    )
+
+        out = mixer.fit(sampler_config={"progress_bar": True,
+                                        "num_samples": 100,
+                                        "num_warmup": 100,
+                                        "num_chains": 2})
+        print(out)
+
+        ps, ass = mixer.predict_posterior_class()
+        print(ps.shape, ass.shape)
+        print(mixer.summary())
+
+    # def test_dextramermulticached_differences(self):
+    #     import numpy as np
+    #     import time
+    #
+    #     mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+    #
+    #     mdat = mdat[np.random.choice(a=mdat.obs.index, size=500),:]
+    #
+    #     mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
+    #
+    #     start = time.time()
+    #     mixer = DextraDemixerMulti(model_type="mixturemodel", mode="I")
+    #     mixer.preprocess_model_data(mdat,
+    #                                 ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
+    #                                 neg_ctrl_key="negative_control",
+    #                                 ir_clone_key="clone_id"
+    #                                 )
+    #     out = mixer.fit_svi(guide=npy.infer.autoguide.AutoDiagonalNormal, svi_config={"maxiter": 500})
+    #     end = time.time()
+    #
+    #     print(f"\nUncached estimation took {end - start}")
+    #
+    #     start = time.time()
+    #     mixer_cached = DextraDemixerMultiCached(model_type="mixturemodel", mode="I")
+    #     mixer_cached.preprocess_model_data(mdat,
+    #                                 ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
+    #                                 neg_ctrl_key="negative_control",
+    #                                 ir_clone_key="clone_id"
+    #                                 )
+    #     out_cached = mixer_cached.fit_svi(guide=npy.infer.autoguide.AutoDiagonalNormal, svi_config={"maxiter": 500})
+    #     end = time.time()
+    #
+    #     print(f"\nCached estimation took {end - start}")
+    #
+    #     ps_cached, ass_cached = mixer_cached.predict_posterior_class(clone_majority=False, clonotype_adherence=True)
+    #     ps, ass  = mixer.predict_posterior_class(clone_majority=False, clonotype_adherence=True)
+    #
+    #     assert np.all(np.isclose(ps, ps_cached))
+    #     assert np.all(np.isclose(ass, ass_cached))
+    #
+    #     summary = az.summary(out[0], var_names=["~log_p"])
+    #     summary_cached = az.summary(out_cached[0], var_names=["~log_p"])
+    #     assert summary.equals(summary_cached)
+    #
+    # def test_dextramermulticached(self):
+    #     import numpy as np
+    #     import time
+    #
+    #     mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+    #
+    #     mdat = mdat[np.random.choice(a=mdat.obs.index, size=500),:]
+    #
+    #     mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
+    #
+    #     start = time.time()
+    #     mixer_cached = DextraDemixerMultiCached(model_type="mixturemodel", mode="I")
+    #     mixer_cached.preprocess_model_data(mdat,
+    #                                 ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
+    #                                 neg_ctrl_key="negative_control",
+    #                                 ir_clone_key="clone_id"
+    #                                 )
+    #     out_cached = mixer_cached.fit_svi(guide=npy.infer.autoguide.AutoDiagonalNormal, svi_config={"maxiter": 500})
+    #     end = time.time()
+    #
+    #     print(f"\nCached estimation took {end - start}")
+    #
+    #     ps_cached, ass_cached = mixer_cached.predict_posterior_class(clone_majority=False, clonotype_adherence=True)
+    #
+    #     print(az.summary(out_cached[0], var_names=["~log_p"]))
 
     def test_simulated_data_cov(self):
         sim = DextramerSimulator()
