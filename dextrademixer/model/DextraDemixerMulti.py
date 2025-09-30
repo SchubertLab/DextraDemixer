@@ -77,7 +77,7 @@ class DextraDemixerMulti(DextraDemixer):
         self.sampler = None
         self.svi = None
         self.optimizer = None
-        self.guide = None
+        self.guides = []
         self.is_svi = None
 
         # input data
@@ -170,7 +170,7 @@ class DextraDemixerMulti(DextraDemixer):
         """
         fits the mixture model with MCMC and returns the trace
         """
-        if self.model is None:
+        if self.model.data is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
         self.is_svi = False
@@ -209,9 +209,10 @@ class DextraDemixerMulti(DextraDemixer):
 
 
     def fit_svi(self, guide=npy.infer.autoguide.AutoMultivariateNormal, svi_config: Dict[str, Union[int, float]] = None,
-                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777) -> List[az.InferenceData]:
+                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
+                return_loss: bool = False) -> List[az.InferenceData]:
 
-        if self.model is None:
+        if self.model.data is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
         self.is_svi = True
@@ -225,13 +226,14 @@ class DextraDemixerMulti(DextraDemixer):
         svi_config = {**self.get_default_sampler_config()["svi"], **svi_config}
         svi_config.pop("adam", None)
         svi_config.pop("tracer", None)
-        adam_config["transition_steps"] = svi_config.get("maxiter", 1000) // 2
+
+        self.optimizer = npy.optim.ClippedAdam(adam_config["init_value"])
 
         for j in range(self.M):
             # preprocess model with new incoming data
             self.model.preprocess_model_data(self.x[:,j], self.s, self.x_neg, self.c, self.sigma, self.mode)
             self.__fit_svi(j, guide, adam_config, tracer_config, svi_config,
-                                                nof_inits, use_minimal_loss)
+                                                nof_inits, use_minimal_loss, rng_key)
         return self.traces
 
     def __fit_svi(self,
@@ -240,7 +242,8 @@ class DextraDemixerMulti(DextraDemixer):
                   adam_config: Dict[str, Union[int, float]],
                   tracer_config: Dict[str, Union[int, float]],
                   svi_config: Dict[str, Union[int, float]],
-                  nof_inits: int, use_minimal_loss: bool) -> az.InferenceData:
+                  nof_inits: int, use_minimal_loss: bool,
+                  rng_key: int) -> az.InferenceData:
         """
         Implements stochastic variational inference
 
@@ -251,27 +254,34 @@ class DextraDemixerMulti(DextraDemixer):
         use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
         """
 
-        # check for custom guide in self.model otherwise use autoguide
-        if self.guide is None:
-            if callable(getattr(self.model, "guide", None)):
-                self.guide = self.model.guide
-            else:
-                self.guide = guide(self.model.model)
-
-            self.svi = npy.infer.SVI(self.model.model,
-                                     self.guide,
-                                     npy.optim.ClippedAdam(exponential_decay(**adam_config)),
-                                     loss=npy.infer.TraceGraph_ELBO(**tracer_config))
-
         # find good random initialization
-        best_loss, best_key = min((self.svi.evaluate(self.svi.init(key)), key) for key in
-                                  random.split(random.PRNGKey(self.rng_key), nof_inits))
+        random_init = []
+        for i, key in enumerate(random.split(random.PRNGKey(rng_key), nof_inits)):
+            if callable(getattr(self.model, "guide", None)):
+                local_guide = self.model.guide
+            else:
+                local_guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
+            svi = npy.infer.SVI(self.model.model, local_guide, self.optimizer,
+                                loss=npy.infer.TraceGraph_ELBO(**tracer_config))
+            init_state = svi.init(key)
+            loss = svi.evaluate(init_state)
+
+            # Initialization depends on the guide, so need to save the best guide
+            random_init.append((loss, key, local_guide))
+
+        init_losses = np.array([x[0] for x in random_init])
+        best_idx = jnp.nanargmin(init_losses)
+        best_loss, best_key, best_guide = random_init[best_idx]
+
+        self.guides[j] = best_guide
+        svi = npy.infer.SVI(self.model.model, self.guides[j], self.optimizer,
+                            loss=npy.infer.TraceGraph_ELBO(**tracer_config))
 
         def body_fn(svi_state, step):
-            svi_state, loss = self.svi.stable_update(svi_state, step=step)
-            return svi_state, loss, self.svi.get_params(svi_state)
+            svi_state, loss = svi.stable_update(svi_state, step=step)
+            return svi_state, loss, svi.get_params(svi_state)
 
-        svi_state = self.svi.init(rng_key=best_key)
+        svi_state = svi.init(rng_key=best_key)
         losses = []
         params = []
         with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
@@ -301,7 +311,8 @@ class DextraDemixerMulti(DextraDemixer):
         svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
         self.svi_results[j] = svi_result
 
-        posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), svi_result.params, sample_shape=(500,))
+        posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), svi_result.params,
+                                                        sample_shape=(500,))
 
         # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
         posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
@@ -365,7 +376,7 @@ class DextraDemixerMulti(DextraDemixer):
             # posterior probability of belonging to the binding class
             if self.is_svi:
                 if clonotype_adherence[j] and self.model.data["clone_continuous"] is not None:
-                    posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key),
+                    posterior_samples = self.guides[j].sample_posterior(random.PRNGKey(self.rng_key),
                                                                         self.svi_results[j].params,
                                                                         sample_shape=(500,))
 
@@ -373,7 +384,7 @@ class DextraDemixerMulti(DextraDemixer):
                     p = jnp.nanmean(posterior_samples["w"], axis=0)[:, 1]
                 else:
                     predictive = npy.infer.Predictive(self.model.model,
-                                                      guide=self.guide,
+                                                      guide=self.guides[j],
                                                       params=self.svi_results[j].params,
                                                       num_samples=500)
                     samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key

@@ -535,8 +535,8 @@ class MyTestCase(unittest.TestCase):
         print("Accuracy", accuracy)
 
     def test_dextramermulti_preprocessing(self):
-
-        mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+        data_path = os.path.dirname(os.path.abspath(__file__))
+        mdat = mu.read(os.path.join(data_path, f"../../data/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu"))
 
         mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
 
@@ -556,7 +556,7 @@ class MyTestCase(unittest.TestCase):
     def test_dextramermulti_mixturemodel_svi(self):
         import numpy as np
 
-        mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+        mdat = mu.read("../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
 
         mdat = mdat[np.random.choice(a=mdat.obs.index, size=500),:]
 
