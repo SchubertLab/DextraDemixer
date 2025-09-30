@@ -328,7 +328,6 @@ class DextraDemixer(ApMHCDeconvolution):
         """
         def __return_p_summary(p_sample):
             if quantile:
-                print("DIM:", p_sample.shape)
                 return jnp.quantile(p_sample, quantile, axis=0)[:, 1]
             elif cred_intvl:
                 return p_sample

@@ -337,8 +337,8 @@ class MyTestCase(unittest.TestCase):
                                                         binding_ratio=0.3,
                                                         simulate_neg_control=True,
                                                         use_clonotype_cov=False,
-                                                        binding_fold_increase_range=[5],
-                                                        variance_fold_increase_range=[1.2],
+                                                        mean_inc=5.0,
+                                                        var_inc=1.2,
                                                         plot_data=True)
 
         plt.show()
