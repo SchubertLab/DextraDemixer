@@ -339,7 +339,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # posterior probability of belonging to the binding class
         if self.is_svi:
-            if clonotype_adherence and self.model.data["clone"] is not None:
+            if clonotype_adherence and self.model.data["clone_continuous"] is not None:
                 #TODO ALTERNATIVE USE MAJORITY VOTING IN CLONE?
                 posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
                                                                 sample_shape=(500,))
@@ -352,7 +352,7 @@ class DextraDemixer(ApMHCDeconvolution):
                 p = __return_p_summary(jnp.exp(samples["log_p"]))
 
         else:
-            if clonotype_adherence and self.model.data["clone"] is not None:
+            if clonotype_adherence and self.model.data["clone_continuous"] is not None:
                 p = __return_p_summary(self.sampler.get_samples()["w"])
             else:
                 p = __return_p_summary(jnp.exp(self.sampler.get_samples()["log_p"][..., [0,1]]))
@@ -362,9 +362,9 @@ class DextraDemixer(ApMHCDeconvolution):
         else:
             assignment = self._predict_posterior_class(p, threshold, target_fdr)
 
-        if clonotype_adherence and self.model.data["clone"] is not None:
-            assignment = assignment[self.model.data["clone"]]
-            p = p[self.model.data["clone"]]
+        if clonotype_adherence and self.model.data["clone_continuous"] is not None:
+            assignment = assignment[self.model.data["clone_continuous"]]
+            p = p[self.model.data["clone_continuous"]]
 
         return p, assignment
 
@@ -787,6 +787,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
             p1 = cluster_proportions[1]
             log_odds_p1 = np.log(p1 / (1 - p1))
 
+            print("DEBUG", scale_factor, np.std(cluster_proportions))
             kmeans_dict.update({"mu_w_mean_prior": log_odds_p1,
                                 "mu_w_var_prior": jnp.clip(scale_factor * np.std(cluster_proportions),
                                                            0.1, 10.0)})
@@ -1067,6 +1068,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
+                              s: Union[pd.Series, np.ndarray, Array] = None,
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
                               sigma: Union[np.ndarray, Array] = None,
@@ -1075,7 +1077,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                               scale_factor: float = 1.0,
                               **kwargs):
 
-        super().preprocess_model_data(x=x, neg_cont=neg_cont, c=c, sigma=sigma, mode=mode,
+        super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c, sigma=sigma, mode=mode,
                                       alpha_model=alpha_model, **kwargs)
         self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor,
                                               outlier_threshold=kwargs['outlier_threshold']

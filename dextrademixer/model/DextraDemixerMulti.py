@@ -55,7 +55,7 @@ class DextraDemixerMulti(DextraDemixer):
 
     """
 
-    def __init__(self, model_type: str = "mixturemodelkmeans", mode: str = "I"):
+    def __init__(self, model_type: str = "mixturemodel", mode: str = "I", alpha_model="overdispersion"):
         super().__init__()
 
         if mode.upper() not in ("I"):
@@ -69,6 +69,7 @@ class DextraDemixerMulti(DextraDemixer):
         #technical variables
         self.rng_key = None
         self.mode = mode.upper()
+        self.alpha_model = alpha_model
 
         self.traces = None
         self.svi_results = None
@@ -77,7 +78,7 @@ class DextraDemixerMulti(DextraDemixer):
         self.sampler = None
         self.svi = None
         self.optimizer = None
-        self.guides = []
+        self.guides = None
         self.is_svi = None
 
         # input data
@@ -116,7 +117,7 @@ class DextraDemixerMulti(DextraDemixer):
         gex = mdata.mod[gex_key]
         air = mdata.mod[ir_key]
 
-        # extrace data specific information
+        # extract data specific information
         if neg_ctrl_key in pmhc_keys:
             pmhc_keys.remove(neg_ctrl_key)
         self.M = len(pmhc_keys)
@@ -148,7 +149,7 @@ class DextraDemixerMulti(DextraDemixer):
         # technical variables:
         self.traces = [None] * self.M
         self.svi_results = [None] * self.M
-
+        self.guides = [None] * self.M
 
     @staticmethod
     def __size_factors(counts: jnp.ndarray) -> jnp.ndarray:
@@ -170,7 +171,7 @@ class DextraDemixerMulti(DextraDemixer):
         """
         fits the mixture model with MCMC and returns the trace
         """
-        if self.model.data is None:
+        if self.x is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
         self.is_svi = False
@@ -185,7 +186,8 @@ class DextraDemixerMulti(DextraDemixer):
 
         for j in range(self.M):
             # preprocess model with new incoming data
-            self.model.preprocess_model_data(self.x[:,j], self.s, self.x_neg, self.c, self.sigma, self.mode)
+            self.model.preprocess_model_data(x=self.x[:,j], s=self.s, neg_cont=self.x_neg, c=self.c, sigma=self.sigma,
+                                             alpha_model=self.alpha_model, mode=self.mode)
             self.__fit(j, nuts_config, sampling_config, rng_key)
         return self.traces
 
@@ -193,7 +195,7 @@ class DextraDemixerMulti(DextraDemixer):
               j: int,
               nuts_config: Dict[str, Union[int, float]],
               sampling_config: Dict[str, Union[int, float]],
-              rng_key: int) -> az.InferenceData:
+              rng_key: int) -> None:
 
         if sampling_config["progress_bar"]:
             print(f"Fitting {j + 1}. pMHC:\n", file=sys.stderr)
@@ -212,7 +214,7 @@ class DextraDemixerMulti(DextraDemixer):
                 nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
                 return_loss: bool = False) -> List[az.InferenceData]:
 
-        if self.model.data is None:
+        if self.x is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
         self.is_svi = True
@@ -231,19 +233,18 @@ class DextraDemixerMulti(DextraDemixer):
 
         for j in range(self.M):
             # preprocess model with new incoming data
-            self.model.preprocess_model_data(self.x[:,j], self.s, self.x_neg, self.c, self.sigma, self.mode)
-            self.__fit_svi(j, guide, adam_config, tracer_config, svi_config,
-                                                nof_inits, use_minimal_loss, rng_key)
+            self.model.preprocess_model_data(x=self.x[:,j], s=self.s, neg_cont=self.x_neg, c=self.c, sigma=self.sigma,
+                                             alpha_model=self.alpha_model, mode=self.mode)
+            self.__fit_svi(j, guide, tracer_config, svi_config, nof_inits, use_minimal_loss, rng_key)
         return self.traces
 
     def __fit_svi(self,
                   j: int,
                   guide: type[npy.infer.autoguide.AutoGuide],
-                  adam_config: Dict[str, Union[int, float]],
                   tracer_config: Dict[str, Union[int, float]],
                   svi_config: Dict[str, Union[int, float]],
                   nof_inits: int, use_minimal_loss: bool,
-                  rng_key: int) -> az.InferenceData:
+                  rng_key: int) -> None:
         """
         Implements stochastic variational inference
 
@@ -311,7 +312,7 @@ class DextraDemixerMulti(DextraDemixer):
         svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
         self.svi_results[j] = svi_result
 
-        posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), svi_result.params,
+        posterior_samples = self.guides[j].sample_posterior(random.PRNGKey(self.rng_key), svi_result.params,
                                                         sample_shape=(500,))
 
         # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
@@ -323,6 +324,8 @@ class DextraDemixerMulti(DextraDemixer):
                                 clone_majority=False,
                                 threshold: Union[List[float], float] = None,
                                 target_fdr: Union[List[float], float] = None,
+                                quantile: Union[List[float], float] = None,
+                                cred_intvl: Union[List[float], float] = None,
                                 clonotype_adherence: Union[List[bool], bool] = False
                                 ) -> Tuple[np.array, np.array]:
         """
@@ -345,6 +348,10 @@ class DextraDemixerMulti(DextraDemixer):
                         probabilities
             target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
                         class probability
+            quantile: (Optional) whether and what lower quantile should be used instead of the population mean as conservative
+                      measure of p. quantile should be in (0, 0.5]
+            cred_intvl: (Optional) instead of using the summarized class probability we estimate a distribution
+                        over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
             clonotype_adherence: instead of using posterior class assignment per cell use clonotype probability vector
                                 if available.
         Returns:
@@ -360,6 +367,14 @@ class DextraDemixerMulti(DextraDemixer):
                 input = [input] * self.M
             return input
 
+        def __return_p_summary(p_sample, _quantile=None, _cred_intvl=None):
+            if _quantile:
+                return jnp.quantile(p_sample, _quantile, axis=0)[:, 1]
+            elif _cred_intvl:
+                return p_sample
+            else:
+                return jnp.nanmean(p_sample, axis=0)[:, 1]
+
         if self.is_svi is None:
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
 
@@ -368,7 +383,11 @@ class DextraDemixerMulti(DextraDemixer):
         target_fdr = __check_input(target_fdr,
                                    "`target_fdr` must be a float or a list of length {} but has length {}.")
         clonotype_adherence = __check_input(clonotype_adherence,
-                                            "`clonotype_adherence` must be a bool or a list of length {} but has length {}.")
+                                   "`clonotype_adherence` must be a float or a list of length {} but has length {}.")
+        quantile = __check_input(quantile,
+                                            "`quantile` must be a bool or a list of length {} but has length {}.")
+        cred_intvl = __check_input(cred_intvl,
+                                            "`cred_intvl` must be a bool or a list of length {} but has length {}.")
 
         ps, assignments = [], []
 
@@ -381,23 +400,31 @@ class DextraDemixerMulti(DextraDemixer):
                                                                         sample_shape=(500,))
 
                     # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
-                    p = jnp.nanmean(posterior_samples["w"], axis=0)[:, 1]
+                    p = __return_p_summary(jnp.array(posterior_samples["w"]), quantile[j], cred_intvl[j])
                 else:
                     predictive = npy.infer.Predictive(self.model.model,
                                                       guide=self.guides[j],
                                                       params=self.svi_results[j].params,
                                                       num_samples=500)
-                    samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key
-                    p = jnp.mean(jnp.exp(samples["log_p"]), axis=0)[:, 1]
+                    samples = predictive(jax.random.PRNGKey(self.rng_key)) # self.rng_key
+                    p = __return_p_summary(jnp.exp(samples["log_p"]), quantile[j], cred_intvl[j])
 
             else:
                 if clonotype_adherence[j] and self.model.data["clone_continuous"] is not None:
-                    p = jnp.array(self.traces[j].posterior["w"].mean(dim=("chain", "draw")).sel(K=1))
+                    w = jnp.array(self.traces[j].posterior["w"])
+                    # requires chain flattening to be compatible with svi-branch
+                    w = w.reshape((w.shape[0] * w.shape[1],) + w.shape[2:])
+                    p = __return_p_summary(w, quantile[j], cred_intvl[j])
                 else:
                     log_p = jnp.array(self.traces[j].posterior["log_p"].values)
-                    p = jnp.mean(jnp.exp(log_p[..., 1]), axis=(0, 1))
+                    # requires chain flattening to be compatible with svi-branch
+                    log_p = log_p.reshape((log_p.shape[0] * log_p.shape[1],) + log_p.shape[2:])
+                    p = __return_p_summary(jnp.exp(log_p[..., [0, 1]]), quantile[j], cred_intvl[j])
 
-            assignment = self._predict_posterior_class(p, threshold[j], target_fdr[j])
+            if cred_intvl[j] is not None:
+                p, assignment, threshold = self._predict_posterior_class_dist(p, target_fdr[j], cred_intvl[j])
+            else:
+                assignment = self._predict_posterior_class(p, threshold[j], target_fdr[j])
 
             if clonotype_adherence[j] and self.model.data["clone_continuous"] is not None:
                 assignment = assignment[self.model.data["clone_continuous"]]
