@@ -786,8 +786,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         if clone is not None and sigma is not None:
             p1 = cluster_proportions[1]
             log_odds_p1 = np.log(p1 / (1 - p1))
-
-            print("DEBUG", scale_factor, np.std(cluster_proportions))
             kmeans_dict.update({"mu_w_mean_prior": log_odds_p1,
                                 "mu_w_var_prior": jnp.clip(scale_factor * np.std(cluster_proportions),
                                                            0.1, 10.0)})
