@@ -345,14 +345,14 @@ class MyTestCase(unittest.TestCase):
         plt.show()
 
         binder = mdat.mod["airr"].obs["is_binder"]
-        mixer = DextraDemixer(model_type="mixturemodel", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode="I")
         mixer.preprocess_model_data(mdat, "pmhc1", neg_ctrl_key="neg_control",  ir_clone_key="clone_id")
-        trace = mixer.fit()
+        trace = mixer.fit_svi()
         print(az.summary(trace, var_names=["~log_p"]))
 
         target_fdr = 0.05
-        p, assignment = mixer.predict_posterior_class(threshold=0.5)
-        #p_q05, assignment_q05 = mixer.predict_posterior_class(quantile=0.25, target_fdr=target_fdr)
+        p, assignment = mixer.predict_posterior_class(threshold=0.5, clonotype_adherence=True)
+        p_q05, assignment_q05 = mixer.predict_posterior_class(quantile=0.25, target_fdr=target_fdr)
         p_cr90, assignment_cr90 = mixer.predict_posterior_class(cred_intvl=0.95, target_fdr=target_fdr)
         N = len(binder)
 
@@ -360,15 +360,13 @@ class MyTestCase(unittest.TestCase):
         print(p_cr90[0:10])
 
         fdr, tpr, acc = _performance(binder, assignment)
-        #fdr_q05, tpr_q05, acc_q05 = _performance(binder, assignment_q05)
+        fdr_q05, tpr_q05, acc_q05 = _performance(binder, assignment_q05)
         fdr_cr90, tpr_cr90, acc_cr90 = _performance(binder, assignment_cr90)
 
         print("Accuracy", acc, "FDR", fdr, tpr)
-        #print("Accuracy", acc_q05, "FDR", fdr_q05, tpr_q05)
+        print("Accuracy", acc_q05, "FDR", fdr_q05, tpr_q05)
         print("Accuracy", acc_cr90, "FDR", fdr_cr90, tpr_cr90)
         #self.assertAlmostEquals(target_fdr, ((fdr * 10 ** 2) // 1) / (10 ** 2))
-
-
 
     def test_simple_mixture_model_I(self):
         mixer = DextraDemixer(model_type="mixturemodel", mode="I")
@@ -534,29 +532,51 @@ class MyTestCase(unittest.TestCase):
         accuracy = (mdat.mod["airr"].obs.is_binder == assignment).sum() / N
         print("Accuracy", accuracy)
 
-    def test_dextramermulti_preprocessing(self):
+    def test_dextramermulti_mixturemodel_svi(self):
+        import numpy as np
+        data_path = os.path.dirname(os.path.abspath(__file__))
+        mdat = mu.read(os.path.join(data_path, f"../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu"))
 
-        mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+        mdat = mdat[np.random.choice(a=mdat.obs.index, size=100),:]
 
         mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
 
-        mixer = DextraDemixerMulti(model_type="mixturemodel", mode="I")
+        mixer = DextraDemixerMulti(model_type="mixturemodelkmeans", mode="I", alpha_model="kmeans")
         mixer.preprocess_model_data(mdat,
                                     ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
-                                    neg_ctrl_key="negative_control"
+                                    neg_ctrl_key="negative_control",
+                                    ir_clone_key="clone_id"
+
                                     )
 
-        print(mixer.models[0].data)
-        s = mixer.models[0].data["s"]
-        print(f"Size factor min:{jnp.min(s)}, max:{jnp.max(s)}")
+        out = mixer.fit_svi(guide=npy.infer.autoguide.AutoMultivariateNormal, svi_config={"maxiter": 100})
 
-        assert jnp.min(s) > 0
-        assert ~jnp.isinf(jnp.max(s))
+        target_fdr = 0.05
+        p, assignment = mixer.predict_posterior_class(target_fdr=target_fdr)
+        p_q05, assignment_q05 = mixer.predict_posterior_class(quantile=0.25, target_fdr=target_fdr)
+        p_cr90, assignment_cr90 = mixer.predict_posterior_class(cred_intvl=0.95, target_fdr=target_fdr)
 
-    def test_dextramermulti_mixturemodel_svi(self):
+        print(p.shape, assignment.shape)
+        print(p_q05.shape, assignment_q05.shape)
+        print(p_cr90.shape, assignment_cr90.shape)
+
+
+        p, assignment = mixer.predict_posterior_class(target_fdr=target_fdr, clonotype_adherence=True, max_pmhc=True)
+        p_q05, assignment_q05 = mixer.predict_posterior_class(quantile=0.25, target_fdr=target_fdr, max_pmhc=True)
+        p_cr90, assignment_cr90 = mixer.predict_posterior_class(cred_intvl=0.95, target_fdr=target_fdr, max_pmhc=True)
+
+        print(p.shape, assignment.sum(axis=1, keepdims=True))
+        print(p_q05.shape, assignment_q05.sum(axis=1, keepdims=True))
+        print(p_cr90.shape, assignment_cr90.sum(axis=1, keepdims=True))
+
+    def test_dextramermulti_mixturemodel_mcmc(self):
         import numpy as np
 
-        mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
+        npy.set_platform("cpu")
+        npy.set_host_device_count(4)
+
+        data_path = os.path.dirname(os.path.abspath(__file__))
+        mdat = mu.read(os.path.join(data_path, f"../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu"))
 
         mdat = mdat[np.random.choice(a=mdat.obs.index, size=500),:]
 
@@ -569,41 +589,19 @@ class MyTestCase(unittest.TestCase):
                                     ir_clone_key="clone_id"
                                     )
 
-        out = mixer.fit_svi(guide=npy.infer.autoguide.AutoDiagonalNormal, svi_config={"maxiter": 500})
+        out = mixer.fit(sampler_config={"progress_bar": True, "num_samples": 100, "num_warmup": 100, "num_chains": 2})
 
-        ps, ass = mixer.predict_posterior_class(clone_majority=False, clonotype_adherence=True)
+        #out = mixer.fit_svi(guide=npy.infer.autoguide.AutoMultivariateNormal, svi_config={"maxiter": 100})
 
-        print(ass)
-        print(ps.shape, ass.shape)
-        print(mixer.summary())
 
-    def test_dextramermulti_mixturemodel_mcmc(self):
-        import numpy as np
-
-        npy.set_platform("cpu")
-        npy.set_host_device_count(4)
-
-        mdat = mu.read("../../data/BEAMT/10k_BEAM-T_Human_A0201_CMV_Flu_Covid_spikein.h5mu")
-
-        mdat = mdat[np.random.choice(a=mdat.obs.index, size=500),:]
-
-        mdat.mod["airr"].uns["clone_cov"] = dist_to_sim(mdat.mod["airr"].uns["ir_dist_aa_full"])
-
-        mixer = DextraDemixerMulti(model_type="mixturemodel", mode="I")
-        mixer.preprocess_model_data(mdat,
-                                    ['CMV', 'EBV_BMLF-1_GLCT', 'Flu', 'EBV_BRLF1_YVLD', 'SARS_Cov2'],
-                                    neg_ctrl_key="negative_control"
-                                    )
-
-        out = mixer.fit(sampler_config={"progress_bar": True,
-                                        "num_samples": 100,
-                                        "num_warmup": 100,
-                                        "num_chains": 2})
-        print(out)
-
-        ps, ass = mixer.predict_posterior_class()
-        print(ps.shape, ass.shape)
-        print(mixer.summary())
+        target_fdr = 0.05
+        p, assignment = mixer.predict_posterior_class(target_fdr=target_fdr, clonotype_adherence=True)
+        p_q05, assignment_q05 = mixer.predict_posterior_class(quantile=0.25, target_fdr=target_fdr, clonotype_adherence=True)
+        p_cr90, assignment_cr90 = mixer.predict_posterior_class(cred_intvl=0.95, target_fdr=target_fdr, clonotype_adherence=True)
+        #
+        print(p.shape, assignment.shape)
+        print(p_q05.shape, assignment_q05.shape)
+        print(p_cr90.shape, assignment_cr90.shape)
 
     # def test_dextramermulticached_differences(self):
     #     import numpy as np
@@ -712,21 +710,21 @@ class MyTestCase(unittest.TestCase):
                                                         binding_ratio=0.1,
                                                         simulate_neg_control=True,
                                                         use_clonotype_cov=False,
-                                                        binding_fold_increase_range=[2],
-                                                        variance_fold_increase_range=[1.2],
+                                                        mean_inc=2,
+                                                        var_inc=1.2,
                                                         plot_data=False,
                                                         rng_key=756204)
 
 
         binder = mdat.mod["airr"].obs["is_binder"]
 
-        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode="I")
+        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode="I", alpha_model="kmeans")
 
         mixer.preprocess_model_data(mdat,
                                     "pmhc1",
                                     #ir_cov_key="clone_cov",
                                     neg_ctrl_key="neg_control",
-                                    ir_clone_key="clone_id"
+                                    ir_clone_key="clone_id",
                                     )
 
         trace = mixer.fit_svi(rng_key=1)
@@ -739,29 +737,6 @@ class MyTestCase(unittest.TestCase):
         #print(assignment.tolist())
         #print(p.tolist())
         print("Accuracy", accuracy)
-
-        print("Random initialization")
-
-        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode="I")
-
-        mixer.preprocess_model_data(mdat,
-                                    "pmhc1",
-                                    #ir_cov_key="clone_cov",
-                                    neg_ctrl_key="neg_control",
-                                    ir_clone_key="clone_id"
-                                    )
-
-        trace = mixer.fit_svi(use_minimal_loss=False, rng_key=1)
-        print(mixer.summary())
-
-        p, assignment = mixer.predict_posterior_class()
-        N = len(binder)
-        accuracy = (binder == assignment).sum() / N
-        #print(list(binder))
-        #print(assignment.tolist())
-        #print(p.tolist())
-        print("Accuracy", accuracy)
-
 
 if __name__ == '__main__':
     unittest.main()
