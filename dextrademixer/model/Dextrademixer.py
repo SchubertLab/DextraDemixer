@@ -304,7 +304,9 @@ class DextraDemixer(ApMHCDeconvolution):
                                 target_fdr: float = None,
                                 quantile: float = None,
                                 cred_intvl: float = None,
-                                clonotype_adherence: bool = False
+                                clonotype_adherence: bool = False,
+                                rope_lfc: float = None,
+                                rope_threshold: float = 0.95,
                                 ) -> Tuple[Array, Array]:
         """
         Returns the binder assignments based on the inferred posterior class probabilities.
@@ -322,6 +324,11 @@ class DextraDemixer(ApMHCDeconvolution):
                         over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
             clonotype_adherence: (Optional) instead of using posterior class assignment per cell use clonotype
                                  probability vector if available.
+            rope_lfc: (Optional) the region of practical equivalence between the log-fold-change of the signal to noise
+                      clusters in log2 units. This is used to determine if the signal cluster is credibly
+                      different from the noise if P(0<=log2(q[1])<=rope_lfc) > 0.95 all cells are assigned to
+                      noise ignoring their posterior class probability.
+            rope_threshold: (Optional) the probability the lg2fc is in the ROPE region. Default is 0.95.
         Returns:
             A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
             class assignment decision
@@ -339,10 +346,12 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # posterior probability of belonging to the binding class
         if self.is_svi:
+            posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
+                                        sample_shape=(500,))
+            q = posterior_samples["q"]
+
             if clonotype_adherence and self.model.data["clone_continuous"] is not None:
                 #TODO ALTERNATIVE USE MAJORITY VOTING IN CLONE?
-                posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
-                                                                sample_shape=(500,))
                 p = __return_p_summary(posterior_samples["w"])
 
             else:
@@ -352,10 +361,12 @@ class DextraDemixer(ApMHCDeconvolution):
                 p = __return_p_summary(jnp.exp(samples["log_p"]))
 
         else:
+            samples = self.sampler.get_samples()
+            q = samples["q"]
             if clonotype_adherence and self.model.data["clone_continuous"] is not None:
-                p = __return_p_summary(self.sampler.get_samples()["w"])
+                p = __return_p_summary(samples["w"])
             else:
-                p = __return_p_summary(jnp.exp(self.sampler.get_samples()["log_p"][..., [0,1]]))
+                p = __return_p_summary(jnp.exp(samples["log_p"][..., [0,1]]))
 
         if cred_intvl is not None:
             p, assignment, threshold = self._predict_posterior_class_dist(p, target_fdr, cred_intvl)
@@ -365,6 +376,14 @@ class DextraDemixer(ApMHCDeconvolution):
         if clonotype_adherence and self.model.data["clone_continuous"] is not None:
             assignment = assignment[self.model.data["clone_continuous"]]
             p = p[self.model.data["clone_continuous"]]
+
+        # omnibus test if any credible signal exists
+        if rope_lfc is not None:
+            log2fc = jnp.log2((q[:,1]+1e-12) / (q[:,0] + 1e-12))
+            p_rope = ((log2fc >= 0) & (log2fc <= rope_lfc)).astype(INT_DTYPE).mean()
+
+            if p_rope > rope_threshold:
+                return p, jnp.zeros(p.shape, dtype=INT_DTYPE)
 
         return p, assignment
 
@@ -515,7 +534,7 @@ class DextraDemixer(ApMHCDeconvolution):
             posterior_samples = self.sampler.get_samples()
 
         # Extract mean from posterior samples
-        q = posterior_samples["q"].mean(0)
+        q = jnp.cumsum(posterior_samples["q_delta"], axis=1).mean(0)
         w = posterior_samples["w"].mean(0)
         x = np.arange(0, self.model.data["x"].max())
 
@@ -732,7 +751,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         - cluster_variances: Variance of each cluster (spread of the cluster points)
         - tau_concentration_prior: Proportion of each cluster in the dataset
 
-        returns: Dict with params estimates and  k-mean labels,
+        returns: Dict with params estimates and k-mean labels,
         """
         x = self.data["x"].copy()
         # remove outliers
@@ -1147,8 +1166,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
             # Sample delta_q from lognormal distribution and cumsum to create ordered q
             with npy.plate("cluster_axis", K):
-                delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
-            q = jnp.cumsum(delta_q, axis=0)
+                delta_q = npy.sample("q_delta", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
+            q = npy.deterministic("q", jnp.cumsum(delta_q, axis=0))
 
             # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
             overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
@@ -1178,8 +1197,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             mu_q_prior = jnp.log(mean_deltas) - sigma2_q_hp / 2
 
             with npy.plate("cluster_axis", K):
-                delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_hp))
-            q = jnp.cumsum(delta_q, axis=0)
+                delta_q = npy.sample("q_delta", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_hp))
+            q = npy.deterministic("q", jnp.cumsum(delta_q, axis=0))
 
             # NB concentration parameter alpha: convert kmeans variance priors to Gamma parameters,
             # alpha ~ Gamma(a, b),

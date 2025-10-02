@@ -718,7 +718,7 @@ class MyTestCase(unittest.TestCase):
 
         binder = mdat.mod["airr"].obs["is_binder"]
 
-        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode="I", alpha_model="kmeans")
+        mixer = DextraDemixer(model_type="mixturemodel", mode="I", alpha_model="kmeans")
 
         mixer.preprocess_model_data(mdat,
                                     "pmhc1",
@@ -737,6 +737,46 @@ class MyTestCase(unittest.TestCase):
         #print(assignment.tolist())
         #print(p.tolist())
         print("Accuracy", accuracy)
+
+    def test_omnibus_test(self):
+
+        sim = DextramerSimulator()
+
+        mdat = sim.simulate_pmhc_data_from_distribution(total_cells=1000,
+                                                        nof_clones=10,
+                                                        binding_ratio=0.0,
+                                                        simulate_neg_control=True,
+                                                        use_clonotype_cov=False,
+                                                        mean_inc=5,
+                                                        plot_data=False,
+                                                        rng_key=756204)
+
+
+        binder = mdat.mod["airr"].obs["is_binder"]
+
+        mixer = DextraDemixer(model_type="mixturemodelkmeans", mode="I", alpha_model="kmeans")
+
+        mixer.preprocess_model_data(mdat,
+                                    "pmhc1",
+                                    #ir_cov_key="clone_cov",
+                                    neg_ctrl_key="neg_control",
+                                    ir_clone_key="clone_id",
+                                    )
+
+        #trace = mixer.fit_svi(rng_key=1)
+        out = mixer.fit(sampler_config={"progress_bar": True, "num_samples": 100, "num_warmup": 100, "num_chains": 4})
+
+        print(mixer.summary())
+        p, assignment = mixer.predict_posterior_class(rope_lfc=0.5)
+        mixer.plot_results(assignment, p, binder)
+        N = len(binder)
+        accuracy = (binder == assignment).sum() / N
+       # print(list(binder))
+        #print(assignment.tolist())
+        #print(p.tolist())
+        print("Accuracy", accuracy)
+
+
 
 if __name__ == '__main__':
     unittest.main()
