@@ -515,7 +515,7 @@ class DextraDemixer(ApMHCDeconvolution):
             posterior_samples = self.sampler.get_samples()
 
         # Extract mean from posterior samples
-        q = posterior_samples["q"].mean(0)
+        q = posterior_samples["delta_q"].mean(0).cumsum(0)
         w = posterior_samples["w"].mean(0)
         x = np.arange(0, self.model.data["x"].max())
 
@@ -1147,8 +1147,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
             # Sample delta_q from lognormal distribution and cumsum to create ordered q
             with npy.plate("cluster_axis", K):
-                delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
-            q = jnp.cumsum(delta_q, axis=0)
+                delta_q = npy.sample("delta_q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
+            q = npy.deterministic("q", jnp.cumsum(delta_q, axis=0))
 
             # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
             overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
@@ -1178,8 +1178,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             mu_q_prior = jnp.log(mean_deltas) - sigma2_q_hp / 2
 
             with npy.plate("cluster_axis", K):
-                delta_q = npy.sample("q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_hp))
-            q = jnp.cumsum(delta_q, axis=0)
+                delta_q = npy.sample("delta_q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_hp))
+            q = npy.deterministic("q", jnp.cumsum(delta_q, axis=0))
 
             # NB concentration parameter alpha: convert kmeans variance priors to Gamma parameters,
             # alpha ~ Gamma(a, b),
