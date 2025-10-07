@@ -428,7 +428,7 @@ class DextramerSimulator:
                                     else sampled from fitted distribution
             mean_inc: fold increase of mean of binder vs non-binder, if specified use this value,
                       else sampled from fitted distribution
-            var_inc: fold increase of variance of binder vs non-binder, if specified use this value,
+            var_inc: fold increase of the variance to the mean for binder NB distribution, if specified use this value,
                      else sampled from fitted distribution
             p_binding_outlier: the probability of a cell of binding clonotype to have low (noise-level) counts
             use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
@@ -475,6 +475,7 @@ class DextramerSimulator:
         mean_pos = mean_inc * mean_non_binder
         if var_inc is None:
             var_inc = stats.uniform(100, 400).rvs(random_state=rng)  # between [100, 400+100]
+        assert var_inc > 1, "`var_inc` must be larger than 1"
         concentration_pos = convert_to_invdispersion(mean_pos, mean_pos * var_inc)
 
         binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
