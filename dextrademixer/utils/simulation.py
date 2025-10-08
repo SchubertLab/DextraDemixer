@@ -706,13 +706,13 @@ class DextramerSimulator:
         sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
         plt.axvline(outlier_thr, ls='--', c='r')
         sns.despine()
-        plt.title(f'Linear (outlier threshold in red)')
+        plt.title(f'Linear (outlier thr in red)')
         i += 1
 
         plt.subplot(n_rows, n_cols, i)
         ax = sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers, hue_order=['non-binder', 'binder', 'Neg control'])
         sns.despine()
-        plt.title(f'Linear no outliers (log-transformed z-score > 3)')
+        plt.title(f'Linear no outliers (z-score > 3)')
         i += 1
 
         sns.move_legend(ax, "upper center", bbox_to_anchor=(0.5, 1.4), ncol=3, frameon=False, title='Binding status')
@@ -728,14 +728,14 @@ class DextramerSimulator:
         sns.histplot(x=x, discrete=True, stat='percent', element='step', hue=hue, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
         plt.yscale('log')
         plt.axvline(outlier_thr, ls='--', c='r')
-        plt.title(f'Log-scale (outlier threshold in red)')
+        plt.title(f'Log-scale (outlier thr in red)')
         sns.despine()
         i += 1
 
         plt.subplot(n_rows, n_cols, i)
         sns.histplot(x=x_no_outliers, discrete=True, stat='percent', element='step', hue=hue_no_outliers, hue_order=['non-binder', 'binder', 'Neg control'], legend=False)
         plt.yscale('log')
-        plt.title(f'Log-scale no outliers (log-transformed z-score > 3)')
+        plt.title(f'Log-scale no outliers (z-score > 3)')
         sns.despine()
         i += 1
 
@@ -745,8 +745,6 @@ class DextramerSimulator:
         plt.title(f'Log-scale x < 100')
         sns.despine()
         i += 1
-
-        plt.show()
 
         return fig
 
