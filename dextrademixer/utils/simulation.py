@@ -540,7 +540,7 @@ class DextramerSimulator:
 
             if simulate_neg_control:
                 key, subkey = jax.random.split(key)
-                x_neg = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
+                x_neg = DextramerSimulator.generate_nb_val(mean_neg_ctrl, concentration_neg_ctrl, size=n_cells, rng_key=key)
                 d["x_neg"].extend(x_neg.tolist())
 
             d["x"].extend(x.tolist())
