@@ -460,55 +460,26 @@ class DextraDemixer(ApMHCDeconvolution):
         assignment = (p_mean >= threshold).astype(jnp.int32)
         return p_mean, assignment, threshold
 
-    def plot_results(self, assignment, p_pred, y_true=None, seed=42, config=''):
+    def get_posterior_samples(self, num_samples: int = 1000, seed: int = 42) -> Dict[str, Array]:
+        """
+        Returns posterior samples of model parameters after fitting the model
 
+        Args:
+            num_samples: number of posterior samples to draw
+            seed: random seed to initialize numpyros RNG-Key store
+
+        Returns:
+            A dictionary with posterior samples of model parameters
+        """
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
 
-        plt.figure(figsize=(16, 12))
+        if self.is_svi:  # svi
+            predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=num_samples)
+            posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
+        else:  # mcmc inference
+            posterior_samples = self.sampler.get_samples(num_samples)
 
-        # Plot data colored in predicted class assignment
-        plt.subplot(3, 4, 1)
-        sns.histplot(x=self.model.data["x"], hue=assignment,
-                     discrete=True, element="step", alpha=0.7)
-        sns.despine()
-        plt.title("Predicted class assignment")
-
-        plt.subplot(3, 4, 5)
-        sns.histplot(x=self.model.data["x"], hue=assignment,
-                     discrete=True, element="step", alpha=0.7)
-        sns.despine()
-        plt.yscale("log")
-        plt.title("Predicted class assignment log-scale")
-
-        plt.subplot(3, 4, 9)
-        sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=assignment,
-                        markers={0: ".", 1: "X"})
-        sns.despine()
-        plt.ylabel("Posterior probability")
-        plt.title("Predicted probability and label of UMI count")
-
-        # Plot data colored in true class assignment
-        plt.subplot(3, 4, 2)
-        sns.histplot(x=self.model.data["x"], hue=y_true,
-                     discrete=True, element="step", alpha=0.7)
-        sns.despine()
-        plt.title("True class assignment")
-
-        plt.subplot(3, 4, 6)
-        sns.histplot(x=self.model.data["x"], hue=y_true,
-                     discrete=True, element="step", alpha=0.7)
-        sns.despine()
-        plt.yscale("log")
-        plt.title("True class assignment log-scale")
-
-        plt.subplot(3, 4, 10)
-        sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true)
-        sns.despine()
-        plt.ylabel("Posterior probability")
-        plt.title("Predicted probability of UMI count with true label")
-
-        # Plot posterior distribution of Negative Binomial
         if self.is_svi: # svi
             predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=1000)
             posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
@@ -518,7 +489,6 @@ class DextraDemixer(ApMHCDeconvolution):
         # Extract mean from posterior samples
         q = posterior_samples["delta_q"].mean(0).cumsum(0)
         w = posterior_samples["w"].mean(0)
-        x = np.arange(0, self.model.data["x"].max())
 
         # extract alpha, which depends on the mode and alpha_model
         if self.alpha_model == 'kmeans':
@@ -529,10 +499,94 @@ class DextraDemixer(ApMHCDeconvolution):
             if self.mode == "C":
                 # alpha.shape = (C, 1)
                 q_weighted = (w * q).mean(1)
-                alpha = q_weighted**2 / (q_weighted * (overdispersion) - q_weighted)
+                alpha = q_weighted ** 2 / (q_weighted * (overdispersion) - q_weighted)
             elif self.mode == "I":
                 # alpha.shape = (1, 2)
-                alpha = q**2 / (q * (overdispersion) - q)
+                alpha = q ** 2 / (q * (overdispersion) - q)
+
+        return {"q": q, "w": w, "alpha": alpha, "posterior_samples": posterior_samples}
+
+    def plot_results(self, assignment, p_pred, y_true=None, seed=42, config='', additional_text=None,
+                     save_dir='figs/', show=False):
+
+        if self.trace is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
+
+        plt.figure(figsize=(16, 12))
+
+        # Plot data colored in predicted class assignment
+        plt.subplot(3, 4, 1)
+        ax = sns.histplot(x=self.model.data["x"], hue=assignment,
+                          discrete=True, element="step", alpha=0.7)
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+
+        sns.despine()
+        plt.title("Predicted class assignment")
+
+        plt.subplot(3, 4, 5)
+        ax = sns.histplot(x=self.model.data["x"], hue=assignment,
+                          discrete=True, element="step", alpha=0.7)
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.yscale("log")
+        plt.title("Predicted class assignment log-scale")
+
+        plt.subplot(3, 4, 9)
+        ax = sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=assignment,
+                             markers={0: ".", 1: "X"})
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.xlabel("UMI count")
+        plt.ylabel("Posterior probability")
+        plt.title("Pred prob and pred label")
+
+        # Plot data colored in true class assignment
+        plt.subplot(3, 4, 2)
+        ax = sns.histplot(x=self.model.data["x"], hue=y_true,
+                          discrete=True, element="step", alpha=0.7)
+        leg = ax.get_legend()
+        leg.set_title("True class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.title("True class assignment")
+
+        plt.subplot(3, 4, 6)
+        ax = sns.histplot(x=self.model.data["x"], hue=y_true,
+                          discrete=True, element="step", alpha=0.7)
+        leg = ax.get_legend()
+        leg.set_title("True class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.yscale("log")
+        plt.title("True class assignment log-scale")
+
+        plt.subplot(3, 4, 10)
+        ax = sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true)
+        leg = ax.get_legend()
+        leg.set_title("True class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.xlabel("UMI count")
+        plt.ylabel("Posterior probability")
+        plt.title("Pred prob and true label")
+
+        if additional_text is not None:
+            plt.subplot(3, 4, 11)
+            plt.text(0.01, 0.95, additional_text, fontsize=10, ha='left', va='top')
+            plt.axis('off')
+
+        # # Plot posterior distribution of Negative Binomial
+        posterior_samples = self.get_posterior_samples(num_samples=1000, seed=seed)
+        q = posterior_samples["q"]
+        w = posterior_samples["w"]
+        alpha = posterior_samples["alpha"]
+        x = np.arange(0, self.model.data["x"].max())
 
         if self.mode == "C":
             # alpha_weighted is the mean of alpha weighted by w for each cell with shape (2, )
@@ -547,15 +601,15 @@ class DextraDemixer(ApMHCDeconvolution):
             # Individual Negative Binomial
             plt.subplot(3, 4, 8)
             ax1 = sns.lineplot(x=x, y=prob0.mean(0), c=sns.color_palette('tab10')[0],
-							   label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
+                               label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
             plt.fill_between(x, np.quantile(prob0, 0.05, axis=0), np.quantile(prob0, 0.95, axis=0), alpha=0.3,
-							 label='5%-95% percentile')
+                             label='5%-95% percentile')
             ax2 = ax1.twinx()
             sns.lineplot(x=x, y=prob1.mean(0), ax=ax2, c=sns.color_palette('tab10')[1],
-						 label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
+                         label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
             plt.fill_between(x, np.quantile(prob1, 0.05, axis=0), np.quantile(prob1, 0.95, axis=0), alpha=0.3,
-							 label='5%-95% percentile')
-            plt.legend()
+                             label='5%-95% percentile')
+            plt.legend(frameon=False)
             sns.despine()
             plt.title("Posterior NB without mixing weights")
             plt.ylabel("Probability")
@@ -568,16 +622,16 @@ class DextraDemixer(ApMHCDeconvolution):
 
             plt.subplot(3, 4, 4)
             sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
-						 label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}", color=sns.color_palette('tab10')[0])
+                         label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}", color=sns.color_palette('tab10')[0])
             sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1],
-						 label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}", color=sns.color_palette('tab10')[0])
+                         label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}", color=sns.color_palette('tab10')[0])
             sns.lineplot(x=x, y=prob0_mix.mean(0)+prob1_mix.mean(0), c="k", linestyle=":",
-						 label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
+                         label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
             plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0),
-							 alpha=0.3, label='5%-95% percentile')
+                             alpha=0.3, label='5%-95% percentile')
             plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
-							 alpha=0.3, label='5%-95% percentile')
-            plt.legend()
+                             alpha=0.3, label='5%-95% percentile')
+            plt.legend(frameon=False)
             sns.despine()
             plt.title("Posterior Mixture NB")
             plt.ylabel("Probability")
@@ -590,10 +644,10 @@ class DextraDemixer(ApMHCDeconvolution):
             # Individual Negative Binomial
             plt.subplot(3, 4, 8)
             ax1 = sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0,
-							   label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", color=sns.color_palette('tab10')[0])
+                               label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", color=sns.color_palette('tab10')[0])
             ax2 = ax1.twinx()
             sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, ax=ax2,
-						 label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
+                         label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
             sns.despine()
             plt.title("Posterior NB without mixing weights")
             plt.ylabel("Probability")
@@ -616,7 +670,7 @@ class DextraDemixer(ApMHCDeconvolution):
                                  alpha=0.3, label='5%-95% percentile')
                 plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
                                  alpha=0.3, label='5%-95% percentile')
-                plt.legend()
+                plt.legend(frameon=False)
             else:
                 # w.shape = (2,)
                 prob0_mix = prob0 * w[0]
@@ -629,6 +683,7 @@ class DextraDemixer(ApMHCDeconvolution):
                             label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", linewidth=3)
                 sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
                              label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
+                plt.legend(frameon=False)
             sns.despine()
             plt.title("Posterior Mixture NB")
             plt.ylabel("Probability")
@@ -641,7 +696,10 @@ class DextraDemixer(ApMHCDeconvolution):
             labels = np.argmin(dists, axis=1)
 
             plt.subplot(3, 4, 3)
-            sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            ax = sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            leg = ax.get_legend()
+            leg.set_title("KMeans cluster")
+            leg.set_frame_on(False)
             plt.axvline(cluster_means[0], color="red", linestyle="--")
             plt.axvline(cluster_means[1], color="red", linestyle="--")
             sns.despine()
@@ -649,7 +707,10 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.ylabel("Percent")
 
             plt.subplot(3, 4, 7)
-            sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            ax = sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            leg = ax.get_legend()
+            leg.set_title("KMeans cluster")
+            leg.set_frame_on(False)
             plt.yscale("log")
             plt.axvline(cluster_means[0], color="red", linestyle="--")
             plt.axvline(cluster_means[1], color="red", linestyle="--")
@@ -666,6 +727,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
             sns.lineplot(x=x, y=prob0, label=f"q={cluster_means[0]:.2f} alpha={alpha[0]:.2f}")
             sns.lineplot(x=x, y=prob1, label=f"q={cluster_means[1]:.2f} alpha={alpha[1]:.2f}")
+            plt.legend(title="KMeans cluster", frameon=False)
             sns.despine()
             plt.title("kMeans determined distribution")
             plt.ylabel("Probability")
@@ -677,10 +739,12 @@ class DextraDemixer(ApMHCDeconvolution):
             # if y_true is None or str
             f1 = -1
         plt.suptitle(config.replace("_", " ")
-					 .replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}",)
-        os.makedirs("figs", exist_ok=True)
-        plt.savefig(f"figs/{config}.png")
-        plt.show()
+                     .replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}",)
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            plt.savefig(os.path.join(save_dir, f"{config}.png"))
+        if show:
+            plt.show()
         plt.close()
 
         return q, alpha, w
