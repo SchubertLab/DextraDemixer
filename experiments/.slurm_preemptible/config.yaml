@@ -2,9 +2,9 @@ cluster:
   mkdir -p ./logs/slurm_logs/{rule} &&
   sbatch
     --partition=cpu_p
-    --qos=cpu_normal
+    --qos=cpu_preemptible
     --nice=0
-    -t 1-00:00:00
+    -t 3-00:00:00
     --mem={resources.mem_mb}
     -c {resources.c}
     --job-name={rule}-$(date +%Y%m%d_%H%M%S)-{wildcards} 
