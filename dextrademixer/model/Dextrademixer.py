@@ -460,7 +460,7 @@ class DextraDemixer(ApMHCDeconvolution):
         assignment = (p_mean >= threshold).astype(jnp.int32)
         return p_mean, assignment, threshold
 
-    def get_posterior_samples(self, num_samples: int = 1000, seed: int = 42) -> Dict[str, Array]:
+    def get_posterior_samples(self, num_samples: int = 1000, seed: int = 42) -> Dict:
         """
         Returns posterior samples of model parameters after fitting the model
 
@@ -490,21 +490,36 @@ class DextraDemixer(ApMHCDeconvolution):
         q = posterior_samples["delta_q"].mean(0).cumsum(0)
         w = posterior_samples["w"].mean(0)
 
+        if self.model.data["clone_continuous"] is not None:
+            # w is per clone, transform to per cell and take mean over all cells
+            w_cell = w[self.model.data["clone_continuous"]]
+            w_mean_over_cells = w_cell.mean(0)
+        else:
+            w_mean_over_cells = w
         # extract alpha, which depends on the mode and alpha_model
         if self.alpha_model == 'kmeans':
-            # shape will be defined by mode, mode=='C': (C, 1), mode=='I': (1, 2)
+            # shape will be defined by mode, mode=='C': (C, ), mode=='I': (2, )
             alpha = posterior_samples["alpha"].mean(0)
         else:
             overdispersion = posterior_samples["overdispersion"].mean(0) + 1
             if self.mode == "C":
-                # alpha.shape = (C, 1)
+                # alpha.shape = (C, )
                 q_weighted = (w * q).mean(1)
                 alpha = q_weighted ** 2 / (q_weighted * (overdispersion) - q_weighted)
             elif self.mode == "I":
-                # alpha.shape = (1, 2)
+                # alpha.shape = (2, )
                 alpha = q ** 2 / (q * (overdispersion) - q)
 
-        return {"q": q, "w": w, "alpha": alpha, "posterior_samples": posterior_samples}
+        if self.mode == "C":
+            # alpha is per clone, transform to per cell and take mean over all cells
+            alpha_cell = alpha[self.model.data["clone_continuous"]]
+            alpha_cell = alpha_cell[:, None] * w_cell
+            alpha_mean_over_cells = alpha_cell.mean(0)
+        else:
+            alpha_mean_over_cells = alpha
+
+        return {"q": q, "w": w, "alpha": alpha,
+                "w_mean_over_cells": w_mean_over_cells, "alpha_mean_over_cells": alpha_mean_over_cells}
 
     def plot_results(self, assignment, p_pred, y_true=None, seed=42, config='', additional_text=None,
                      save_dir='figs/', show=False):
