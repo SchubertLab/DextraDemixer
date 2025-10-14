@@ -12,7 +12,7 @@ experiments/*/saved_models
 experiments/*/simulation
 *.db
 *pkl
-
+experiments/*/benchmarks
 # Editors
 .vscode/
 .idea/

@@ -1,4 +1,5 @@
 import itertools
+import os
 from collections import defaultdict
 from typing import Any
 
@@ -7,11 +8,13 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pandas as pd
+import scirpy as ir
+
 from jax import pure_callback
 from numpy import ndarray, dtype, bool_
 from scipy.stats import ortho_group, random_correlation
-
-import scirpy as ir
+from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
+                             accuracy_score, )
 
 
 def gower_centering(distance_matrix):
@@ -314,3 +317,53 @@ def convert_str_to_bool_and_none(args):
         setattr(args, key, str_to_bool(value))
 
     return args
+
+
+def get_slurm_cpu_count():
+    # Check for SLURM-provided variables
+    for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE", "SLURM_NTASKS", "SLURM_JOB_CPUS_PER_NODE"):
+        if var in os.environ:
+            value = os.environ[var]
+            # SLURM_JOB_CPUS_PER_NODE can be something like "4(x2)" meaning 2 nodes with 4 CPUs each
+            if "(" in value:
+                value = value.split("(")[0]
+            try:
+                return int(value)
+            except ValueError:
+                pass
+    # Fallback
+    try:
+        import multiprocessing
+        return multiprocessing.cpu_count()
+    except NotImplementedError:
+        return 1
+
+
+def guess_worker_mem_limit_mb(nworkers: int):
+    # If SLURM ressources are present
+    if "SLURM_MEM_PER_NODE" in os.environ:
+        return int(int(os.environ["SLURM_MEM_PER_NODE"]) * 0.95 // nworkers)
+    if "SLURM_MEM_PER_CPU" in os.environ:
+        return int(int(os.environ["SLURM_MEM_PER_CPU"]) * 0.95)
+    return None  # no good signal; skip limiting
+
+
+def init_worker(worker_mem_limit_mb=None):
+    if worker_mem_limit_mb is None:
+        return
+    try:
+        import resource
+        limit_bytes = int(worker_mem_limit_mb) * 1024 * 1024
+        # Address space cap → allocations above this raise MemoryError
+        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+    except Exception:
+        # If we can't set it, just proceed; kernel OOM may still occur.
+        pass
+
+
+def calculate_metrics(y_true: np.ndarray, p_pred: np.ndarray, assignment: np.ndarray) -> dict:
+    results_dict = {'auroc': roc_auc_score(y_true, p_pred), 'aps': average_precision_score(y_true, p_pred),
+                    'f1': f1_score(y_true, assignment), 'precision': precision_score(y_true, assignment),
+                    'recall': recall_score(y_true, assignment), 'accuracy': accuracy_score(y_true, assignment)}
+
+    return results_dict
