@@ -429,28 +429,29 @@ class DextraDemixer(ApMHCDeconvolution):
         candidate_thresh = jnp.linspace(0.0, 1.0, nof_thresh+2)[1:-1]
 
         # Expand shapes: (n_draws, n) vs (T,)
-        # -> mask has shape (T, n_draws, n)
-        mask = p_samples[None, :, :] >= candidate_thresh[:, None, None]
+        # -> disc_per_thr_draw: shape (T, n_draws, n)
+        # contains the binder assignment/discoveries for each candidate threshold and draw
+        disc_per_thr_draw = p_samples[None, :, :] >= candidate_thresh[:, None, None]
 
         # number of discoveries per draw: (T, n_draws)
-        n_disc = mask.sum(axis=2)
+        n_disc = disc_per_thr_draw.sum(axis=2)
 
         # local fdr = 1 - p
         lfdr = 1.0 - p_samples  # (n_draws, n)
 
-        # numerator = sum of lfdr among discoveries: (T, n_draws)
-        num = jnp.einsum("tns,ns->tn", mask, lfdr)
+        # sum of lfdr among discoveries: (T, n_draws), sum of local FDR per threshold and draw
+        sum_lfdr_per_thr_draw = jnp.einsum("tns,ns->tn", disc_per_thr_draw, lfdr)
 
-        # avoid div-by-zero: set fdr_draws=0 where n_disc=0
-        fdr_draws = jnp.where(n_disc > 0, num / n_disc, 0.0)
+        # global FDR per threshold and draw, avoid div-by-zero: set gfdr_per_thr_draw=0 where n_disc=0: (T, n_draws)
+        gfdr_per_thr_draw = jnp.where(n_disc > 0, sum_lfdr_per_thr_draw / n_disc, 0.0)
 
         # posterior probability that FDR ≤ target: (T,)
         # keep thresholds that pass cred_level
-        valid = (fdr_draws <= target_fdr).mean(axis=1) >= cred_intvl
+        valid = (gfdr_per_thr_draw <= target_fdr).mean(axis=1) >= cred_intvl
 
         if valid.any():
             n_discoveries = n_disc.mean(axis=1)
-            # select threshold that passes credibility interval on FDR with the largest number of discoveries
+            # select largest threshold that passes credibility interval on FDR
             threshold_idx = jnp.argmax(jnp.where(valid, n_discoveries, -1))
             threshold = candidate_thresh[threshold_idx]
         else:
