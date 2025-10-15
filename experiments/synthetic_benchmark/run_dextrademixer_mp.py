@@ -116,8 +116,7 @@ def run_inference(f_in, args):
     # Save model
     save_model_dir = os.path.join(base_dir, 'saved_models')
     os.makedirs(save_model_dir, exist_ok=True)
-    with open(os.path.join(save_model_dir, f"{config}.pkl"), "wb") as f:
-        pickle.dump(mixer, f)
+    mixer.save_model(os.path.join(save_model_dir, f"{config}.pkl"))
 
     # Log metrics
     y_true = mdata.mod[args.airr_key].obs[args.label_key].astype(int).values
