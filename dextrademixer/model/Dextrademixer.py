@@ -3,6 +3,7 @@ from __future__ import annotations
 import abc
 import warnings
 import os
+import pickle
 
 from typing import TYPE_CHECKING, Union, Dict, Tuple
 
@@ -759,6 +760,41 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.close()
 
         return q, alpha, w
+
+    def save_model(self, filepath):
+        """
+        Save the fitted model to a file using pickle.
+        Args:
+            filepath (str): The path to the file where the model should be saved.
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump(vars(self), f)
+
+    def load_model(self, filepath):
+        """
+        Load model state into this instance.
+        Usage: model = DextraDemixer(); model.load_model(filepath)
+        Args:
+            filepath (str): The path to ckpt file.
+        """
+        with open(filepath, 'rb') as f:
+            ckpt = pickle.load(f)
+        self.__dict__.update(ckpt)
+        return self
+
+    @classmethod
+    def from_ckpt(cls, filepath):
+        """
+        Create a new instance directly from ckpt file (no __init__ call).
+        Usage: model = DextraDemixer.from_file(filepath)
+        Args:
+            filepath (str): The path to ckpt file.
+        """
+        with open(filepath, 'rb') as f:
+            ckpt = pickle.load(f)
+        self = cls.__new__(cls)
+        self.__dict__.update(ckpt)
+        return self
 
 
 class ADextraDemixerModel(metaclass=RegisteredModel):
