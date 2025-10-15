@@ -521,6 +521,8 @@ class DextraDemixer(ApMHCDeconvolution):
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
 
+        if y_true is None:
+            y_true = np.zeros_like(assignment)
         plt.figure(figsize=(16, 12))
 
         # Plot data colored in predicted class assignment
