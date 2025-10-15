@@ -480,12 +480,6 @@ class DextraDemixer(ApMHCDeconvolution):
         else:  # mcmc inference
             posterior_samples = self.sampler.get_samples(num_samples)
 
-        if self.is_svi: # svi
-            predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=1000)
-            posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
-        else: # mcmc inference
-            posterior_samples = self.sampler.get_samples()
-
         # Extract mean from posterior samples
         q = posterior_samples["delta_q"].mean(0).cumsum(0)
         w = posterior_samples["w"].mean(0)
