@@ -104,23 +104,23 @@ def run_inference(f_in, args):
         warnings.simplefilter("ignore")
         mdata = mu.read(f_in)
 
-    mixer = DextraDemixer(model_type=args.model_type, mode=args.mode, alpha_model=args.alpha_model)
-    mixer.preprocess_model_data(mdata, pmhc_key=args.pmhc_key, gex_key=args.gex_key, neg_ctrl_key=args.neg_ctrl_key,
+    model = DextraDemixer(model_type=args.model_type, mode=args.mode, alpha_model=args.alpha_model)
+    model.preprocess_model_data(mdata, pmhc_key=args.pmhc_key, gex_key=args.gex_key, neg_ctrl_key=args.neg_ctrl_key,
                                 ir_clone_key=args.ir_clone_key, outlier_threshold=args.outlier_threshold, )
 
-    mixer.model._model_config["overdispersion_scale_prior"] = args.hyperprior
-    mixer.model._model_config["var_hyperprior"] = args.hyperprior
+    model.model._model_config["overdispersion_scale_prior"] = args.hyperprior
+    model.model._model_config["var_hyperprior"] = args.hyperprior
     opt_params = {"maxiter": args.maxiter, "nof_inits": 10, "adam": {"init_value": args.lr, }, }
-    mixer.fit_svi(svi_config=opt_params, nof_inits=opt_params["nof_inits"], rng_key=args.seed, return_loss=True)
+    model.fit_svi(svi_config=opt_params, nof_inits=opt_params["nof_inits"], rng_key=args.seed, return_loss=True)
 
     # Save model
     save_model_dir = os.path.join(base_dir, 'saved_models')
     os.makedirs(save_model_dir, exist_ok=True)
-    mixer.save_model(os.path.join(save_model_dir, f"{config}.pkl"))
+    model.save_model(os.path.join(save_model_dir, f"{config}.pkl"))
 
     # Log metrics
     y_true = mdata.mod[args.airr_key].obs[args.label_key].astype(int).values
-    posterior_samples = mixer.get_posterior_samples(num_samples=1000, seed=args.seed)
+    posterior_samples = model.get_posterior_samples(num_samples=1000, seed=args.seed)
 
     results = []
     # Predict posterior class with different methods, (target_fdr, threshold, quantile, cred_intvl)
@@ -131,7 +131,7 @@ def run_inference(f_in, args):
         (0.05, None, None, 0.60), (0.05, None, None, 0.70), (0.05, None, None, 0.80), (0.05, None, None, 0.90),]
 
     for target_fdr, threshold, quantile, cred_intvl in posterior_params:
-        p_pred, assignment = mixer.predict_posterior_class(target_fdr=target_fdr, threshold=threshold,
+        p_pred, assignment = model.predict_posterior_class(target_fdr=target_fdr, threshold=threshold,
                                                           quantile=quantile, cred_intvl=cred_intvl)
         posterior_config = f"{target_fdr}_{threshold}_{quantile}_{cred_intvl}"
         # Plot results
@@ -142,7 +142,7 @@ def run_inference(f_in, args):
                            f"alpha_noise: {sim_params['concentration_non_binder']:.2f}\n"
                            f"q_signal: {sim_params['mean_pos']:.2f}, "
                            f"alpha_signal: {sim_params['concentration_pos']:.2f}")
-        mixer.plot_results(assignment, p_pred, y_true if args.label_key is not None else None, args.seed,
+        model.plot_results(assignment, p_pred, y_true if args.label_key is not None else None, args.seed,
                            config + '/' + posterior_config, additional_text=additional_text,
                            save_dir=os.path.join(base_dir, 'figs'), show=False)
 
