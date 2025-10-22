@@ -2,6 +2,8 @@ import argparse
 import os
 import warnings
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pandas as pd
 import muon as mu
 
@@ -18,7 +20,7 @@ def main(args):
     input_files = [os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.endswith('.h5mu')]
     base_dir = os.path.join('benchmarks', args.scenario)
 
-    for f_in in tqdm(input_files, desc="Running inference"):
+    def run_beamt(f_in):
         data_config = os.path.basename(f_in).replace('.h5mu', '')
         config = "BEAMT" + '_' + data_config
 
@@ -26,16 +28,11 @@ def main(args):
             warnings.simplefilter("ignore")
             mdata = mu.read(f_in)
 
-        true_binder = mdata.mod["airr"].obs["is_binder"]
         y_true = mdata.mod["airr"].obs["is_binder"]
-        N = len(true_binder)
-
-        d = {"model": [], "thresh": [], "p": [], "assignment": [], "true_binder": []}
 
         mixer = BEAMT()
         mixer.preprocess_model_data(mdata, "pmhc1", neg_ctrl_key="neg_control")
         mixer.fit()
-
 
         results = []
         posterior_params = [(0.01, None), (0.02, None), (0.05, None), (0.1, None), (0.2, None), (None, 0.5)]
@@ -57,6 +54,9 @@ def main(args):
         csv_dir = os.path.join(base_dir, 'csv')
         os.makedirs(csv_dir, exist_ok=True)
         results.to_csv(csv_dir + f"/{config}.csv")
+
+    with ThreadPoolExecutor() as ex:
+        list(tqdm(ex.map(run_beamt, input_files), total=len(input_files)))
 
 
 if __name__ == "__main__":
