@@ -3,10 +3,10 @@ min_version("6.0")
 
 
 # Configuration
-SCENARIOS = ["scenario1"]
-NUM_THREADS = 16
-RAM_PER_THREAD = 32
-USE_MP = True
+SCENARIO = config.get("SCENARIO", "scenario1")
+NUM_THREADS = int(config.get("NUM_THREADS", 16))
+RAM_PER_THREAD = int(config.get("RAM_PER_THREAD", 16))
+USE_MP = config.get("USE_MP", "False") == "True"
 if not USE_MP:
     NUM_THREADS = 1
 
@@ -16,9 +16,11 @@ TOOL_CONFIGS = ([f"{model_type}-{mode}-{neg_ctrl_key}-{ir_clone_key}-{alpha_mode
                 for neg_ctrl_key in [None, "neg_control"]
                 for ir_clone_key in [None, "clone_id"]
                 for alpha_model in ["kmeans", "overdispersion"]
-                for hyperprior in [1e0, 1e-2]
+                for hyperprior in [1e2, 1e1, 1e0]
                 for lr in [1e-2]
-                if (mode == "C" and ir_clone_key is not None) or mode != "C"
+                if ((mode == "C" and ir_clone_key is not None) or mode != "C")
+                   and
+                   ((alpha_model == "kmeans" and hyperprior > 1e0) or (alpha_model == "overdispersion" and hyperprior <= 1e1))
                 ])
 
 # TOOL_CONFIGS = ([f"{model_type}_{mode}_{neg_ctrl_key}_{ir_clone_key}_{alpha_model}_{hyperprior}_{lr}"
