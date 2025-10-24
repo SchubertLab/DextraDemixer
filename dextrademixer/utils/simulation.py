@@ -37,6 +37,42 @@ def generate_nb_val(mu, alpha, size):
     return stats.poisson.rvs(g)
 
 
+def sample_var_from_mean(mean: Union[float, np.ndarray],
+                         a: float = 2.0221541172111164, b: float = 1.6969075027280063,
+                         resid_std: float = 0.31049623532404225, rng: Union[int, np.random.RandomState] = 42
+                         ) -> Union[float, np.ndarray]:
+    """
+    Sample a realistic variance given a mean using the fitted power-law model:
+        log(var) = a + b*log(mean) + Normal(0, resid_std^2)
+
+    Args:
+        mean : float or np.ndarray
+            Mean(s) at which to sample the variance. Must be > 0; broadcasting allowed.
+        a : float, default 2.0221541172111164
+            Proportionality constant (exp(intercept) from log–log OLS).
+        b : float, default 1.6969075027280063
+            Scaling exponent (slope from log–log OLS).
+        resid_std : float, default 0.31049623532404225
+            Residual standard deviation on the *log-variance* scale (σ from OLS residuals).
+        rng : int | np.random.RandomState, default 42
+            Source of randomness. If int, used as the seed. If None, uses SciPy/Numpy default RNG.
+    Returns:
+        float or np.ndarray
+            A sample of variance values with the same broadcasted shape as `mean`.
+    """
+
+    if isinstance(rng, int):
+        rng = np.random.RandomState(seed=rng)
+    if isinstance(mean, np.ndarray):
+        size = mean.shape
+    else:
+        size = None
+    log_var = np.log(a) + b*np.log(mean) + stats.norm(0, resid_std).rvs(size=size, random_state=rng)
+    var = np.exp(log_var)
+
+    return var
+
+
 def t_cell_simulation(n_clones=3,
                       mean_binder_range=None,
                       shape_binder_range=None,
@@ -461,22 +497,21 @@ class DextramerSimulator:
         if mean_neg_ctrl is None:
             mean_neg_ctrl = np.exp(stats.truncnorm(-1.0539178917389445, 1.8375518345106903, loc=1.018115879390079, scale=0.4175162931163312).rvs(random_state=rng))
         if concentration_neg_ctrl is None:
-            overdisp_neg_ctrl = stats.gamma(a=4.186062616134899, scale=1.2384303396204106).rvs(random_state=rng) + 1
-            var_neg_ctrl = mean_neg_ctrl * overdisp_neg_ctrl
+            var_neg_ctrl = sample_var_from_mean(mean_neg_ctrl, rng=rng)
             concentration_neg_ctrl = convert_to_invdispersion(mean_neg_ctrl, var_neg_ctrl)
         if mean_non_binder is None:
             mean_non_binder = np.exp(stats.truncnorm(-1.4325807532116341, 1.9485510504360735, loc=2.0461540382126118, scale=0.6019089551720753).rvs(random_state=rng))
         if concentration_non_binder is None:
-            overdisp_non_binder = stats.gamma(a=0.802396044662406, scale=6.554415080004114).rvs(random_state=rng) + 1
-            var_non_binder = mean_non_binder * overdisp_non_binder
+            var_non_binder = sample_var_from_mean(mean_non_binder, rng=rng)
             concentration_non_binder = convert_to_invdispersion(mean_non_binder, var_non_binder)
         if mean_inc is None:
             mean_inc = stats.uniform(50, 450).rvs(random_state=rng)  # between [50, 450+50]
         mean_pos = mean_inc * mean_non_binder
         if var_inc is None:
-            var_inc = stats.uniform(100, 400).rvs(random_state=rng)  # between [100, 400+100]
-        assert var_inc > 1, "`var_inc` must be larger than 1"
-        concentration_pos = convert_to_invdispersion(mean_pos, mean_pos * var_inc)
+            var_pos = sample_var_from_mean(mean_pos, rng=rng)
+        else:
+            var_pos = var_inc * mean_non_binder
+        concentration_pos = convert_to_invdispersion(mean_pos, var_pos)
 
         binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
         K = None
