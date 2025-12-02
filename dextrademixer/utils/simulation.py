@@ -579,21 +579,6 @@ class DextramerSimulator:
 
             x = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
 
-            if p_binding_outlier > 0 and is_binder:
-                outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells, random_state=rng)
-                outlier_idx = np.where(outlier)
-
-                a = (0.001 - concentration_non_binder) / (concentration_non_binder / 3)
-                concentration = stats.truncnorm.rvs(a, np.inf, loc=concentration_non_binder,
-                                                    scale=concentration_non_binder / 3, random_state=rng)
-
-                x = x.at[outlier_idx].set(
-                    DextramerSimulator.generate_nb_val(mean_non_binder, concentration, size=np.sum(outlier), rng_key=key)
-                )
-                d["outlier"].extend(outlier.tolist())
-            else:
-                d["outlier"].extend([0]*n_cells)
-
             if simulate_neg_control:
                 key, subkey = jax.random.split(key)
                 x_neg = DextramerSimulator.generate_nb_val(mean_neg_ctrl, concentration_neg_ctrl, size=n_cells, rng_key=key)
@@ -603,6 +588,30 @@ class DextramerSimulator:
             d["binder"].extend([is_binder] * n_cells)
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([mean_inc] * n_cells)
+
+        if p_binding_outlier > 0:
+            outlier = np.zeros(total_cells, dtype=int)
+            binder_mask = np.array(d["binder"], dtype=bool)
+            n_binder = binder_mask.sum()
+
+            binder_outlier_trial = rng.binomial(1, p_binding_outlier, size=(10000, n_binder))
+
+            err = np.abs(p_binding_outlier - binder_outlier_trial.mean(1))
+            best_idx = err.argmin()
+            binder_outlier = binder_outlier_trial[best_idx]
+            outlier[binder_mask] = binder_outlier
+
+            a = (0.001 - concentration_non_binder) / (concentration_non_binder / 3)
+            concentration = stats.truncnorm.rvs(a, np.inf, loc=concentration_non_binder,
+                                                scale=concentration_non_binder / 3, random_state=rng)
+            x = np.array(d["x"])
+            x[outlier.astype(bool)] = (
+                DextramerSimulator.generate_nb_val(mean_non_binder, concentration, size=np.sum(outlier), rng_key=key)
+            )
+            d["x"] = x.tolist()
+            d["outlier"] = outlier.tolist()
+        else:
+            d["outlier"] = [0]*total_cells
 
         mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, K, cc_assignment)
         # Best theoretical F1
