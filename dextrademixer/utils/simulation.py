@@ -588,7 +588,7 @@ class DextramerSimulator:
                                                     scale=concentration_non_binder / 3, random_state=rng)
 
                 x = x.at[outlier_idx].set(
-                    DextramerSimulator.generate_nb_val(mean, concentration, size=np.sum(outlier), rng_key=key)
+                    DextramerSimulator.generate_nb_val(mean_non_binder, concentration, size=np.sum(outlier), rng_key=key)
                 )
                 d["outlier"].extend(outlier.tolist())
             else:
@@ -824,6 +824,7 @@ class DextramerSimulator:
         adata_tcr = ad.AnnData()
         adata_tcr.obs["is_binder"] = d["binder"]
         adata_tcr.obs["clone_id"] = d["clone"]
+        adata_tcr.obs["outlier"] = d["outlier"]
 
         if cov is not None:
             adata_tcr.obs["cc_aa_sim"] = cc_assignment[d["clone"]]
