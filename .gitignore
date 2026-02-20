@@ -10,12 +10,19 @@ experiments/*/optuna_study
 experiments/*/optuna
 experiments/*/saved_models
 experiments/*/simulation
+experiments/*/logs
+experiments/Ioanna_data/
+experiments/Ioanna's experiments with Dextrademixer
 *.db
 *pkl
 experiments/*/benchmarks
 # Editors
 .vscode/
 .idea/
+*.png
+*.h5mu
+*.csv
+*.xlsx
 
 # Vagrant
 .vagrant/
@@ -138,3 +145,4 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+experiments/Ioanna_data/mudata_fromseurat-Copy1.h5mu
