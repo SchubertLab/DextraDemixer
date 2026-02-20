@@ -8,7 +8,7 @@ import pickle
 from typing import TYPE_CHECKING, Union, Dict, Tuple
 
 import arviz as az
-
+import tqdm
 import numpy as np
 import pandas as pd
 import mudata as md
@@ -27,10 +27,10 @@ import numpyro.distributions as npd
 from numpyro.infer.svi import SVIRunResult
 from sklearn.cluster import KMeans
 from sklearn.metrics import f1_score
-import tqdm
+from optax import exponential_decay
 
 from dextrademixer.model import ApMHCDeconvolution
-from dextrademixer.utils import RegisteredModel
+from dextrademixer.utils import RegisteredModel, calculate_metrics
 
 if TYPE_CHECKING:
     from jax._src.typing import Array
@@ -63,7 +63,8 @@ class DextraDemixer(ApMHCDeconvolution):
 
     """
 
-    def __init__(self, model_type: str = "mixturemodel", mode: str = "H", alpha_model="overdispersion"):
+    def __init__(self, model_type: str = "mixturemodel", mode: str = "H", alpha_model="overdispersion", 
+                 model_config: Dict = None):
         super().__init__()
 
         if mode.upper() not in ("H", "I", "C"):
@@ -78,10 +79,14 @@ class DextraDemixer(ApMHCDeconvolution):
         self.guide = None
         self.mode = mode.upper()
         self.alpha_model = alpha_model
+        self.model_config = model_config if model_config is not None else {}
 
         if model_type not in ADextraDemixerModel.registry.keys():
             raise warnings.warn(f"`model_type` {model_type} not supported using the standard model.")
-        self.model = ADextraDemixerModel.registry.get(model_type, DextraDemixerMixtureModel)()
+        self.model = ADextraDemixerModel.registry.get(model_type, DextraDemixerKmeansModel)()
+        self.model.mode = mode
+        self.model.alpha_model = alpha_model
+        self.model._model_config.update(self.model_config)
 
     @property
     def version(self):
@@ -108,6 +113,7 @@ class DextraDemixer(ApMHCDeconvolution):
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
                               ir_cov_key: str = None,
+                              use_size_factor: bool = None,
                               **kwargs):
         """
         Preprocesses the data and initializes the model
@@ -121,6 +127,7 @@ class DextraDemixer(ApMHCDeconvolution):
             ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
             ir_cov_key: (Optional) the key in AIRR module's `.uns` that contains a full, symmetric and square distance matrix
                          for all clonotype cluster
+            use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, is use all
             kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
         """
         gex = mdata.mod[gex_key]
@@ -137,9 +144,36 @@ class DextraDemixer(ApMHCDeconvolution):
             if c is None:
                 raise ValueError("If `mode`= C a clonotype vector `ir_clone_key` must be specified.")
 
+        if use_size_factor:  #TODO
+            pmhc_list = use_size_factor if isinstance(use_size_factor, list) else mdata[gex_key].var_names.tolist()
+            x_plus = jnp.array(gex[:, pmhc_list].X.toarray(),
+                               dtype=FLOAT_DTYPE)  # only used for size factor calculation
+            s = self.calculate_size_factors(x_plus)
+            del x_plus
+        else:
+            s = jnp.ones(x.shape[0], dtype=FLOAT_DTYPE)
+
         self._check_parameters(x, x_neg, c, sigma)
-        self.model.preprocess_model_data(x=x, neg_cont=x_neg, c=c, sigma=sigma, mode=self.mode,
+        self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, sigma=sigma, mode=self.mode,
                                          alpha_model=self.alpha_model, **kwargs)
+    
+    @staticmethod
+    def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
+        """
+        DESeq2 size factor calculation
+        """
+
+        log_counts = jnp.log(counts)
+        log_counts = jnp.where(jnp.isinf(log_counts), jnp.nan, log_counts)
+        log_means = jnp.nanmean(log_counts, axis=0)
+
+        mask = jnp.isfinite(log_means) # Only use genes with non-zero geometric mean
+        log_ratios = log_counts[:, mask] - log_means[mask]
+        log_medians = jnp.nanmedian(log_ratios, axis=1)
+        size_factors = jnp.exp(log_medians)
+        size_factors = jnp.where(jnp.isnan(size_factors), 1.0, size_factors)  # Handle cells with all zero/nan counts
+
+        return size_factors
 
     @staticmethod
     def get_default_sampler_config():
@@ -195,18 +229,21 @@ class DextraDemixer(ApMHCDeconvolution):
 
         return self.__make_arvis()
 
-    def fit_svi(self, guide=npy.infer.autoguide.AutoNormal, svi_config: Dict[str, Union[int, float]] = None,
+    def fit_svi(self, guide='normal', svi_config: Dict[str, Union[int, float]] = None,
                 nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
-                return_loss: bool = False) \
+                y_true: Array = None) \
             -> az.InferenceData:
         """
         Implements stochastic variational inference
 
-        guide: The guide to use for variational inference. If None, self.model object will be checked for a guide function
+        guide: The guide to use for variational inference.
+               If None, self.model object will be checked for a guide function,
+               elif 'normal', AutoNormal guide will be used, elif 'mvnormal', AutoMultivariateNormal guide will be used
         svi_config: configuration for optimizer (Adam) and posterior samples
         nof_inits: number of initializations tried with different seeds to find gut init values
         use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
         rng_key: integer seed to initialize numpyros RNG-Key store
+        y_true: (Optional) ground truth labels to monitor performance during training
         """
 
         if self.model.data is None:
@@ -224,11 +261,12 @@ class DextraDemixer(ApMHCDeconvolution):
         svi_config.pop("adam", None)
         svi_config.pop("tracer", None)
 
+        optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config),)
         # check for custom guide in self.model otherwise use autoguide
-        # optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config),
-        #                                   b1=svi_config["adam_beta"]["b1"], b2=svi_config["adam_beta"]["b2"])
-        optimizer = npy.optim.ClippedAdam(adam_config["init_value"])
-
+        if guide == 'normal':
+            guide = npy.infer.autoguide.AutoNormal
+        elif (guide == 'mvnormal') or (guide == 'multivariatenormal'):
+            guide = npy.infer.autoguide.AutoMultivariateNormal
         # find good random initialization
         random_init = []
         for i, key in enumerate(random.split(random.PRNGKey(rng_key), nof_inits)):
@@ -259,11 +297,17 @@ class DextraDemixer(ApMHCDeconvolution):
         svi_state = svi.init(rng_key=best_key)
         losses = []
         params = []
+        logs = []
+        best_f1 = 0
+        best_it = 0
+        compiled_body_fn = jit(body_fn)
+
         with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
                          disable=(not svi_config.get("progress_bar", False)), mininterval=10) as t:
-            batch = max(svi_config.get("maxiter", 1000) // 20, 1)
+            # batch = max(svi_config.get("maxiter", 1000) // 100, 1)
+            batch = 10
             for i in t:
-                svi_state, loss, param = jit(body_fn)(svi_state, i)
+                svi_state, loss, param = compiled_body_fn(svi_state, i)
 
                 losses.append(loss)
                 params.append(param)
@@ -274,16 +318,20 @@ class DextraDemixer(ApMHCDeconvolution):
                         avg_loss = float("nan")
                     else:
                         avg_loss = sum(valid_losses) / num_valid
-                    t.set_postfix_str(
-                        "init loss: {:.4f}, avg. loss [{}-{}]: {:.4f}".format(
-                            losses[0], i - batch + 1, i, avg_loss
-                        ),
-                        refresh=False,
-                    )
+                    if y_true is not None:
+                        self.svi_result = SVIRunResult(params=params[-1], losses=jnp.stack(losses), state=svi_state)
+                        p_pred, assignment = self.predict_posterior_class(threshold=0.5, )
+                        results = calculate_metrics(y_true, p_pred, assignment)
+                        if results["f1"] > best_f1:
+                            best_f1 = results["f1"]
+                            best_it = i
+                        results.update({"it": i, "loss": loss, "avg_loss": avg_loss, "best_f1": best_f1, "best_it": best_it})
+                        logs.append(results)
+
+                    t.set_postfix_str(f"avg. loss [{i - batch + 1}-{i}]: {avg_loss:.4f}", refresh=False,)
         losses = jnp.stack(losses)
         params = params[jnp.nanargmin(losses)] if use_minimal_loss else params[-1]
         self.svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
-
         posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
                                                         sample_shape=(500,))
 
@@ -291,12 +339,8 @@ class DextraDemixer(ApMHCDeconvolution):
         posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
         inference_data = az.from_dict(posterior=posterior_samples_np)
 
-        if return_loss:
-            converged = not jnp.isnan(losses).all()
-            best_iteration = jnp.nanargmin(losses)
-            best_loss = losses[best_iteration]
-            return inference_data, {"init_loss": losses[0], "converged": converged,
-                                    "best_loss": best_loss, "best_iteration": best_iteration}
+        if y_true is not None:
+            return inference_data, logs
         else:
             return inference_data
 
@@ -305,7 +349,10 @@ class DextraDemixer(ApMHCDeconvolution):
                                 target_fdr: float = None,
                                 quantile: float = None,
                                 cred_intvl: float = None,
-                                clonotype_adherence: bool = False
+                                clonotype_adherence: bool = False,
+                                clonotype_majority_voting: bool = False,
+                                clonotype_mean_p: bool = False,
+                                clone_id: Array = None,
                                 ) -> Tuple[Array, Array]:
         """
         Returns the binder assignments based on the inferred posterior class probabilities.
@@ -323,25 +370,50 @@ class DextraDemixer(ApMHCDeconvolution):
                         over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
             clonotype_adherence: (Optional) instead of using posterior class assignment per cell use clonotype
                                  probability vector if available.
+            clonotype_majority_voting: (Optional) after initial assignment perform majority voting within clonotypes
+            clonotype_mean_p: (Optional) after initial probability, use mean within each clonotype for each cell
+            clone_id: (Optional) map each cell id to clone id, shape=(n_cells)
         Returns:
             A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
             class assignment decision
         """
         def __return_p_summary(p_sample):
             if quantile:
-                return jnp.quantile(p_sample, quantile, axis=0)[:, 1]
+                p = jnp.quantile(p_sample, quantile, axis=0)[:, 1]
             elif cred_intvl:
-                return p_sample
+                p = p_sample
             else:
-                return jnp.nanmean(p_sample, axis=0)[:, 1]
+                p = jnp.nanmean(p_sample, axis=0)[:, 1]
+
+            if clonotype_mean_p:
+                if clone_id is None:
+                    raise ValueError("If `clonotype_mean_p`= True a clonotype vector `clone_id` must be specified.")
+                unique_ids = np.unique(clone_id)
+
+                if cred_intvl:
+                    # mean for each clone while keeping posterior samples, shape (num_clones, num_samples, 2)
+                    mean_p = np.stack([p[:, clone_id == cid].mean(axis=[1]) for cid in unique_ids])
+                    p = mean_p[clone_id].transpose(1, 0, 2)  # shape (num_posterior_samples, num_cells, 2)
+
+                else:
+                    df = pd.DataFrame({"p": p, "clone_id": clone_id})
+                    mean_p = df.groupby("clone_id")["p"].mean()
+                    p = mean_p.values[clone_id]
+            return p
+
+        if self.model.data["clone_continuous"] is not None and clone_id is None:
+            clone_id = self.model.data["clone_continuous"]
+
+        if clone_id is not None:
+            # Make clone_id continuous
+            clone_id, _ = pd.factorize(clone_id)
 
         if self.sampler is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
 
         # posterior probability of belonging to the binding class
         if self.is_svi:
-            if clonotype_adherence and self.model.data["clone_continuous"] is not None:
-                #TODO ALTERNATIVE USE MAJORITY VOTING IN CLONE?
+            if clonotype_adherence and clone_id is not None:
                 posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
                                                                 sample_shape=(500,))
                 p = __return_p_summary(posterior_samples["w"])
@@ -353,7 +425,7 @@ class DextraDemixer(ApMHCDeconvolution):
                 p = __return_p_summary(jnp.exp(samples["log_p"]))
 
         else:
-            if clonotype_adherence and self.model.data["clone_continuous"] is not None:
+            if clonotype_adherence and clone_id is not None:
                 p = __return_p_summary(self.sampler.get_samples()["w"])
             else:
                 p = __return_p_summary(jnp.exp(self.sampler.get_samples()["log_p"][..., [0,1]]))
@@ -363,9 +435,16 @@ class DextraDemixer(ApMHCDeconvolution):
         else:
             assignment = self._predict_posterior_class(p, threshold, target_fdr)
 
-        if clonotype_adherence and self.model.data["clone_continuous"] is not None:
-            assignment = assignment[self.model.data["clone_continuous"]]
-            p = p[self.model.data["clone_continuous"]]
+        if clonotype_majority_voting:
+            if clone_id is None:
+                raise ValueError("If `clonotype_mean_p`= True a clonotype vector `clone_id` must be specified.")
+            df = pd.DataFrame({"assignment": assignment, "clone_id": clone_id})
+            majority_assignment = df.groupby("clone_id")["assignment"].agg(lambda x: x.mode()[0])
+            assignment = majority_assignment.values[clone_id]
+
+        if clonotype_adherence and clone_id is not None:
+            assignment = assignment[clone_id]
+            p = p[clone_id]
 
         return p, assignment
 
@@ -485,7 +564,7 @@ class DextraDemixer(ApMHCDeconvolution):
         q = posterior_samples["delta_q"].mean(0).cumsum(0)
         w = posterior_samples["w"].mean(0)
 
-        if self.model.data["clone_continuous"] is not None:
+        if w.ndim > 2:
             # w is per clone, transform to per cell and take mean over all cells
             w_cell = w[self.model.data["clone_continuous"]]
             w_mean_over_cells = w_cell.mean(0)
@@ -504,6 +583,9 @@ class DextraDemixer(ApMHCDeconvolution):
             elif self.mode == "I":
                 # alpha.shape = (2, )
                 alpha = q ** 2 / (q * (overdispersion) - q)
+                if self.model._model_config['alpha_offset']:
+                    alpha = alpha + jnp.array([0, self.model._model_config['alpha_offset']])
+                
 
         if self.mode == "C":
             # alpha is per clone, transform to per cell and take mean over all cells
@@ -513,11 +595,29 @@ class DextraDemixer(ApMHCDeconvolution):
         else:
             alpha_mean_over_cells = alpha
 
-        return {"q": q, "w": w, "alpha": alpha,
-                "w_mean_over_cells": w_mean_over_cells, "alpha_mean_over_cells": alpha_mean_over_cells}
+        posterior_samples_mean = {"q": q, "w": w, "alpha": alpha,
+                                  "w_mean_over_cells": w_mean_over_cells, "alpha_mean_over_cells": alpha_mean_over_cells}
+        if self.alpha_model == 'overdispersion':
+            posterior_samples_mean["overdispersion"] = overdispersion
+        # Negative control model
+        if 'noise_mean_inv_inc' in posterior_samples:
+            s = jnp.ones(self.model.data["x"].shape[0]) if self.model.data["s"] is None else self.model.data["s"]
+
+            posterior_samples_mean['noise_mean_inv_inc'] = posterior_samples['noise_mean_inv_inc'].mean(0)
+            posterior_samples_mean['noise_overdisp_inv_inc'] = posterior_samples['noise_overdisp_inv_inc'].mean(0)
+
+            q_neg = jnp.clip(s * q[0] / posterior_samples_mean['noise_mean_inv_inc'], a_min=1e-3)
+            overdispersion_neg = jnp.clip(
+                posterior_samples_mean['overdispersion'][0] / posterior_samples_mean['noise_overdisp_inv_inc'],
+                a_min=1.0 + 1e-3)
+            alpha_neg = q_neg ** 2 / (q_neg * overdispersion_neg - q_neg)
+            posterior_samples_mean['q_neg'] = q_neg.mean()
+            posterior_samples_mean['alpha_neg'] = alpha_neg.mean()
+            posterior_samples_mean['overdispersion_neg'] = overdispersion_neg
+        return posterior_samples_mean
 
     def plot_results(self, assignment, p_pred, y_true=None, seed=42, config='', additional_text=None,
-                     save_dir='figs/', show=False):
+                     save_dir='figs/', show=False, return_plt=False):
 
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
@@ -529,7 +629,7 @@ class DextraDemixer(ApMHCDeconvolution):
         # Plot data colored in predicted class assignment
         plt.subplot(3, 4, 1)
         ax = sns.histplot(x=self.model.data["x"], hue=assignment,
-                          discrete=True, element="step", alpha=0.7)
+                          discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("Pred class")
         leg.set_frame_on(False)
@@ -539,7 +639,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         plt.subplot(3, 4, 5)
         ax = sns.histplot(x=self.model.data["x"], hue=assignment,
-                          discrete=True, element="step", alpha=0.7)
+                          discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("Pred class")
         leg.set_frame_on(False)
@@ -549,7 +649,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         plt.subplot(3, 4, 9)
         ax = sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=assignment,
-                             markers={0: ".", 1: "X"})
+                             markers={0: ".", 1: "X"}, alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("Pred class")
         leg.set_frame_on(False)
@@ -561,7 +661,7 @@ class DextraDemixer(ApMHCDeconvolution):
         # Plot data colored in true class assignment
         plt.subplot(3, 4, 2)
         ax = sns.histplot(x=self.model.data["x"], hue=y_true,
-                          discrete=True, element="step", alpha=0.7)
+                          discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
         leg.set_frame_on(False)
@@ -570,7 +670,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         plt.subplot(3, 4, 6)
         ax = sns.histplot(x=self.model.data["x"], hue=y_true,
-                          discrete=True, element="step", alpha=0.7)
+                          discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
         leg.set_frame_on(False)
@@ -579,7 +679,7 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.title("True class assignment log-scale")
 
         plt.subplot(3, 4, 10)
-        ax = sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true)
+        ax = sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true, alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
         leg.set_frame_on(False)
@@ -621,7 +721,10 @@ class DextraDemixer(ApMHCDeconvolution):
                          label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
             plt.fill_between(x, np.quantile(prob1, 0.05, axis=0), np.quantile(prob1, 0.95, axis=0), alpha=0.3,
                              label='5%-95% percentile')
-            plt.legend(frameon=False)
+            handles = ax1.lines + ax2.lines
+            labels = [h.get_label() for h in handles]
+            ax1.legend(handles, labels, frameon=False, loc='best')
+            ax2.get_legend().remove()
             sns.despine()
             plt.title("Posterior NB without mixing weights")
             plt.ylabel("Probability")
@@ -649,7 +752,6 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.ylabel("Probability")
 
         elif self.mode == "I":
-            npd.NegativeBinomial2(mean=q, concentration=alpha)
             prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha[0]).log_prob(x))
             prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha[1]).log_prob(x))
 
@@ -660,6 +762,10 @@ class DextraDemixer(ApMHCDeconvolution):
             ax2 = ax1.twinx()
             sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, ax=ax2,
                          label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
+            handles = ax1.lines + ax2.lines
+            labels = [h.get_label() for h in handles]
+            ax1.legend(handles, labels, frameon=False, loc='best')
+            ax2.get_legend().remove()
             sns.despine()
             plt.title("Posterior NB without mixing weights")
             plt.ylabel("Probability")
@@ -708,7 +814,7 @@ class DextraDemixer(ApMHCDeconvolution):
             labels = np.argmin(dists, axis=1)
 
             plt.subplot(3, 4, 3)
-            ax = sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            ax = sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.3, stat='percent')
             leg = ax.get_legend()
             leg.set_title("KMeans cluster")
             leg.set_frame_on(False)
@@ -719,7 +825,7 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.ylabel("Percent")
 
             plt.subplot(3, 4, 7)
-            ax = sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.7, stat='percent')
+            ax = sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.3, stat='percent')
             leg = ax.get_legend()
             leg.set_title("KMeans cluster")
             leg.set_frame_on(False)
@@ -757,6 +863,8 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.savefig(os.path.join(save_dir, f"{config}.png"))
         if show:
             plt.show()
+        if return_plt:
+            return
         plt.close()
 
         return q, alpha, w
@@ -830,9 +938,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                      "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
                      "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE),
                      }
-
-        self.mode = mode
-        self.alpha_model = alpha_model
 
     def _init_kmeans(self, scale_factor=1.0, outlier_threshold=4.0) -> Dict:
         """
@@ -973,180 +1078,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         self._data = value
 
 
-class DextraDemixerMixtureModel(ADextraDemixerModel):
-    """
-    Implements a two-component negative-binomial mixture model of the form:
-
-    The generative model is wlog. specified for data of an individual epitope $j$.
-
-    $$\begin{align}
-    \text{\# Hyperprior}\\
-    &\mu_q \sim \text{N}(0,10)\\
-    &\sigma_q \sim \text{HC}(5)\\
-    &q^b \sim \text{N}(\mu_q, \sigma_q) &\forall b \in \{0,1\}\\
-    \text{IF mode == "H":}\\
-    &\alpha \sim \text{HC}(10)\\
-    \text{ELSE:}\\
-    &\alpha^b \sim \text{HC}(10) &\forall b \in \{0,1\}\\
-    \text{IF C defined:}&\\
-    \text{IF $\Sigma$ defined:}&\\
-    &w \sim \text{MvLogitN}(0, \Sigma)\\
-    \text{ELSE:}\\
-    &w_c \sim \text{Dir}([1,1]) &\forall c \in C\\
-    \text{IF mode == "H":}\\
-    &X_{ij}\sim (1-w^0_{C(i)})\text{NegBinom}({s_i}*e^{q^0}, \alpha) + w^1_{C(i)}\text{NegBinom}({s_i}*e^{q^1}, \alpha)&\forall i \in N\\
-    \text{ELIF mode == "C":}\\
-    &X_{ij}\sim (1-w^0_{C(i)})\text{NegBinom}({s_i}*e^{q^0}, \alpha_{C(i)}) + w^1_{C(i)}\text{NegBinom}({s_i}*e^{q^1}, \alpha_{C(i)})&\forall i \in N\\
-    \text{ELSE:}\\
-    &X_{ij}\sim (1-w^0_{C(i)})\text{NegBinom}({s_i}*e^{q^0}, \alpha^0) + w^1_{C(i)}\text{NegBinom}({s_i}*e^{q^1}, \alpha^1)&\forall i \in N\\
-    \text{ELSE:}\\
-    &w \sim \text{Dir}([1,1])\\
-    \text{IF mode == "H":}\\
-    &X_{ij}\sim (1-w^0)\text{NegBinom}({s_i}*e^{q^0}, \alpha) + w^1\text{NegBinom}({s_i}*e^{q^1}, \alpha)&\forall i \in N\\
-    \text{ELSE:}\\
-    &X_{ij}\sim (1-w^0)\text{NegBinom}({s_i}*e^{q^0}, \alpha^0) + w^1\text{NegBinom}({s_i}*e^{q^1}, \alpha^1)&\forall i \in N\\
-    \text{IF $X_{.j}^{\text{neg}}$ defined:}\\
-    \text{IF mode == "H":}\\
-    &X_{.j}^{\text{neg}} \sim \text{NegBinom}({s_i}^{\text{neg}}*e^{q^0}, \alpha)&\forall i \in N_{\text{neg}}\\
-    \text{ELIF mode == "C":}\\
-    &X_{.j}^{\text{neg}} \sim \text{NegBinom}({s_i}^{\text{neg}}*e^{q^0}, \alpha[C_{\text{neg}}(i)])&\forall i \in N_{\text{neg}}\\
-    \text{ELSE:}\\
-    &X_{.j}^{\text{neg}} \sim \text{NegBinom}({s_i}^{\text{neg}}*e^{q^0}, \alpha^0)&\forall i \in N_{\text{neg}}\\
-    \text{s.t.  }  q_{\text{raw}}^0 &< q_{\text{raw}}^1\\
-    \end{align}$$
-
-    with $C(i)$ being the clone index of T cell $i$ and $\hat{s}_i$ a cell-specific scaling factor accounting for
-    differences in sequencing depth. $q_c$ is the expectation value of avidity for clone $c\in C$ or the expacted
-    value of unspecific binding of epitope $i$.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._name = "mixturemodel"
-        self._version = "0.0.3"
-        self._model_config = {
-            "mu_w_mean_prior": 0.0,
-            "mu_w_var_prior": 10.0,
-            "mu_q_mean_prior": 0.0,
-            "mu_q_var_prior": 5.0,
-            "sigma_q_var_prior": 10.0,
-            "alpha_var_prior": 10.0,
-        }
-
-    def get_default_model_config(self) -> Dict:
-        return self._model_config
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def version(self) -> str:
-        return self._version
-
-    def model(  # type: ignore
-            self,
-            **kwargs):
-
-        if self.data is None:
-            raise RuntimeError("Model was not properly initialized. Please call `preprocess_model_data` first")
-
-        model_config = {**self.get_default_model_config(), **kwargs["model_config"]} if (
-                "model_config" in kwargs) else self.get_default_model_config()
-
-        x = self.data["x"]
-        x_neg = self.data["x_neg"]
-        clone = self.data["clone_continuous"]
-        sigma = self.data["sigma"]
-        s =  jnp.ones(x.shape[0]) if self.data["s"] is None else self.data["s"]
-
-        # plates
-        N_sample = x.shape[0]
-        c_nof = np.unique(clone).size if clone is not None else 0
-        K = 2
-
-        # hyperprior parameters
-        mu_w_mean_prior = model_config.get("mu_w_mean_prior", 0.0)
-        mu_w_var_prior = model_config.get("mu_w_var_prior", 10.0)
-        mu_q_mean_prior = model_config.get("mu_q_mean_prior", 0.0)
-        mu_q_var_prior = model_config.get("mu_q_var_prior", 5.0)
-        sigma_q_var_prior = model_config.get("sigma_q_var_prior", 10.0)
-        alpha_var_prior = model_config.get("alpha_var_prior", 10.0)
-
-        # hyperprior
-        mu_q = npy.sample("mu_q", npd.Normal(mu_q_mean_prior, mu_q_var_prior))
-        sigma_q = npy.sample("sigma_q", npd.HalfCauchy(sigma_q_var_prior))
-
-        #shape prior
-        if self.mode == "H":
-            alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                    npd.transforms.PowerTransform(-2.0)))
-        elif self.mode == "C":
-            with npy.plate("clone_axis", c_nof):
-                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                        npd.transforms.PowerTransform(-2.0)))
-        else:
-            with npy.plate("cluster_axis", K):
-                alpha = npy.sample("alpha", npd.TransformedDistribution(npd.HalfCauchy(alpha_var_prior),
-                                                                        npd.transforms.PowerTransform(-2.0)))
-
-        # cluster probability prior
-        if clone is not None:
-            if sigma is not None:
-                # non-centered multivariat parametrization
-                mu_w = npy.sample("mu_w", npd.Normal(mu_w_mean_prior, mu_w_var_prior))
-                with npy.plate("clone_axis", c_nof):
-                    gamma_w = npy.sample("gamma_w", npd.Normal(loc=0, scale=1))
-                L = jnp.linalg.cholesky(sigma)
-                w_raw = jax.scipy.special.ndtr(jnp.clip(mu_w + jnp.dot(L, gamma_w), -5, 5))
-                #w_raw = jax.scipy.special.expit(mu_w + jnp.dot(L, gamma_w))
-                w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
-            else:
-                with npy.plate("clone_axis", c_nof):
-                    w = npy.sample("w", npd.Dirichlet(jnp.ones(K)))
-            z = npd.Categorical(probs=w[clone])
-        else:
-            w = npy.sample("w", npd.Dirichlet(jnp.ones(K)))
-            z = npd.Categorical(probs=w)
-
-        q = npy.sample("q",
-                       npd.TransformedDistribution(npd.LogNormal(loc=mu_q, scale=sigma_q).expand((K,)),
-                                                   npd.transforms.OrderedTransform()))
-
-        with npy.plate("sample_axis", N_sample):
-            if x_neg is not None:
-                if self.mode == "H":
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=s*q[0], concentration=alpha),
-                                          obs=x_neg)
-                elif self.mode == "C":
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=s*q[0],
-                                                                concentration=alpha[clone]),
-                                          obs=x_neg)
-                else:
-                    yhat_neg = npy.sample("yhat_neg",
-                                          npd.NegativeBinomial2(mean=s*q[0], concentration=alpha[0]),
-                                          obs=x_neg)
-
-            # target pMHC
-            if self.mode == "C":
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=s[:,None]*q,
-                                                                         concentration=alpha[clone].reshape(
-                                                                             (N_sample, 1))
-                                                                         )
-                                                )
-            else:
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=s[:,None]*q,
-                                                                         concentration=alpha))
-
-            yhat = npy.sample("yhat", mixture, obs=x)
-
-            # Until here, where we can track the membership probability of each sample
-            log_probs = mixture.component_log_probs(yhat)
-            p = npy.deterministic("log_p", log_probs - logsumexp(log_probs, axis=-1, keepdims=True))
-
-
 class DextraDemixerKmeansModel(ADextraDemixerModel):
     """
     Dextramixer version who is initialized and prior parametrized by K-means++ results
@@ -1165,7 +1096,9 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             "sigma_q_var_prior": 10.0,
             "alpha_var_prior": 10.0,
             "var_hyperprior": 10.0,
-            "overdispersion_scale_prior": 1.0,
+            "scale_var_prior": 1.0,
+            "overdispersion_scale_prior": 1e-2,
+            "alpha_offset": 0.0,
         }
 
     @property
@@ -1190,8 +1123,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c, sigma=sigma, mode=mode,
                                       alpha_model=alpha_model, **kwargs)
         self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor,
-                                              outlier_threshold=kwargs['outlier_threshold']
-                                              if 'outlier_threshold' in kwargs else 4.0)
+                                              outlier_threshold=kwargs.get('outlier_threshold', 4.0))
         self._model_config.update(self._kmeans_dict)
 
     def get_default_model_config(self) -> Dict:
@@ -1223,6 +1155,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         var_hp = model_config["var_hyperprior"]  # Variance for priors if using alpha_model = kmeans
         tau_concentration_prior = model_config["tau_concentration_prior"]
         overdispersion_scale_prior = model_config["overdispersion_scale_prior"]
+        scale_var_prior = model_config["scale_var_prior"]
+        alpha_offset = model_config.get("alpha_offset", False)
 
         clone_means = model_config.get("clone_means", None)  # Mean for each clonotype
         clone_variances = model_config.get("clone_variances", None)
@@ -1250,11 +1184,15 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             # Convert kmeans priors to deltas, due to cumsum ordering
             mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
             var_deltas = jnp.array([max(cluster_variances[0], 1e-1), max(cluster_variances[1] - cluster_variances[0], 1)])
+            if scale_var_prior == 'sqrt':
+                var_deltas = jnp.sqrt(var_deltas)
+            else:
+                var_deltas *= scale_var_prior
 
             # Convert kmeans parameters to lognormal parameters with target mean and variance
             # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
             sigma2_q_prior = jnp.log(var_deltas / mean_deltas ** 2 + 1)
-            sigma_q_prior = jnp.sqrt(sigma2_q_prior)
+            sigma_q_prior = jnp.maximum(jnp.sqrt(sigma2_q_prior), 0.01)  # avoid sigma=0
             mu_q_prior = jnp.log(mean_deltas) - sigma2_q_prior / 2
 
             # Sample delta_q from lognormal distribution and cumsum to create ordered q
@@ -1276,7 +1214,12 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                 # For each mixture component, we have one alpha parameter
                 with npy.plate("cluster_axis", K):
                     overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
-                alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
+                #TODO make sure that alpha > 1 to prevent exponential dist for the second component
+                if alpha_offset:
+                    alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q) + jnp.array([0, alpha_offset]))
+                else:
+                    alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
+
 
         elif self.alpha_model == "kmeans":
             # NB mean parameter: q ~ LogNormal(mu_q, sigma_q),
@@ -1341,18 +1284,30 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         else:
             raise NotImplementedError(f" {self.alpha_model} not implemented")
 
+        if x_neg is not None:
+            if self.alpha_model == 'kmeans':
+                raise NotImplementedError("Not implemented, kmeans model will be killed")
+            s_q = npy.sample("s_q", npd.LogNormal(0.9692917285815055, 0.6293977074906485))
+            q_neg = npy.deterministic("q_neg", jnp.clip(s * q[0] / s_q, a_min=1e-3))
+            s_alpha = npy.sample("s_alpha", npd.LogNormal(0.19724303327974974, 0.43970806321879075))
+            overdispersion_neg = npy.deterministic("overdispersion_neg", jnp.clip(overdispersion[0] / s_alpha, a_min=1.0 + 1e-3))
+            with npy.plate("sample_axis", N_sample):
+                if self.mode == "C":
+                    raise NotImplementedError
+                    # Not sure how to implement: If each clonotype has its own alpha, then we need to compute alpha_neg
+                    # for each clonotype weighted by its belonging to noise
+
+                    # q_neg_weighted = (w[:, 0] * q_neg)
+                    # alpha_neg = npy.deterministic("alpha_neg", q_neg_weighted ** 2 / (q_neg_weighted * overdispersion - q_neg_weighted))
+                    # yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                    #                       fn=npd.NegativeBinomial2(mean=q_neg, concentration=alpha_neg[clone]))
+                else:
+                    alpha_neg = npy.deterministic("alpha_neg", q_neg ** 2 / (q_neg * overdispersion_neg - q_neg))
+                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                                          fn=npd.NegativeBinomial2(mean=q_neg, concentration=alpha_neg, ))
+
         # Sample from the mixture model
         with npy.plate("sample_axis", N_sample):
-            if x_neg is not None:
-                if self.mode == "C":
-                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
-                                          fn=npd.NegativeBinomial2(mean=s*q[0],
-                                                                concentration=alpha[clone]),)
-
-                else:
-                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
-                                          fn=npd.NegativeBinomial2(mean=s*q[0], concentration=alpha[0]),)
-
             # target pMHC
             if self.mode == "C":
                 mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=s[:,None]*q, concentration=alpha[clone, None]))
