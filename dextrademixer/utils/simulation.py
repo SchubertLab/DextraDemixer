@@ -446,7 +446,8 @@ class DextramerSimulator:
                                              use_clonotype_cov: bool = False,
                                              simulate_neg_control: bool = False,
                                              plot_data: bool = False,
-                                             rng_key: int = 42
+                                             rng_key: int = 42,
+                                             rep: int = 0,
                                              ) -> Union[Tuple[MuData, Any], MuData]:
         """
         Given distribution parameters generate binding data for one pMHC. If certain parameters are not specified,
@@ -513,7 +514,31 @@ class DextramerSimulator:
             var_pos = var_inc * mean_non_binder
         concentration_pos = convert_to_invdispersion(mean_pos, var_pos)
 
-        binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
+        # Sample binder assignments and cells per clone until empirical binding ratio is close to target
+        max_trials = 20
+        best_err = 10000
+        for _ in range(max_trials):
+            total_le = total_cells - nof_clones
+            raw_cells_per_clone = stats.boltzmann.rvs(*cells_per_clonotype, size=nof_clones, random_state=rng)
+            cells_per_clone_p = raw_cells_per_clone / raw_cells_per_clone.sum()
+            cells_per_clone_trial = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
+
+            # Sample multiple binder assignments and pick the one that gives empirical binding ratio closest to target
+            binder_assignment_trial = rng.binomial(1, binding_ratio, size=(10000, nof_clones))
+            empirical_binding_ratio = ((cells_per_clone_trial * binder_assignment_trial).sum(1) / total_cells)
+            # mean of error from empirical cell and clone level binder ratio
+            err = ((np.abs(empirical_binding_ratio - binding_ratio) +
+                   np.abs(binder_assignment_trial.mean(1) - binding_ratio))
+                   / 2)
+
+            if err.min() < best_err:
+                best_idx = err.argmin()
+                binder_assignment = binder_assignment_trial[best_idx]
+                cells_per_clone = cells_per_clone_trial
+
+            if err.min() < binding_ratio * 0.05:
+                break
+
         K = None
         cc_assignment = None
 
@@ -529,10 +554,6 @@ class DextramerSimulator:
 
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
-        total_le = total_cells - nof_clones
-        raw_cells_per_clone = np.array([stats.boltzmann.rvs(*cells_per_clonotype,random_state=rng) for _ in range(nof_clones)])
-        cells_per_clone_p = raw_cells_per_clone/raw_cells_per_clone.sum()
-        cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
 
         d = {"x": [], "binder": [], "clone": [], "fold_increase": [], "outlier":[]}
         if simulate_neg_control:
@@ -558,21 +579,6 @@ class DextramerSimulator:
 
             x = DextramerSimulator.generate_nb_val(mean, concentration, size=n_cells, rng_key=key)
 
-            if p_binding_outlier > 0 and is_binder:
-                outlier = stats.binom.rvs(1, p_binding_outlier, size=n_cells, random_state=rng)
-                outlier_idx = np.where(outlier)
-
-                a = (0.001 - concentration_non_binder) / (concentration_non_binder / 3)
-                concentration = stats.truncnorm.rvs(a, np.inf, loc=concentration_non_binder,
-                                                    scale=concentration_non_binder / 3, random_state=rng)
-
-                x = x.at[outlier_idx].set(
-                    DextramerSimulator.generate_nb_val(mean, concentration, size=np.sum(outlier), rng_key=key)
-                )
-                d["outlier"].extend(outlier.tolist())
-            else:
-                d["outlier"].extend([0]*n_cells)
-
             if simulate_neg_control:
                 key, subkey = jax.random.split(key)
                 x_neg = DextramerSimulator.generate_nb_val(mean_neg_ctrl, concentration_neg_ctrl, size=n_cells, rng_key=key)
@@ -582,6 +588,30 @@ class DextramerSimulator:
             d["binder"].extend([is_binder] * n_cells)
             d["clone"].extend([i] * n_cells)
             d["fold_increase"].extend([mean_inc] * n_cells)
+
+        if p_binding_outlier > 0:
+            outlier = np.zeros(total_cells, dtype=int)
+            binder_mask = np.array(d["binder"], dtype=bool)
+            n_binder = binder_mask.sum()
+
+            binder_outlier_trial = rng.binomial(1, p_binding_outlier, size=(10000, n_binder))
+
+            err = np.abs(p_binding_outlier - binder_outlier_trial.mean(1))
+            best_idx = err.argmin()
+            binder_outlier = binder_outlier_trial[best_idx]
+            outlier[binder_mask] = binder_outlier
+
+            a = (0.001 - concentration_non_binder) / (concentration_non_binder / 3)
+            concentration = stats.truncnorm.rvs(a, np.inf, loc=concentration_non_binder,
+                                                scale=concentration_non_binder / 3, random_state=rng)
+            x = np.array(d["x"])
+            x[outlier.astype(bool)] = (
+                DextramerSimulator.generate_nb_val(mean_non_binder, concentration, size=np.sum(outlier), rng_key=key)
+            )
+            d["x"] = x.tolist()
+            d["outlier"] = outlier.tolist()
+        else:
+            d["outlier"] = [0]*total_cells
 
         mdat = DextramerSimulator.__generate_mdata(d, simulate_neg_control, K, cc_assignment)
         # Best theoretical F1
@@ -599,6 +629,7 @@ class DextramerSimulator:
             'mean_inc': mean_inc,
             'var_inc': var_inc,
             'mean_pos': mean_pos,
+            'var_pos': var_pos,
             'concentration_pos': concentration_pos,
             'total_cells': total_cells,
             'nof_clones': nof_clones,
@@ -608,6 +639,7 @@ class DextramerSimulator:
             'rng_key': rng_key,
             'best_f1': best_f1,
             'best_threshold': best_threshold,
+            'rep': rep,
         }
         mdat['gex'].uns['sim_params'] = sim_params
 
@@ -801,6 +833,7 @@ class DextramerSimulator:
         adata_tcr = ad.AnnData()
         adata_tcr.obs["is_binder"] = d["binder"]
         adata_tcr.obs["clone_id"] = d["clone"]
+        adata_tcr.obs["outlier"] = d["outlier"]
 
         if cov is not None:
             adata_tcr.obs["cc_aa_sim"] = cc_assignment[d["clone"]]
