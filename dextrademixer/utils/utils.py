@@ -14,7 +14,7 @@ from jax import pure_callback
 from numpy import ndarray, dtype, bool_
 from scipy.stats import ortho_group, random_correlation
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
-                             accuracy_score, )
+                             accuracy_score, matthews_corrcoef)
 
 
 def gower_centering(distance_matrix):
@@ -364,6 +364,7 @@ def init_worker(worker_mem_limit_mb=None):
 def calculate_metrics(y_true: np.ndarray, p_pred: np.ndarray, assignment: np.ndarray) -> dict:
     results_dict = {'auroc': roc_auc_score(y_true, p_pred), 'aps': average_precision_score(y_true, p_pred),
                     'f1': f1_score(y_true, assignment), 'precision': precision_score(y_true, assignment),
-                    'recall': recall_score(y_true, assignment), 'accuracy': accuracy_score(y_true, assignment)}
+                    'recall': recall_score(y_true, assignment), 'accuracy': accuracy_score(y_true, assignment),
+                    'mcc': matthews_corrcoef(y_true, assignment)}
 
     return results_dict
