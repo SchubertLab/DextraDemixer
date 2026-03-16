@@ -114,6 +114,7 @@ class DextraDemixer(ApMHCDeconvolution):
                               ir_clone_key: str = None,
                               ir_cov_key: str = None,
                               use_size_factor: bool = None,
+                              outlier_threshold: float = None,
                               **kwargs):
         """
         Preprocesses the data and initializes the model
@@ -144,7 +145,7 @@ class DextraDemixer(ApMHCDeconvolution):
             if c is None:
                 raise ValueError("If `mode`= C a clonotype vector `ir_clone_key` must be specified.")
 
-        if use_size_factor:  #TODO
+        if use_size_factor:
             pmhc_list = use_size_factor if isinstance(use_size_factor, list) else mdata[gex_key].var_names.tolist()
             x_plus = jnp.array(gex[:, pmhc_list].X.toarray(),
                                dtype=FLOAT_DTYPE)  # only used for size factor calculation
@@ -155,7 +156,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         self._check_parameters(x, x_neg, c, sigma)
         self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, sigma=sigma, mode=self.mode,
-                                         alpha_model=self.alpha_model, **kwargs)
+                                         alpha_model=self.alpha_model, outlier_threshold=outlier_threshold, **kwargs)
     
     @staticmethod
     def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
@@ -345,6 +346,7 @@ class DextraDemixer(ApMHCDeconvolution):
             return inference_data
 
     def predict_posterior_class(self,
+                                data: Dict = None,
                                 threshold: float = None,
                                 target_fdr: float = None,
                                 quantile: float = None,
@@ -401,12 +403,9 @@ class DextraDemixer(ApMHCDeconvolution):
                     p = mean_p.values[clone_id]
             return p
 
-        if self.model.data["clone_continuous"] is not None and clone_id is None:
-            clone_id = self.model.data["clone_continuous"]
-
-        if clone_id is not None:
-            # Make clone_id continuous
-            clone_id, _ = pd.factorize(clone_id)
+        data = data if data is not None else self.model.data_full
+        clone_id = clone_id if clone_id is not None else data.get("clone_continuous", None)
+        clone_id = pd.factorize(clone_id)[0] if clone_id is not None else None
 
         if self.sampler is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
@@ -414,6 +413,7 @@ class DextraDemixer(ApMHCDeconvolution):
         # posterior probability of belonging to the binding class
         if self.is_svi:
             if clonotype_adherence and clone_id is not None:
+                # TODO Not used, so did not match outlier filtered data
                 posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
                                                                 sample_shape=(500,))
                 p = __return_p_summary(posterior_samples["w"])
@@ -421,10 +421,11 @@ class DextraDemixer(ApMHCDeconvolution):
             else:
                 predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
                                                   num_samples=500)
-                samples = predictive(jax.random.PRNGKey(self.rng_key))  # self.rng_key
+                samples = predictive(jax.random.PRNGKey(self.rng_key), data=data)  # self.rng_key
                 p = __return_p_summary(jnp.exp(samples["log_p"]))
 
         else:
+            # TODO Unused, did not update with outlier filtered data
             if clonotype_adherence and clone_id is not None:
                 p = __return_p_summary(self.sampler.get_samples()["w"])
             else:
@@ -617,7 +618,7 @@ class DextraDemixer(ApMHCDeconvolution):
         return posterior_samples_mean
 
     def plot_results(self, assignment, p_pred, y_true=None, seed=42, config='', additional_text=None,
-                     save_dir='figs/', show=False, return_plt=False):
+                     save_dir='figs/', show=False, return_plt=False, data=None):
 
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
@@ -626,9 +627,11 @@ class DextraDemixer(ApMHCDeconvolution):
             y_true = np.zeros_like(assignment)
         plt.figure(figsize=(16, 12))
 
+        data = data if data is not None else self.model.data_full
+
         # Plot data colored in predicted class assignment
         plt.subplot(3, 4, 1)
-        ax = sns.histplot(x=self.model.data["x"], hue=assignment,
+        ax = sns.histplot(x=data["x"], hue=assignment,
                           discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("Pred class")
@@ -638,7 +641,7 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.title("Predicted class assignment")
 
         plt.subplot(3, 4, 5)
-        ax = sns.histplot(x=self.model.data["x"], hue=assignment,
+        ax = sns.histplot(x=data["x"], hue=assignment,
                           discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("Pred class")
@@ -648,7 +651,7 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.title("Predicted class assignment log-scale")
 
         plt.subplot(3, 4, 9)
-        ax = sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=assignment,
+        ax = sns.scatterplot(x=data["x"], y=p_pred, hue=assignment,
                              markers={0: ".", 1: "X"}, alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("Pred class")
@@ -660,7 +663,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # Plot data colored in true class assignment
         plt.subplot(3, 4, 2)
-        ax = sns.histplot(x=self.model.data["x"], hue=y_true,
+        ax = sns.histplot(x=data["x"], hue=y_true,
                           discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
@@ -669,7 +672,7 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.title("True class assignment")
 
         plt.subplot(3, 4, 6)
-        ax = sns.histplot(x=self.model.data["x"], hue=y_true,
+        ax = sns.histplot(x=data["x"], hue=y_true,
                           discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
@@ -679,7 +682,7 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.title("True class assignment log-scale")
 
         plt.subplot(3, 4, 10)
-        ax = sns.scatterplot(x=self.model.data["x"], y=p_pred, hue=y_true, alpha=0.3)
+        ax = sns.scatterplot(x=data["x"], y=p_pred, hue=y_true, alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
         leg.set_frame_on(False)
@@ -698,17 +701,17 @@ class DextraDemixer(ApMHCDeconvolution):
         q = posterior_samples["q"]
         w = posterior_samples["w"]
         alpha = posterior_samples["alpha"]
-        x = np.arange(0, self.model.data["x"].max())
+        x = np.arange(0, data["x"].max())
 
         if self.mode == "C":
             # alpha_weighted is the mean of alpha weighted by w for each cell with shape (2, )
             # This reflects better the contribution of each alpha on average for the binder and non-binder NB component
-            alpha_weighted = (w[self.model.data["clone_continuous"]] * alpha[self.model.data["clone_continuous"]][:, None])
+            alpha_weighted = (w[data["clone_continuous"]] * alpha[data["clone_continuous"]][:, None])
             alpha_weighted = alpha_weighted.mean(0) / w.mean(0)
 
             # pdf for each cell
-            prob0 = jnp.exp(npd.NegativeBinomial2(mean=q[0], concentration=alpha[self.model.data["clone_continuous"]][:, np.newaxis]).log_prob(x))
-            prob1 = jnp.exp(npd.NegativeBinomial2(mean=q[1], concentration=alpha[self.model.data["clone_continuous"]][:, np.newaxis]).log_prob(x))
+            prob0 = jnp.exp(npd.NegativeBinomial2(mean=q[0], concentration=alpha[data["clone_continuous"]][:, np.newaxis]).log_prob(x))
+            prob1 = jnp.exp(npd.NegativeBinomial2(mean=q[1], concentration=alpha[data["clone_continuous"]][:, np.newaxis]).log_prob(x))
 
             # Individual Negative Binomial
             plt.subplot(3, 4, 8)
@@ -731,9 +734,9 @@ class DextraDemixer(ApMHCDeconvolution):
 
             # Mixture model
             # Use different w for each clonotype and hence cell: w.shape = (#clonotypes, 2)
-            prob0_mix = prob0 * w[self.model.data["clone_continuous"]][:, 0:1]
-            prob1_mix = prob1 * w[self.model.data["clone_continuous"]][:, 1:2]
-            w_mean = w[self.model.data["clone_continuous"]].mean(0)  # mean over all clonotypes
+            prob0_mix = prob0 * w[data["clone_continuous"]][:, 0:1]
+            prob1_mix = prob1 * w[data["clone_continuous"]][:, 1:2]
+            w_mean = w[data["clone_continuous"]].mean(0)  # mean over all clonotypes
 
             plt.subplot(3, 4, 4)
             sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
@@ -757,10 +760,10 @@ class DextraDemixer(ApMHCDeconvolution):
 
             # Individual Negative Binomial
             plt.subplot(3, 4, 8)
-            ax1 = sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob0,
+            ax1 = sns.lineplot(x=np.arange(0, data["x"].max()), y=prob0,
                                label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", color=sns.color_palette('tab10')[0])
             ax2 = ax1.twinx()
-            sns.lineplot(x=np.arange(0, self.model.data["x"].max()), y=prob1, ax=ax2,
+            sns.lineplot(x=np.arange(0, data["x"].max()), y=prob1, ax=ax2,
                          label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
             handles = ax1.lines + ax2.lines
             labels = [h.get_label() for h in handles]
@@ -772,7 +775,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
             # Mixture model
             plt.subplot(3, 4, 4)
-            if self.model.data["clone_continuous"] is not None:
+            if data["clone_continuous"] is not None:
                 # Use different w for each clonotype: w.shape = (#clonotypes, 2)
                 # probX = (max UMI)
                 prob0_mix = prob0[None,] * w[:, 0:1]
@@ -810,11 +813,11 @@ class DextraDemixer(ApMHCDeconvolution):
         if self.model_type == "mixturemodelkmeans":
             cluster_means = self.model._kmeans_dict["cluster_means"]
             cluster_vars = self.model._kmeans_dict["cluster_variances"]
-            dists = jnp.abs(self.model.data["x"][:, None].repeat(2, axis=1) - cluster_means)
+            dists = jnp.abs(data["x"][:, None].repeat(2, axis=1) - cluster_means)
             labels = np.argmin(dists, axis=1)
 
             plt.subplot(3, 4, 3)
-            ax = sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.3, stat='percent')
+            ax = sns.histplot(x=data["x"], hue=labels, discrete=True, element="step", alpha=0.3, stat='percent')
             leg = ax.get_legend()
             leg.set_title("KMeans cluster")
             leg.set_frame_on(False)
@@ -825,7 +828,7 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.ylabel("Percent")
 
             plt.subplot(3, 4, 7)
-            ax = sns.histplot(x=self.model.data["x"], hue=labels, discrete=True, element="step", alpha=0.3, stat='percent')
+            ax = sns.histplot(x=data["x"], hue=labels, discrete=True, element="step", alpha=0.3, stat='percent')
             leg = ax.get_legend()
             leg.set_title("KMeans cluster")
             leg.set_frame_on(False)
@@ -839,7 +842,7 @@ class DextraDemixer(ApMHCDeconvolution):
             plt.subplot(3, 4, 12)
             alpha = cluster_means**2 / (cluster_vars - cluster_means)
             alpha[alpha < 0] = 100
-            x = np.arange(0, self.model.data["x"].max())
+            x = np.arange(0, data["x"].max())
             prob0 = jnp.exp(npd.NegativeBinomial2(cluster_means[0], alpha[0]).log_prob(x))
             prob1 = jnp.exp(npd.NegativeBinomial2(cluster_means[1], alpha[1]).log_prob(x))
 
@@ -930,16 +933,27 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         """
         """
         clone = None if c is None else jnp.array(c, dtype=INT_DTYPE)
-        self.data = {"x": jnp.array(x, dtype=INT_DTYPE),
-                     "s": None if s is None else jnp.array(s, dtype=FLOAT_DTYPE),
-                     "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=FLOAT_DTYPE),
-                     "clone": clone,
-                     # If clone is not contiuous, then there will be problems with indexing
-                     "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
-                     "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE),
+        zscore = jnp.abs((x - jnp.mean(x)) / jnp.std(x))
+        outlier_threshold = 100 # TODO Hardcoded
+
+        self.data_full = {"x": jnp.array(x, dtype=INT_DTYPE),
+                          "s": None if s is None else jnp.array(s, dtype=FLOAT_DTYPE),
+                          "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=FLOAT_DTYPE),
+                          "clone": clone,
+                          # If clone is not contiuous, then there will be problems with indexing
+                          "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
+                          "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE),
+                          }
+        
+        self.data = {"x": jnp.array(x[jnp.where(zscore < outlier_threshold)], dtype=INT_DTYPE),
+                     "s": jnp.array(s[jnp.where(zscore < outlier_threshold)], dtype=FLOAT_DTYPE) if s is not None else None,
+                     "x_neg": jnp.array(neg_cont[jnp.where(zscore < outlier_threshold)], dtype=FLOAT_DTYPE) if neg_cont is not None else None,
+                     "clone": jnp.array(clone[jnp.where(zscore < outlier_threshold)], dtype=INT_DTYPE) if clone is not None else None,
+                     "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone[jnp.where(zscore < outlier_threshold)]),
+                     "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE)[jnp.where(zscore < outlier_threshold)],
                      }
 
-    def _init_kmeans(self, scale_factor=1.0, outlier_threshold=4.0) -> Dict:
+    def _init_kmeans(self, scale_factor=1.0, outlier_threshold=None) -> Dict:
         """
         Initialize KMeans with 2 clusters and compute all necessary prior parameters
         for mu_q, sigma_q, alpha, and tau priors.
@@ -952,18 +966,21 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         returns: Dict with params estimates and  k-mean labels,
         """
         x = self.data["x"].copy()
-        # remove outliers
-        x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
-        zscore = (x_log - x_log.mean()) / x_log.std()
-        x_no_outliers = x[zscore < outlier_threshold]
-        x_no_outliers = x_no_outliers.sort()
-        diffs = np.diff(x_no_outliers, prepend=x_no_outliers[0])
-        # TODO What value to define a huge gap?
-        huge_gap_indices = np.where(diffs > x.max() / 3)[0]
-        if len(huge_gap_indices) > 0:
-            first_gap_index = huge_gap_indices[0]
-            x_no_outliers = x_no_outliers[:first_gap_index]
-
+        # # remove outliers
+        # if outlier_threshold is not None:
+        #     x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
+        #     zscore = (x_log - x_log.mean()) / x_log.std()
+        #     print(zscore.max())
+        #     x_no_outliers = x[zscore < outlier_threshold]
+        #     x_no_outliers = x_no_outliers.sort()
+        #     diffs = np.diff(x_no_outliers, prepend=x_no_outliers[0])
+        #     # TODO What value to define a huge gap?
+        #     huge_gap_indices = np.where(diffs > x.max() / 3)[0]
+        #     if len(huge_gap_indices) > 0:
+        #         first_gap_index = huge_gap_indices[0]
+        #         x_no_outliers = x_no_outliers[:first_gap_index]
+        # else:
+        x_no_outliers = x
         clone = self.data.get("clone_continuous", None)
         sigma = self.data.get("sigma", None)
         n_clusters = 2  # KMeans with 2 clusters
@@ -972,6 +989,11 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x_no_outliers), np.max(x_no_outliers)]), n_init="auto").fit(x_no_outliers.reshape(-1, 1))
         labels = kmeans.predict(x.reshape(-1, 1))
 
+        if labels.sum() <= 3:
+            # Assign highest three values to cluster 1 and the rest to cluster 0
+            sorted_indices = np.argsort(x)
+            labels[sorted_indices[-3:]] = 1
+        
         # Initialize lists for cluster attributes
         cluster_means = []
         cluster_variances = []
@@ -1096,7 +1118,6 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             "sigma_q_var_prior": 10.0,
             "alpha_var_prior": 10.0,
             "var_hyperprior": 10.0,
-            "scale_var_prior": 1.0,
             "overdispersion_scale_prior": 1e-2,
             "alpha_offset": 0.0,
         }
@@ -1118,31 +1139,34 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                               alpha_model="overdispersion",
                               mode: str = "H",
                               scale_factor: float = 1.0,
+                              outlier_threshold: float = None,
                               **kwargs):
 
         super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c, sigma=sigma, mode=mode,
                                       alpha_model=alpha_model, **kwargs)
         self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor,
-                                              outlier_threshold=kwargs.get('outlier_threshold', 4.0))
+                                              outlier_threshold=outlier_threshold)
         self._model_config.update(self._kmeans_dict)
 
     def get_default_model_config(self) -> Dict:
         return self._model_config
 
-    def model(self, **kwargs):
+    def model(self, data=None, **kwargs):
         """
         Define the probabilistic model based on the preprocessed data and KMeans initialization.
         """
-        if self.data is None:
-            raise RuntimeError("Model was not properly initialized. Please call `preprocess_model_data` first.")
 
         model_config = {**self.get_default_model_config(), **kwargs.get("model_config", {})}
+        if data is None:
+            if self.data is None:
+                raise RuntimeError("Model was not properly initialized. Please call `preprocess_model_data` first.")
+            data = self.data
 
-        x = self.data["x"]
-        s = jnp.ones(x.shape[0]) if self.data["s"] is None else self.data["s"]
-        x_neg = self.data["x_neg"]
-        clone = self.data["clone_continuous"]
-        sigma = self.data["sigma"]
+        x = data["x"]
+        s = data["s"]
+        x_neg = data["x_neg"]
+        clone = data["clone_continuous"]
+        sigma = data["sigma"]
         N_sample = x.shape[0]
         c_nof = np.unique(clone).size if clone is not None else 0
         K = 2
@@ -1155,7 +1179,6 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         var_hp = model_config["var_hyperprior"]  # Variance for priors if using alpha_model = kmeans
         tau_concentration_prior = model_config["tau_concentration_prior"]
         overdispersion_scale_prior = model_config["overdispersion_scale_prior"]
-        scale_var_prior = model_config["scale_var_prior"]
         alpha_offset = model_config.get("alpha_offset", False)
 
         clone_means = model_config.get("clone_means", None)  # Mean for each clonotype
@@ -1184,10 +1207,6 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             # Convert kmeans priors to deltas, due to cumsum ordering
             mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
             var_deltas = jnp.array([max(cluster_variances[0], 1e-1), max(cluster_variances[1] - cluster_variances[0], 1)])
-            if scale_var_prior == 'sqrt':
-                var_deltas = jnp.sqrt(var_deltas)
-            else:
-                var_deltas *= scale_var_prior
 
             # Convert kmeans parameters to lognormal parameters with target mean and variance
             # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
@@ -1214,7 +1233,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                 # For each mixture component, we have one alpha parameter
                 with npy.plate("cluster_axis", K):
                     overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
-                #TODO make sure that alpha > 1 to prevent exponential dist for the second component
+                # Make sure that alpha > 1 to prevent exponential dist for the second component
                 if alpha_offset:
                     alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q) + jnp.array([0, alpha_offset]))
                 else:
