@@ -319,6 +319,15 @@ def convert_str_to_bool_and_none(args):
     return args
 
 
+def float_or_none(value):
+    if value is None or value.lower() == 'none':
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"'{value}' is not a valid float or 'None'")
+    
+
 def get_slurm_cpu_count():
     # Check for SLURM-provided variables
     for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE", "SLURM_NTASKS", "SLURM_JOB_CPUS_PER_NODE"):
