@@ -2,66 +2,89 @@ from typing import List, Union
 import numpy as np
 import pandas as pd
 import mudata as md
+import anndata as ad
 
 
-
-def icon_assign_pmhc(mdata: md.MuData,
+def icon_assign_pmhc(adata: Union[md.MuData, ad.AnnData],
                      ir_clone_key: str,
                      neg_ctrl_key: str = None,
                      threshold: float = 0,
                      bg_noise: float = None,
+                     bg_noise_quantile: float = 0.975,
                      pmhc_keys: Union[str, List[str]] = None,
-                     gex_key: str = "gex",
-                     ir_key: str = "airr",
-                     inplace=False):
+                     dex_key: str = "dex",
+                     inplace=False,
+                     faithful: bool = False,
+                     ):
     """
     implements the ICON assignment procedure
+    requires clonal information and dextramer counts, and optionally a negative control column to estimate background noise.
 
     Args:
-        mdata: A Mudata containing only dextramer counts and clonotype information
-        threshold: A UMI count, or relative threshold to determine dextramer-specificity
-        threshold_type: A string specifiying whether the threshold is absolut or relative. if relative than X in gex_key
-                        will be normalized by the column means
-        pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `gex_key` modality`s `X` which should be
-                   deconvolved. If None is given, the full X is used, excluding the negative control if specified.
-        gex_key: the MuData transcriptome module key
-        neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
-        ir_key: the MuData AIRR module key
-        ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
-        inplace: boolean indicating whether assignment should be stored in mdata on `gex_key` `obsm`
-        kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
+        adata: A MuData object containing only dextramer counts and clonotype information,
+            or an AnnData object containing the dextramer counts and clonotype information in the specified obsm and obs keys.
+        threshold: A relative threshold to determine dextramer-specificity
+        bg_noise: (Optional) A value to substract from dextramer counts to account for background noise. 
+            If None is given, the bg_noise_quantile of the negative control column is used if specified, otherwise 10.
+        pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `dex_key` modality which should be
+            deconvolved. If None is given, the full matrix is used, excluding the negative control if specified.
+        dex_key: the dextramer signal MuData module key, or the obsm key if adata is an AnnData object
+        neg_ctrl_key: (Optional) a string specifying the negative control column in the `dex_key` matrix.
+        ir_clone_key: A string specifying the field in `obs` that holds clonotype ids. 
+            If in the immune receptor modality of a mudata object, should be `ir_key:clone_key`.
+        inplace: boolean indicating whether assignment should be stored in `obsm`
+        faithful: boolean indicating whether to use the original ICON procedure (True) or a debuged version based on the paper description
 
-
-    Returns: An array of pMHC assignments per cell, or modifies the mdata object adding an obsm matrix at `gex_key`
+    Returns: An array of pMHC assignments per cell, or modifies the adata object adding an obsm matrix at `dex_key`
     """
-    gex = mdata.mod[gex_key]
-    air = mdata.mod[ir_key]
+    # check if clone key contains NA values
+    if adata.obs[ir_clone_key].isna().sum() > 0:
+        raise ValueError(f"NA values found in clone key {ir_clone_key} of adata.obs. ICON works only for cells with TCR information. Please filter the object.")
+    c = adata.obs[ir_clone_key].to_numpy().astype("int32")
+
+    # get dextramer counts
+    if isinstance(adata, md.MuData):
+        is_mudata = True
+        dex = adata.mod[dex_key]
+        dex = pd.DataFrame(dex.X.toarray(), index=dex.obs_names, columns=dex.var_names)
+    elif isinstance(adata, ad.AnnData):
+        is_mudata = False
+        dex = adata.obsm[dex_key]
 
     if pmhc_keys is None:
-        pmhc_keys = gex.var_names[gex.var_names != neg_ctrl_key]
+        X = dex.loc[:,dex.columns != neg_ctrl_key].values
 
+    # get background noise
     if bg_noise is None:
-        bg_noise = gex[:, neg_ctrl_key].X.max() if neg_ctrl_key is not None else 10
-
-    X = gex[:, pmhc_keys].X.toarray()
-    c = air.obs[ir_clone_key].to_numpy().astype("int32")
+        bg_noise = np.quantile(dex.loc[:, neg_ctrl_key], q=bg_noise_quantile) if neg_ctrl_key is not None else 10
 
     # substract background
     E = np.maximum(0, X - bg_noise)
 
     # calc pMHC ratio per cell
-    cellnorm = E.sum(axis=1, keepdims=True)
-    cellnorm[cellnorm == 0] = 1
-    C = E / cellnorm
+    if faithful:
+        # +1 in the denominator can have large effects
+        C = E / (E.sum(axis=1, keepdims=True) + 1)
+    else:
+        cellnorm = E.sum(axis=1, keepdims=True)
+        cellnorm[cellnorm == 0] = 1 # 0/1 instead of 0/0 for cells with no dextramer signal
+        C = E / cellnorm
 
     # clone purity
-    R = pd.DataFrame(E > 0).groupby(c).sum()
-    R = R.div(R.sum(axis=1), axis=0).fillna(0).loc[c].values
+    clonal_counts = pd.DataFrame(E > 0).groupby(c).sum()
+    total = clonal_counts.sum(axis=1)
+    R = clonal_counts.div(total, axis=0).fillna(0)
+
+    if faithful:
+        non_zero = (clonal_counts != 0).astype(int)
+        pure = non_zero.sum(axis=1) == 1
+        R[pure] = non_zero[pure].div(total[pure], axis=0).fillna(0)
+    
+    R = R.loc[c].values
     
     # Dextramer signal correction (rows that summed 0 remain as 0)
     S = np.log(E+0.01) * R * C**2
     S[S<1] = 0
-    S_raw = S.copy()
 
     # Per cell normalization: pMHC-wise log-ratio normalization
     cellnorm = S.sum(axis=1, keepdims=True)
@@ -74,6 +97,9 @@ def icon_assign_pmhc(mdata: md.MuData,
 
     assignment = (S > threshold).astype("uint8")
     if inplace:
-        mdata.mod[gex_key].obsm["icon_pMHC_assignment"] = assignment
+        if is_mudata:
+            adata.mod[dex_key].obsm["icon_pMHC_assignment"] = assignment
+        else:
+            adata.obsm["icon_pMHC_assignment"] = assignment
     else:
         return assignment
