@@ -94,11 +94,13 @@ class ITRAP(ApMHCDeconvolution):
         data['delta_umi_mhc'] = data[self.umi_cols_mhc].apply(calc_delta, axis=1)
         data['umi_count_mhc_rel'] = data['umi_count_mhc'] / data['umi_count_mhc'].quantile(0.9, interpolation='lower')
         if self.umi_cols_TRA is not None:
-            data['umi_count_TRA'] = data[self.umi_cols_TRA].max(1)
-            data['delta_umi_TRA'] = data[self.umi_cols_TRA].apply(calc_delta)
+            if data[[self.umi_cols_TRA]].shape[1] > 1:
+                data['umi_count_TRA'] = data[self.umi_cols_TRA].max(1)
+                data['delta_umi_TRA'] = data[self.umi_cols_TRA].apply(calc_delta)
         if self.umi_cols_TRB is not None:
-            data['umi_count_TRB'] = data[self.umi_cols_TRA].max(1)
-            data['delta_umi_TRB'] = data[self.umi_cols_TRB].apply(calc_delta)
+                if data[[self.umi_cols_TRB]].shape[1] > 1:
+                    data['umi_count_TRB'] = data[self.umi_cols_TRB].max(1)
+                    data['delta_umi_TRB'] = data[self.umi_cols_TRB].apply(calc_delta)
 
         self.data = data
 
