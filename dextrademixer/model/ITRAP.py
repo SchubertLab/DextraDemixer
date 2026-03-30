@@ -1,23 +1,22 @@
 from __future__ import annotations
 
-import os.path
-from typing import TYPE_CHECKING, Tuple
+from typing import List, Union
 
-import mudata as md
+from scipy import stats
+import numpy as np
 import pandas as pd
 
-import numpy as np
-import jax.lax
-import jax
-from scipy import stats
+import anndata as ad
+import mudata as md
 
-from dextrademixer.model import ApMHCDeconvolution
+# Ignore small sample warning from scipy when calculating expected target for clonotypes with few cells
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*sample arguments is too small.*"
+)
 
-if TYPE_CHECKING:
-    from jax._src.typing import Array
-
-
-class ITRAP(ApMHCDeconvolution):
+class ITRAP:
     """
     This class implements the ITRAP algorithm introduced by Povlsen et al. (2023).
     First each clonotype with more than 10 cells is assigned an expected target if the highest UMI count is
@@ -32,52 +31,44 @@ class ITRAP(ApMHCDeconvolution):
     __name = "ITRAP"
     __version = "0.0.1"
 
-    def __init__(self, umi_cols=None, umi_count_TRA=None, umi_count_TRB=None, filters=None):
+    def __init__(self, filters=None):
         """
         Args:
-            umi_cols: List of columns containing UMI counts for pMHCs (default set to ['neg_control', 'pmhc1'])
-            umi_count_TRA: List of columns containing UMI counts for TRA (default: None)
-            umi_count_TRB: List of columns containing UMI counts for TRB (default: None)
             filters: List of filters to apply, options=['opt_thr', 'hashing_singlets', 'matching_HLA', 'complete_TCRs',
             'specificity_multiplets', 'is_cell', 'viable_cells'] (default: ['opt_thr'])
         """
         super().__init__()
         self.opt_thr = None
-        self.umi_cols_mhc = umi_cols
-        self.umi_cols_TRA = umi_count_TRA
-        self.umi_cols_TRB = umi_count_TRB
         self.filters = filters if filters is not None else ['opt_thr']
         self.data = None
         self.ir_clone_key = None
         self.specificity_to_idx = None
         self.idx_to_specificity = None
 
-    def preprocess_model_data(self, mdata: md.MuData, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
-                              ir_key: str = "airr", ir_clone_key: str = None, ir_cov_key: str = None, **kwargs):
-        if ir_clone_key is None:
-            raise ValueError(f"{self.__name} requires a clonotype definition. Please specify a `ir_clone_key`.")
-
-        gex = mdata.mod[gex_key]
-        N = gex.shape[0]
-
-        x = gex[:, pmhc_key].X.toarray().reshape((N,))
-        x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((N,))
-
-        self._check_parameters(x, x_neg, None, None)
-        self.ir_clone_key = ir_clone_key
-
-        if self.umi_cols_mhc is None:
-            if neg_ctrl_key is None:
-                raise ValueError("No negative control specified and no umi_cols_mhc. Please provide a `neg_ctrl_key` "
-                                 "or set umi_cols_mhc during initialization.")
-            self.umi_cols_mhc = [neg_ctrl_key, pmhc_key]
-        self.specificity_to_idx = {s: i for i, s in enumerate(self.umi_cols_mhc)}
-        self.idx_to_specificity = {i: s for i, s in enumerate(self.umi_cols_mhc)}
-
-        data = mdata[ir_key].obs.copy()
-        for col in self.umi_cols_mhc:
-            data[col] = mdata[gex_key][:, col].X.toarray().reshape(-1)
-
+    def preprocess_model_data(
+            self, 
+            adata: Union[md.MuData, ad.AnnData], 
+            pmhc_keys: Union[str, List[str]] = None, 
+            neg_ctrl_key: str = None,
+            ir_clone_key: str = 'clone_id',
+            dex_key: str = "dex", 
+            ir_key: str = "airr",
+            umi_cols_TRA: list=None, umi_cols_TRB: list=None,
+            **kwargs
+        ):
+        """
+        Args:
+            adata: A MuData object containing only dextramer counts and clonotype information,
+                or an AnnData object containing the dextramer counts and clonotype information in the specified obsm and obs keys.
+            pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `dex_key` modality which should be deconvolved.
+                If None is given, the full dextramer matrix is used, excluding the negative control.
+            neg_ctrl_key: A string specifying the negative control column in the `dex_key` matrix.
+            ir_clone_key: A string specifying the field in `obs` that holds clonotype ids. If adata is a MuData object, this will be prefixed with `{ir_key}:`
+            dex_key: the dextramer signal MuData module key, or the obsm key if adata is an AnnData object
+            ir_key: the MuData module key where the immune receptor data is stored, only relevant if adata is a MuData object.
+            umi_cols_TRA: list of strings specifying the columns in `obs` that hold the UMI counts for TRA, if available. If adata is a MuData object, these will be prefixed with `{ir_key}:`
+            umi_cols_TRB: list of strings specifying the columns in `obs` that hold the UMI counts for TRB, if available. If adata is a MuData object, these will be prefixed with `{ir_key}:`
+        """
         def calc_delta(x):
             """ Calculate UMI ratio of two most abundant pMHCs, 0.25 is a small constant to avoid division by zero"""
             if len(x) == 1:
@@ -86,6 +77,39 @@ class ITRAP(ApMHCDeconvolution):
                 return 0
             else:
                 return (x.nlargest(2).iloc()[0]) / (x.nlargest(2).iloc()[1] + 0.25)
+        
+        # Check inputs
+        if ir_clone_key is None:
+            raise ValueError(f"{self.__name} requires a clonotype definition. Please specify a `ir_clone_key`.")
+        if neg_ctrl_key is None:
+            raise ValueError("No negative control specified. Please provide a `neg_ctrl_key` ")
+
+        # Adjust data access for mudata and anndata
+        if isinstance(adata, md.MuData):
+            dex = adata.mod[dex_key]
+            dex = pd.DataFrame(dex.X.toarray(), index=dex.obs_names, columns=dex.var_names)
+            ir_clone_key = f'{ir_key}:{ir_clone_key}'
+            umi_cols_TRA = [f'{ir_key}:{col}' for col in umi_cols_TRA] if umi_cols_TRA is not None else None
+            umi_cols_TRB = [f'{ir_key}:{col}' for col in umi_cols_TRB] if umi_cols_TRB is not None else None
+            adata.pull_obs() # make sure adata.obs is updated with prefixed columns from ir module
+        elif isinstance(adata, ad.AnnData):
+            dex = adata.obsm[dex_key]
+        
+        if pmhc_keys is None:
+            pmhc_keys = dex.columns[dex.columns != neg_ctrl_key].tolist()
+
+        self.umi_cols_TRA = umi_cols_TRA
+        self.umi_cols_TRB = umi_cols_TRB
+        self.umi_cols_mhc =  [neg_ctrl_key] + pmhc_keys if type(pmhc_keys) == list else [neg_ctrl_key, pmhc_keys]
+
+        # get dextramer counts
+        data = dex.loc[:, self.umi_cols_mhc]
+        self.specificity_to_idx = {s: i for i, s in enumerate(self.umi_cols_mhc)}
+        self.idx_to_specificity = {i: s for i, s in enumerate(self.umi_cols_mhc)}
+
+        # Get clonotype information
+        self.ir_clone_key = ir_clone_key
+        data[self.ir_clone_key] = adata.obs[self.ir_clone_key].values
 
         # Calculate UMI count and delta for pMHCs, TRA and TRB. Nomenclature follows original implementation
         # umi_count_X = max(UMI count of X)
@@ -93,15 +117,12 @@ class ITRAP(ApMHCDeconvolution):
         data['umi_count_mhc'] = data[self.umi_cols_mhc].max(1)
         data['delta_umi_mhc'] = data[self.umi_cols_mhc].apply(calc_delta, axis=1)
         data['umi_count_mhc_rel'] = data['umi_count_mhc'] / data['umi_count_mhc'].quantile(0.9, interpolation='lower')
-        if self.umi_cols_TRA is not None:
-            if data[[self.umi_cols_TRA]].shape[1] > 1:
-                data['umi_count_TRA'] = data[self.umi_cols_TRA].max(1)
-                data['delta_umi_TRA'] = data[self.umi_cols_TRA].apply(calc_delta)
-        if self.umi_cols_TRB is not None:
-                if data[[self.umi_cols_TRB]].shape[1] > 1:
-                    data['umi_count_TRB'] = data[self.umi_cols_TRB].max(1)
-                    data['delta_umi_TRB'] = data[self.umi_cols_TRB].apply(calc_delta)
-
+        if umi_cols_TRA is not None:
+            data['umi_count_TRA'] = adata.obs[umi_cols_TRA].max(1) if len(umi_cols_TRA) > 1 else adata.obs[umi_cols_TRA].values
+            data['delta_umi_TRA'] = adata.obs[umi_cols_TRA].apply(calc_delta, axis=1)
+        if umi_cols_TRB is not None:
+            data['umi_count_TRB'] = adata.obs[umi_cols_TRB].max(1) if len(umi_cols_TRB) > 1 else adata.obs[umi_cols_TRB].values
+            data['delta_umi_TRB'] = adata.obs[umi_cols_TRB].apply(calc_delta, axis=1)
         self.data = data
 
     def fit(self):
@@ -114,22 +135,17 @@ class ITRAP(ApMHCDeconvolution):
         # Calculate ideal thresholds
         self.opt_thr = self._calculate_ideal_umi_thresholds(self.data)
 
-    def predict_posterior_class(self, threshold: float = None, target_fdr: float = None) -> Tuple[Array, Array]:
+    def assign_pmhc(self, adata=None) -> np.array:
         """
         Returns the binder assignments based on the most abundant UMI count for each cell.
         To filter out noise, different filters are applied to the data.
-        ITRAP does not return a posterior probability, so the assignment is returned as pseudo value.
-        Threshold and target_fdr are ignored in this implementation.
-
-        Args:
-             threshold: (Optional) ignored
-             target_fdr: (Optional) ignored
         Returns:
-            A tuple (p, assignment) of arrays with p being the pseudo value for compatibility of binding and assignment
-            the class assignment decision
+            An assignment array with the class assignment decision.
+            If adata is not none, the assignment will be added to adata.obsm['itrap_pMHC_assignment'].
         """
         if self.opt_thr is None:
-            raise RuntimeError("Model has not been fit yet. Please call first `fit`.")
+            print("Model has not been fit yet. Finding optimal thresholds...")
+            self.fit()
 
         # Assign cells to most abundant pMHC based on UMI count, then set assignment to 0 if it fails filters
         filters = self._generate_filters(self.data)
@@ -137,8 +153,12 @@ class ITRAP(ApMHCDeconvolution):
         self.data['assignment'] = self.data['assignment'].map(self.specificity_to_idx)
         self.data['assignment_before_filtering'] = self.data['assignment'].copy()
         self.data.loc[~filters, 'assignment'] = 0
+        assignments = pd.Series(self.data['assignment'].values.astype(int)).map(self.idx_to_specificity).values
 
-        return self.data['assignment'].values.astype(int), self.data['assignment'].values.astype(float)
+        if adata is not None:
+            adata.obs['itrap_pMHC_assignment'] = assignments
+            adata.obsm['itrap_pMHC_assignment'] = pd.get_dummies(assignments).astype(int).set_index(adata.obs_names)
+        return assignments
 
     def _generate_filters(self, data):
         filters = pd.Series([True] * len(data), index=data.index)
@@ -193,8 +213,8 @@ class ITRAP(ApMHCDeconvolution):
         data['cell_specificity'] = data[self.umi_cols_mhc].idxmax(1).values
 
         # Calculate expected target for each clonotype
-        ct_pep = data.groupby(self.ir_clone_key).filter(lambda x: len(x) >= 10)
-        ct_pep = ct_pep.groupby(self.ir_clone_key).apply(self._calculate_expected_target).to_frame()
+        ct_pep = data.groupby(self.ir_clone_key, observed=True).filter(lambda x: len(x) >= 10)
+        ct_pep = ct_pep.groupby(self.ir_clone_key, observed=True).apply(self._calculate_expected_target).to_frame()
         ct_pep[['significant', 'expected_target']] = ct_pep[0].apply(pd.Series)
         ct_pep = ct_pep[ct_pep['significant']].drop(columns=0)
 
