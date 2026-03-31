@@ -16,7 +16,6 @@ from scipy.stats import ortho_group, random_correlation
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
                              accuracy_score, matthews_corrcoef)
 
-
 def gower_centering(distance_matrix):
     """
     Applies Gower's 1966 centering method to the distance matrix to obtain a covariance matrix.
