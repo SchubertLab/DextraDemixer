@@ -22,7 +22,7 @@ class MyTestCase(unittest.TestCase):
         itrap = ITRAP()
         itrap.preprocess_model_data(self.mdata, "pmhc1", neg_ctrl_key="neg_control", ir_clone_key="clone_id")
         itrap.fit()
-        p, assignment = itrap.predict_posterior_class(target_fdr=0.05)
+        assignment = itrap.assign_pmhc()
         print(assignment)
         print(self.binder)
         N = len(self.binder)
