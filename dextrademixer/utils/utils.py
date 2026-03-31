@@ -13,7 +13,6 @@ from scipy.stats import ortho_group, random_correlation
 
 import scirpy as ir
 
-
 def gower_centering(distance_matrix):
     """
     Applies Gower's 1966 centering method to the distance matrix to obtain a covariance matrix.
