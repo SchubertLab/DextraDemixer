@@ -35,7 +35,7 @@ class ITRAP:
         """
         Args:
             filters: List of filters to apply, options=['opt_thr', 'hashing_singlets', 'matching_HLA', 'complete_TCRs',
-            'specificity_multiplets', 'is_cell', 'viable_cells'] (default: ['opt_thr'])
+            'specificity_multiplets', 'is_cell'] (default: ['opt_thr'])
         """
         super().__init__()
         self.opt_thr = None
@@ -54,6 +54,9 @@ class ITRAP:
             dex_key: str = "dex", 
             ir_key: str = "airr",
             umi_cols_TRA: list=None, umi_cols_TRB: list=None,
+            is_cell_key: str = 'is_cell',
+            chain_pairing_key: str = 'chain_pairing',
+            hashing_classification_key: str = 'HTO_classification',
             **kwargs
         ):
         """
@@ -68,6 +71,9 @@ class ITRAP:
             ir_key: the MuData module key where the immune receptor data is stored, only relevant if adata is a MuData object.
             umi_cols_TRA: list of strings specifying the columns in `obs` that hold the UMI counts for TRA, if available. If adata is a MuData object, these will be prefixed with `{ir_key}:`
             umi_cols_TRB: list of strings specifying the columns in `obs` that hold the UMI counts for TRB, if available. If adata is a MuData object, these will be prefixed with `{ir_key}:`
+            is_cell_key: string specifying the column in `obs` that indicates whether a barcode is classified as a cell, only relevant if 'is_cell' filter is applied.
+            chain_pairing_key: string specifying the column in `obs` that indicates whether a cell has complete TCR chain pairing, only relevant if 'complete_TCRs' filter is applied.
+            hashing_classification_key: string specifying the column in `obs` that indicates the hashing classification of a cell, only relevant if 'hashing_singlets' filter is applied.
         """
         def calc_delta(x):
             """ Calculate UMI ratio of two most abundant pMHCs, 0.25 is a small constant to avoid division by zero"""
@@ -88,10 +94,12 @@ class ITRAP:
         if isinstance(adata, md.MuData):
             dex = adata.mod[dex_key]
             dex = pd.DataFrame(dex.X.toarray(), index=dex.obs_names, columns=dex.var_names)
-            ir_clone_key = f'{ir_key}:{ir_clone_key}'
-            umi_cols_TRA = [f'{ir_key}:{col}' for col in umi_cols_TRA] if umi_cols_TRA is not None else None
-            umi_cols_TRB = [f'{ir_key}:{col}' for col in umi_cols_TRB] if umi_cols_TRB is not None else None
+            ir_clone_key = f'{ir_key}:{ir_clone_key}' if not ir_clone_key in adata.obs.columns else ir_clone_key
+            chain_pairing_key = f'{ir_key}:{chain_pairing_key}' if not chain_pairing_key in adata.obs.columns else chain_pairing_key
+            umi_cols_TRA = [f'{ir_key}:{col}' if not col in adata.obs.columns else col for col in umi_cols_TRA] if umi_cols_TRA is not None else None
+            umi_cols_TRB = [f'{ir_key}:{col}' if not col in adata.obs.columns else col for col in umi_cols_TRB] if umi_cols_TRB is not None else None
             adata.pull_obs() # make sure adata.obs is updated with prefixed columns from ir module
+            
         elif isinstance(adata, ad.AnnData):
             dex = adata.obsm[dex_key]
         
@@ -107,9 +115,16 @@ class ITRAP:
         self.specificity_to_idx = {s: i for i, s in enumerate(self.umi_cols_mhc)}
         self.idx_to_specificity = {i: s for i, s in enumerate(self.umi_cols_mhc)}
 
-        # Get clonotype information
+        # Get clonotype information and filters
         self.ir_clone_key = ir_clone_key
-        data[self.ir_clone_key] = adata.obs[self.ir_clone_key].values
+        self.is_cell_key = is_cell_key if 'is_cell' in self.filters else None
+        self.chain_pairing_key = chain_pairing_key if 'complete_TCRs' in self.filters else None
+        self.hashing_classification_key = hashing_classification_key if 'hashing_singlets' in self.filters else None
+        for col in [self.ir_clone_key, self.is_cell_key, self.chain_pairing_key, self.hashing_classification_key]:
+            if col is not None:
+                if not col in adata.obs.columns:
+                    raise ValueError(f"Filter {col} specified but column not found in adata.obs.")
+                data[col] = adata.obs[col].values
 
         # Calculate UMI count and delta for pMHCs, TRA and TRB. Nomenclature follows original implementation
         # umi_count_X = max(UMI count of X)
@@ -135,10 +150,20 @@ class ITRAP:
         # Calculate ideal thresholds
         self.opt_thr = self._calculate_ideal_umi_thresholds(self.data)
 
-    def assign_pmhc(self, adata=None) -> np.array:
+    def assign_pmhc(
+            self, adata=None,
+            is_cell_keep_values: List=[True],
+            chain_pairing_keep_values: List=['single pair', 'extra VDJ', 'extra VJ'],
+            hashing_classification_keep_values: List=['singlet', 'Singlet'],
+        ) -> np.array:
         """
         Returns the binder assignments based on the most abundant UMI count for each cell.
         To filter out noise, different filters are applied to the data.
+        Args:
+            adata: If provided, the pMHC assignment will be added to adata.obs['itrap_pMHC_assignment'] and adata.obsm['itrap_pMHC_assignment'].
+            is_cell_keep_values: List of values in `is_cell_key` column that indicate a barcode is classified as a cell, only relevant if 'is_cell' filter is applied.
+            chain_pairing_keep_values: List of values in `chain_pairing_key` column that indicate a cell has complete TCR, only relevant if 'complete_TCRs' filter is applied.
+            hashing_classification_keep_values: List of values in `hashing_classification_key` column that indicate a cell is a singlet, only relevant if 'hashing_singlets' filter is applied.
         Returns:
             An assignment array with the class assignment decision.
             If adata is not none, the assignment will be added to adata.obsm['itrap_pMHC_assignment'].
@@ -148,10 +173,10 @@ class ITRAP:
             self.fit()
 
         # Assign cells to most abundant pMHC based on UMI count, then set assignment to 0 if it fails filters
-        filters = self._generate_filters(self.data)
         self.data['assignment'] = self.data[self.umi_cols_mhc].idxmax(1).values
         self.data['assignment'] = self.data['assignment'].map(self.specificity_to_idx)
         self.data['assignment_before_filtering'] = self.data['assignment'].copy()
+        filters = self._generate_filters(self.data, is_cell_keep_values, chain_pairing_keep_values, hashing_classification_keep_values)
         self.data.loc[~filters, 'assignment'] = 0
         assignments = pd.Series(self.data['assignment'].values.astype(int)).map(self.idx_to_specificity).values
 
@@ -160,7 +185,9 @@ class ITRAP:
             adata.obsm['itrap_pMHC_assignment'] = pd.get_dummies(assignments).astype(int).set_index(adata.obs_names)
         return assignments
 
-    def _generate_filters(self, data):
+    def _generate_filters(
+            self, data, is_cell_keep_values, chain_pairing_keep_values, hashing_classification_keep_values,
+        ):
         filters = pd.Series([True] * len(data), index=data.index)
 
         # Filter 1: UMI thresholds
@@ -172,7 +199,7 @@ class ITRAP:
         # TODO Other filters are not implemented yet, only makes sense once we have the respective data
         # Filter 2: Hashing singlets
         if 'hashing_singlets' in self.filters:
-            raise NotImplementedError("Hashing singlets filter is not implemented yet.")
+            filters &= data[self.hashing_classification_key].isin(hashing_classification_keep_values).values
 
         # Filter 3: Matching HLA
         if 'matching_HLA' in self.filters:
@@ -180,19 +207,16 @@ class ITRAP:
 
         # Filter 4: Complete TCRs
         if 'complete_TCRs' in self.filters:
-            raise NotImplementedError("Complete TCRs filter is not implemented yet.")
+            filters &= data[self.chain_pairing_key].isin(chain_pairing_keep_values).values
 
         # Filter 5: Specificity multiplets
         if 'specificity_multiplets' in self.filters:
-            raise NotImplementedError("Specificity multiplets filter is not implemented yet.")
+            multiplets = data.groupby([self.ir_clone_key, 'assignment_before_filtering'], observed=True).size() > 1
+            filters &= data.set_index([self.ir_clone_key, 'assignment_before_filtering']).index.map(multiplets).values
 
-        # Filter 6: Is cell (Cellranger)
+        # Filter 6: Is cell (GEX/cellranger/TCR) - user defined
         if 'is_cell' in self.filters:
-            raise NotImplementedError("Is cell filter is not implemented yet.")
-
-        # Filter 7: Viable cells (GEX)
-        if 'viable_cells' in self.filters:
-            raise NotImplementedError("Viable cells filter is not implemented yet.")
+            filters &= data[self.is_cell_key].isin(is_cell_keep_values).values
 
         return filters
 
