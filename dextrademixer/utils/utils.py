@@ -13,40 +13,6 @@ from scipy.stats import ortho_group, random_correlation
 
 import scirpy as ir
 
-
-def calculate_pmhc_clonal_purity(assignment,
-                                 clonotypes):
-    """
-    Calculates the pMHC purity of each clonotype, i.e., the fraction of cells of a clonotype being assigned to
-    a specific pMHC (accounting for multiple assignments).
-
-    Args:
-        assignment: pMHC assignments of each cell
-        clonotypes: clonotype assignment of each cell
-
-    Returns matrix cell x pMHC with clonotype purity for each pMHC
-    """
-    unique_clonotypes = jnp.unique(clonotypes)
-
-    def compute_clonotype_purity(c):
-        # Create a mask for the cells belonging to the current clonotype
-        mask = clonotypes == c
-        mask = mask.astype(jnp.float32)
-
-        # Sum assignments for the current clonotype avoiding a where statement
-        Tki = (assignment * mask[:, None]).sum(axis=0, keepdims=True)
-
-        # Normalize the assignment for the clonotype
-        purity = jnp.nan_to_num(Tki / Tki.sum())
-
-        # Reapply the mask to distribute purity values back to the original matrix
-        return purity * mask[:, None]
-
-    # Compute purity for each clonotype and sum the results
-    purity_matrix = jax.vmap(compute_clonotype_purity)(unique_clonotypes)
-    return purity_matrix.sum(axis=0)
-
-
 def gower_centering(distance_matrix):
     """
     Applies Gower's 1966 centering method to the distance matrix to obtain a covariance matrix.

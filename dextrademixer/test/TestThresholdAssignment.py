@@ -3,21 +3,10 @@ import numpy as np
 import jax.numpy as jnp
 
 from dextrademixer.model import threshold_assign_pmhc
-from dextrademixer.utils import calculate_pmhc_clonal_purity, DextramerSimulator
+from dextrademixer.utils import DextramerSimulator
 
 
 class TestThresholdAssignment(unittest.TestCase):
-    def test_clonal_purity(self):
-        assignment = np.array([[1,0,0],
-                               [1,0,0],
-                               [1,1,0]])
-        clonotypes = np.array([0,0,1])
-
-        purity = calculate_pmhc_clonal_purity(assignment, clonotypes)
-        self.assertTrue(np.allclose(purity, np.array([[1,0,0],
-                                                      [1,0,0],
-                                                      [0.5,0.5,0]])))
-
     def test_threshold_based_assignment(self):
         sim = DextramerSimulator()
         mdat = sim.simulate_pmhc_data_from_distribution(total_cells=10,
