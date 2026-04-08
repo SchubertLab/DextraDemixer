@@ -376,4 +376,20 @@ def calculate_metrics(y_true: np.ndarray, p_pred: np.ndarray, assignment: np.nda
                     'recall': recall_score(y_true, assignment), 'accuracy': accuracy_score(y_true, assignment),
                     'mcc': matthews_corrcoef(y_true, assignment)}
 
+    tp = np.sum(assignment.astype(bool) & y_true.astype(bool))
+    fp = np.sum(assignment.astype(bool) & ~y_true.astype(bool))
+    tn = np.sum(~assignment.astype(bool) & ~y_true.astype(bool))
+    fn = np.sum(~assignment.astype(bool) & y_true.astype(bool))
+
+    if (tp + fp) == 0:
+        fdr = 0.0
+    else:
+        fdr = fp / (tp + fp)
+    
+    results_dict['fdr'] = fdr
+    results_dict['tp'] = tp
+    results_dict['fp'] = fp
+    results_dict['tn'] = tn
+    results_dict['fn'] = fn
+    
     return results_dict
