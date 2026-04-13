@@ -354,7 +354,11 @@ class DextraDemixer(ApMHCDeconvolution):
                                 clonotype_adherence: bool = False,
                                 clonotype_majority_voting: bool = False,
                                 clonotype_mean_p: bool = False,
+                                clonotype_max_p: bool = False,
+                                clonotype_median_p: bool = False,
+                                clonotype_quantile_p: float = False,
                                 clone_id: Array = None,
+                                predict_at_least_one_binder: bool = False
                                 ) -> Tuple[Array, Array]:
         """
         Returns the binder assignments based on the inferred posterior class probabilities.
@@ -387,25 +391,39 @@ class DextraDemixer(ApMHCDeconvolution):
             else:
                 p = jnp.nanmean(p_sample, axis=0)[:, 1]
 
-            if clonotype_mean_p:
+            if clonotype_mean_p or clonotype_max_p or clonotype_quantile_p:
+                assert not (clonotype_mean_p and clonotype_max_p), "Cannot use both `clonotype_mean_p` and `clonotype_max_p` at the same time."
                 if clone_id is None:
                     raise ValueError("If `clonotype_mean_p`= True a clonotype vector `clone_id` must be specified.")
                 unique_ids = np.unique(clone_id)
 
                 if cred_intvl:
                     # mean for each clone while keeping posterior samples, shape (num_clones, num_samples, 2)
-                    mean_p = np.stack([p[:, clone_id == cid].mean(axis=[1]) for cid in unique_ids])
+                    if clonotype_mean_p:
+                        mean_p = np.stack([p[:, clone_id == cid].mean(axis=[1]) for cid in unique_ids])
+                    elif clonotype_max_p:
+                        mean_p = np.stack([p[:, clone_id == cid].max(axis=[1]) for cid in unique_ids])
+                    elif clonotype_quantile_p:
+                        mean_p = np.stack([jnp.quantile(p[:, clone_id == cid], q=clonotype_quantile_p, axis=1, method='higher') for cid in unique_ids])
                     p = mean_p[clone_id].transpose(1, 0, 2)  # shape (num_posterior_samples, num_cells, 2)
 
                 else:
                     df = pd.DataFrame({"p": p, "clone_id": clone_id})
-                    mean_p = df.groupby("clone_id")["p"].mean()
-                    p = mean_p.values[clone_id]
+                    if clonotype_mean_p:
+                        mean_p = df.groupby("clone_id")["p"].mean()
+                    elif clonotype_max_p:
+                        mean_p = df.groupby("clone_id")["p"].max()
+                    elif clonotype_quantile_p:
+                        mean_p = df.groupby("clone_id")["p"].quantile(clonotype_quantile_p, interpolation='higher')
+                    p = jnp.array(mean_p.values)[clone_id]
             return p
 
         data = data if data is not None else self.model.data_full
         clone_id = clone_id if clone_id is not None else data.get("clone_continuous", None)
         clone_id = pd.factorize(clone_id)[0] if clone_id is not None else None
+        
+        if clonotype_median_p and ~clonotype_quantile_p:
+            clonotype_quantile_p = 0.5
 
         if self.sampler is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
@@ -446,6 +464,17 @@ class DextraDemixer(ApMHCDeconvolution):
         if clonotype_adherence and clone_id is not None:
             assignment = assignment[clone_id]
             p = p[clone_id]
+        
+        if predict_at_least_one_binder and assignment.sum() == 0:
+            # if no binder is assigned, assign the cell with highest p as binder
+            if clonotype_mean_p:
+                # assign the clone with highest mean p as binder
+                clone_p = p.mean(axis=0) if p.ndim == 3 else p
+                clone_p_mean = pd.DataFrame({"p": clone_p, "clone_id": clone_id}).groupby("clone_id")["p"].mean()
+                best_clone = clone_p_mean.idxmax()
+                assignment = assignment.at[clone_id == best_clone].set(1)
+            else:
+                assignment = assignment.at[jnp.argmax(p)].set(1)
 
         return p, assignment
 
