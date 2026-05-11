@@ -53,6 +53,8 @@ def icon_assign_pmhc(adata: Union[md.MuData, ad.AnnData],
 
     if pmhc_keys is None:
         X = dex.loc[:,dex.columns != neg_ctrl_key].values
+    else:
+        X = dex.loc[:, np.atleast_1d(pmhc_keys)].values
 
     # get background noise
     if bg_noise is None:
