@@ -63,7 +63,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
     """
 
-    def __init__(self, model_type: str = "mixturemodel", mode: str = "H", alpha_model="overdispersion", 
+    def __init__(self, model_type: str = "mixturemodelkmeans", mode: str = "I", alpha_model="overdispersion", 
                  model_config: Dict = None):
         super().__init__()
 
@@ -233,7 +233,7 @@ class DextraDemixer(ApMHCDeconvolution):
     def fit_svi(self, guide='normal', svi_config: Dict[str, Union[int, float]] = None,
                 nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
                 y_true: Array = None) \
-            -> az.InferenceData:
+                -> az.InferenceData:
         """
         Implements stochastic variational inference
 
@@ -354,11 +354,8 @@ class DextraDemixer(ApMHCDeconvolution):
                                 clonotype_adherence: bool = False,
                                 clonotype_majority_voting: bool = False,
                                 clonotype_mean_p: bool = False,
-                                clonotype_max_p: bool = False,
                                 clonotype_median_p: bool = False,
-                                clonotype_quantile_p: float = False,
                                 clone_id: Array = None,
-                                predict_at_least_one_binder: bool = False
                                 ) -> Tuple[Array, Array]:
         """
         Returns the binder assignments based on the inferred posterior class probabilities.
@@ -391,8 +388,8 @@ class DextraDemixer(ApMHCDeconvolution):
             else:
                 p = jnp.nanmean(p_sample, axis=0)[:, 1]
 
-            if clonotype_mean_p or clonotype_max_p or clonotype_quantile_p:
-                assert not (clonotype_mean_p and clonotype_max_p), "Cannot use both `clonotype_mean_p` and `clonotype_max_p` at the same time."
+            if clonotype_mean_p or clonotype_median_p:
+                assert not (clonotype_mean_p and clonotype_median_p), "Cannot use both `clonotype_mean_p` and `clonotype_median_p` at the same time."
                 if clone_id is None:
                     raise ValueError("If `clonotype_mean_p`= True a clonotype vector `clone_id` must be specified.")
                 unique_ids = np.unique(clone_id)
@@ -401,20 +398,16 @@ class DextraDemixer(ApMHCDeconvolution):
                     # mean for each clone while keeping posterior samples, shape (num_clones, num_samples, 2)
                     if clonotype_mean_p:
                         mean_p = np.stack([p[:, clone_id == cid].mean(axis=[1]) for cid in unique_ids])
-                    elif clonotype_max_p:
-                        mean_p = np.stack([p[:, clone_id == cid].max(axis=[1]) for cid in unique_ids])
-                    elif clonotype_quantile_p:
-                        mean_p = np.stack([jnp.quantile(p[:, clone_id == cid], q=clonotype_quantile_p, axis=1, method='higher') for cid in unique_ids])
+                    elif clonotype_median_p:
+                        mean_p = np.stack([jnp.quantile(p[:, clone_id == cid], q=0.5, axis=1, method='higher') for cid in unique_ids])
                     p = mean_p[clone_id].transpose(1, 0, 2)  # shape (num_posterior_samples, num_cells, 2)
 
                 else:
                     df = pd.DataFrame({"p": p, "clone_id": clone_id})
                     if clonotype_mean_p:
                         mean_p = df.groupby("clone_id")["p"].mean()
-                    elif clonotype_max_p:
-                        mean_p = df.groupby("clone_id")["p"].max()
-                    elif clonotype_quantile_p:
-                        mean_p = df.groupby("clone_id")["p"].quantile(clonotype_quantile_p, interpolation='higher')
+                    elif clonotype_median_p:
+                        mean_p = df.groupby("clone_id")["p"].quantile(0.5, interpolation='higher')
                     p = jnp.array(mean_p.values)[clone_id]
             return p
 
@@ -422,9 +415,6 @@ class DextraDemixer(ApMHCDeconvolution):
         clone_id = clone_id if clone_id is not None else data.get("clone_continuous", None)
         clone_id = pd.factorize(clone_id)[0] if clone_id is not None else None
         
-        if clonotype_median_p and ~clonotype_quantile_p:
-            clonotype_quantile_p = 0.5
-
         if self.sampler is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
 
@@ -464,17 +454,6 @@ class DextraDemixer(ApMHCDeconvolution):
         if clonotype_adherence and clone_id is not None:
             assignment = assignment[clone_id]
             p = p[clone_id]
-        
-        if predict_at_least_one_binder and assignment.sum() == 0:
-            # if no binder is assigned, assign the cell with highest p as binder
-            if clonotype_mean_p:
-                # assign the clone with highest mean p as binder
-                clone_p = p.mean(axis=0) if p.ndim == 3 else p
-                clone_p_mean = pd.DataFrame({"p": clone_p, "clone_id": clone_id}).groupby("clone_id")["p"].mean()
-                best_clone = clone_p_mean.idxmax()
-                assignment = assignment.at[clone_id == best_clone].set(1)
-            else:
-                assignment = assignment.at[jnp.argmax(p)].set(1)
 
         return p, assignment
 
@@ -498,7 +477,7 @@ class DextraDemixer(ApMHCDeconvolution):
         return self.trace
 
     @staticmethod
-    def _predict_posterior_class_dist(p_samples,  target_fdr, cred_intvl, nof_thresh=100):
+    def _predict_posterior_class_dist(p_samples, target_fdr, cred_intvl, nof_thresh=100):
         """
         Posterior BFDR thresholding (Newton et al. 2004, extended with posterior uncertainty).
 
@@ -530,42 +509,24 @@ class DextraDemixer(ApMHCDeconvolution):
                 - Hard assignments (0/1), shape (n_samples,)
                 - Selected threshold \(\tau\)
         """
-        p_samples = p_samples[:,:, 1]
-        p_mean = jnp.mean(p_samples, axis=0) # (n, )
+        p_samples = p_samples[:, :, 1]
+        p_mean = jnp.mean(p_samples, axis=0)
+        lfdr = 1.0 - p_samples
+        candidate_thresh = jnp.linspace(0.0, 1.0, nof_thresh + 2)[1:-1]
 
-        # Candidate thresholds = unique posterior means
-        # or even grid in (0, 1)
-        #candidate_thresh = jnp.sort(jnp.unique(p_mean))  # (T,)
-        candidate_thresh = jnp.linspace(0.0, 1.0, nof_thresh+2)[1:-1]
+        def eval_threshold(_, tau):
+            disc = p_samples >= tau
+            n_disc = disc.sum(axis=1)
+            sum_lfdr = jnp.sum(jnp.where(disc, lfdr, 0.0), axis=1)
+            gfdr = jnp.where(n_disc > 0, sum_lfdr / n_disc, 0.0)
+            valid = jnp.mean(gfdr <= target_fdr) >= cred_intvl
+            mean_n_disc = jnp.mean(n_disc)
+            return None, (valid, mean_n_disc)
 
-        # Expand shapes: (n_draws, n) vs (T,)
-        # -> disc_per_thr_draw: shape (T, n_draws, n)
-        # contains the binder assignment/discoveries for each candidate threshold and draw
-        disc_per_thr_draw = p_samples[None, :, :] >= candidate_thresh[:, None, None]
+        _, (valid_thr, n_discoveries) = jax.lax.scan(eval_threshold, None, candidate_thresh)
 
-        # number of discoveries per draw: (T, n_draws)
-        n_disc = disc_per_thr_draw.sum(axis=2)
-
-        # local fdr = 1 - p
-        lfdr = 1.0 - p_samples  # (n_draws, n)
-
-        # sum of lfdr among discoveries: (T, n_draws), sum of local FDR per threshold and draw
-        sum_lfdr_per_thr_draw = jnp.einsum("tns,ns->tn", disc_per_thr_draw, lfdr)
-
-        # global FDR per threshold and draw, avoid div-by-zero: set gfdr_per_thr_draw=0 where n_disc=0: (T, n_draws)
-        gfdr_per_thr_draw = jnp.where(n_disc > 0, sum_lfdr_per_thr_draw / n_disc, 0.0)
-
-        # posterior probability that FDR ≤ target: (T,)
-        # keep thresholds that pass cred_level
-        valid = (gfdr_per_thr_draw <= target_fdr).mean(axis=1) >= cred_intvl
-
-        if valid.any():
-            n_discoveries = n_disc.mean(axis=1)
-            # select largest threshold that passes credibility interval on FDR
-            threshold_idx = jnp.argmax(jnp.where(valid, n_discoveries, -1))
-            threshold = candidate_thresh[threshold_idx]
-        else:
-            threshold = 1.0
+        threshold_idx = jnp.argmax(jnp.where(valid_thr, n_discoveries, -1.0))
+        threshold = jnp.where(jnp.any(valid_thr), candidate_thresh[threshold_idx], 1.0)
 
         assignment = (p_mean >= threshold).astype(jnp.int32)
         return p_mean, assignment, threshold
@@ -964,7 +925,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         clone = None if c is None else jnp.array(c, dtype=INT_DTYPE)
         zscore = jnp.abs((x - jnp.mean(x)) / jnp.std(x))
         outlier_threshold = 100 # TODO Hardcoded
-
+        # With outliers
         self.data_full = {"x": jnp.array(x, dtype=INT_DTYPE),
                           "s": None if s is None else jnp.array(s, dtype=FLOAT_DTYPE),
                           "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=FLOAT_DTYPE),
@@ -973,7 +934,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                           "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
                           "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE),
                           }
-        
+        # Without outliers
         self.data = {"x": jnp.array(x[jnp.where(zscore < outlier_threshold)], dtype=INT_DTYPE),
                      "s": jnp.array(s[jnp.where(zscore < outlier_threshold)], dtype=FLOAT_DTYPE) if s is not None else None,
                      "x_neg": jnp.array(neg_cont[jnp.where(zscore < outlier_threshold)], dtype=FLOAT_DTYPE) if neg_cont is not None else None,
@@ -995,20 +956,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         returns: Dict with params estimates and  k-mean labels,
         """
         x = self.data["x"].copy()
-        # # remove outliers
-        # if outlier_threshold is not None:
-        #     x_log = np.log(x + 1)  # Transform to log scale, roughly normal distributed
-        #     zscore = (x_log - x_log.mean()) / x_log.std()
-        #     print(zscore.max())
-        #     x_no_outliers = x[zscore < outlier_threshold]
-        #     x_no_outliers = x_no_outliers.sort()
-        #     diffs = np.diff(x_no_outliers, prepend=x_no_outliers[0])
-        #     # TODO What value to define a huge gap?
-        #     huge_gap_indices = np.where(diffs > x.max() / 3)[0]
-        #     if len(huge_gap_indices) > 0:
-        #         first_gap_index = huge_gap_indices[0]
-        #         x_no_outliers = x_no_outliers[:first_gap_index]
-        # else:
         x_no_outliers = x
         clone = self.data.get("clone_continuous", None)
         sigma = self.data.get("sigma", None)
