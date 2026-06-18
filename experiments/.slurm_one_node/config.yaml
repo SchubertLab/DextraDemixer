@@ -1,4 +1,6 @@
 cluster:
+  mkdir -p ./logs/{rule} &&
+  
   NODEFLAG="";
   if [ "{resources.node}" != "" ]; then
       NODEFLAG="--nodelist={resources.node}";
@@ -6,12 +8,11 @@ cluster:
 
   sbatch
     --partition=cpu_p
-    --qos={resources.qos}
+    --qos=cpu_preemptible
     --nice=0
     -t 1-00:00:00
     --mem={resources.mem_mb}
     -c {resources.c}
-    --exclude=cpusrv101
     --job-name={rule}-$(date +%Y%m%d_%H%M%S)-{wildcards} 
     $NODEFLAG
     --output=./benchmarks/{wildcards.scenario}/logs/{rule}/$(date +%Y%m%d_%H%M%S)-{wildcards}.out 
@@ -19,15 +20,15 @@ cluster:
     --parsable
 
 default-resources:
-  - c=1
-  - mem_mb=8000
-  - mem="8G"
-  - disk_mb=8000
+  - c=2
+  - mem_mb=16000
+  - mem="16G"
+  - disk_mb=160000
 
 set-resources:
-  - dummy_rule:c=1
-  - dummy_rule:mem=8000
-  - dummy_rule:mem_mb=8000
+  - dummy_rule:c=2
+  - dummy_rule:mem=16000
+  - dummy_rule:mem_mb=16000
   - run_simulation:c=1
 
 set-threads:
