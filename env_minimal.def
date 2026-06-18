@@ -1,11 +1,11 @@
 Bootstrap: docker
-From: continuumio/miniconda3
+From: condaforge/miniforge3
 
 %files
-    environment.yaml /environment.yaml
+    environment_minimal.yaml /environment_minimal.yaml
 
 %post
-    conda env create -f /environment.yaml
+    conda env create -f /environment_minimal.yaml
     conda clean --all -y
 
 %environment
