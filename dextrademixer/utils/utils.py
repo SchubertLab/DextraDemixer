@@ -1,4 +1,5 @@
 import itertools
+import os
 from collections import defaultdict
 from typing import Any
 
@@ -7,11 +8,15 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pandas as pd
+import scirpy as ir
+
 from jax import pure_callback
 from numpy import ndarray, dtype, bool_
-from scipy.stats import ortho_group, random_correlation
-
-import scirpy as ir
+from scipy.stats import ortho_group, random_correlation, t
+from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, precision_score, recall_score,
+                             accuracy_score, matthews_corrcoef)
+from concurrent.futures import ThreadPoolExecutor
+from tqdm import tqdm
 
 
 def gower_centering(distance_matrix):
@@ -314,3 +319,151 @@ def convert_str_to_bool_and_none(args):
         setattr(args, key, str_to_bool(value))
 
     return args
+
+
+def float_or_none(value):
+    if value is None or value.lower() == 'none':
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"'{value}' is not a valid float or 'None'")
+    
+
+def get_slurm_cpu_count():
+    # Check for SLURM-provided variables
+    for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE", "SLURM_NTASKS", "SLURM_JOB_CPUS_PER_NODE"):
+        if var in os.environ:
+            value = os.environ[var]
+            # SLURM_JOB_CPUS_PER_NODE can be something like "4(x2)" meaning 2 nodes with 4 CPUs each
+            if "(" in value:
+                value = value.split("(")[0]
+            try:
+                return int(value)
+            except ValueError:
+                pass
+    # Fallback
+    try:
+        import multiprocessing
+        return multiprocessing.cpu_count()
+    except NotImplementedError:
+        return 1
+
+
+def guess_worker_mem_limit_mb(nworkers: int):
+    # If SLURM ressources are present
+    if "SLURM_MEM_PER_NODE" in os.environ:
+        return int(int(os.environ["SLURM_MEM_PER_NODE"]) * 0.95 // nworkers)
+    if "SLURM_MEM_PER_CPU" in os.environ:
+        return int(int(os.environ["SLURM_MEM_PER_CPU"]) * 0.95)
+    return None  # no good signal; skip limiting
+
+
+def init_worker(worker_mem_limit_mb=None):
+    if worker_mem_limit_mb is None:
+        return
+    try:
+        import resource
+        limit_bytes = int(worker_mem_limit_mb) * 1024 * 1024
+        # Address space cap → allocations above this raise MemoryError
+        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+    except Exception:
+        # If we can't set it, just proceed; kernel OOM may still occur.
+        pass
+
+
+def calculate_metrics(y_true: np.ndarray, p_pred: np.ndarray, assignment: np.ndarray, full_metrics: bool = True) -> dict:
+    """
+    Calculates performance metrics based on true labels, predicted probabilities, and binary assignments.
+    Args:
+        y_true (np.ndarray): True binary labels (0 or 1).
+        p_pred (np.ndarray): Predicted probabilities for the positive class.
+        assignment (np.ndarray): Binary predictions based on a threshold applied to p_pred.
+        full_metrics (bool): If True, calculates additionally AUROC, accuracy and MCC. Default is True.
+    Returns:
+        dict: A dictionary containing calculated metrics.
+    """
+    results_dict = {'aps': average_precision_score(y_true, p_pred), 'f1': f1_score(y_true, assignment), 
+                    'precision': precision_score(y_true, assignment), 'recall': recall_score(y_true, assignment), }
+    
+    if full_metrics:
+        results_dict.update({'auroc': roc_auc_score(y_true, p_pred), 'accuracy': accuracy_score(y_true, assignment), 'mcc': matthews_corrcoef(y_true, assignment)})
+
+    tp = np.sum(assignment.astype(bool) & y_true.astype(bool))
+    fp = np.sum(assignment.astype(bool) & ~y_true.astype(bool))
+    tn = np.sum(~assignment.astype(bool) & ~y_true.astype(bool))
+    fn = np.sum(~assignment.astype(bool) & y_true.astype(bool))
+
+    if (tp + fp) == 0:
+        fdr = 0.0
+    else:
+        fdr = fp / (tp + fp)
+    
+    results_dict['fdr'] = fdr
+    results_dict['tp'] = tp
+    results_dict['fp'] = fp
+    results_dict['tn'] = tn
+    results_dict['fn'] = fn
+    
+    return results_dict
+
+
+def mean_ci_t_interval(x, confidence=0.95):
+    x = x.dropna()
+    n = len(x)
+    mean = x.mean()
+
+    alpha = 1 - confidence
+    q = 1 - alpha / 2  # for 95% CI: 1 - 0.05/2 = 0.975
+
+    tcrit = t.ppf(q, df=n - 1)
+    se = x.std(ddof=1) / np.sqrt(n)
+    ci = tcrit * se
+
+    ci_low = mean - ci
+    ci_high = mean + ci
+
+    return f"{mean:.3f} [{ci_low:.3f}, {ci_high:.3f}]"
+
+
+def aggregate_csv(experiment_path='.', output_path='agg_results.csv', rerun=False, paths=None, fps=None) -> pd.DataFrame:
+    """
+    Aggregates CSV files from single experiment outputs into a single DataFrame and saves it as a CSV file using multiprocessing.
+    Args:
+        experiment_path (str): The base directory where the CSV files are located.
+        agg_fp (str): The file path for the aggregated CSV file to be saved.
+        rerun (bool): If True, forces re-aggregation even if the aggregated file already exists. Default is False.
+        paths (list of str): A list of subdirectories within experiment_path to search for CSV files. If None, it defaults to ['csv'].
+        fps (list of str): Alternative instead of using directories, use list of file paths to aggregate. If provided, paths will be ignored.
+    Returns:
+        df (pd.DataFrame): The aggregated DataFrame containing data from all CSV files.
+    """
+    def read_csv(fp):
+        return pd.read_csv(fp, index_col=0)
+    
+    if os.path.exists(output_path) and not rerun:
+        df = pd.read_csv(output_path, index_col=0)
+    else:
+        paths = paths if paths is not None else ['csv']
+        dfs = []
+        if fps is None:
+            fps = [os.path.join(experiment_path, path, f) for path in paths for f in os.listdir(os.path.join(experiment_path, path)) if f.endswith('.csv') and 'intermediate.csv' not in f]
+            
+        with ThreadPoolExecutor() as ex:
+            df = list(tqdm(ex.map(read_csv, fps), total=len(fps)))
+        dfs.extend(df)
+    
+        df = pd.concat(dfs, ignore_index=True)
+        df.to_csv(output_path)
+        
+    return df
+
+
+def get_cpu_model():
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if "model name" in line:
+                    return line.split(":", 1)[1].strip()
+    except:
+        return "Unknown"
