@@ -20,6 +20,7 @@ dependencies:
       - muon==0.1.7
       - numpy==2.3.5
       - numpyro==0.19.0
+      - openpyxl>=3.1.5
       - optax==0.2.6
       - pandas==2.3.3
       - psutil==7.1.3
