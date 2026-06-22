@@ -1,0 +1,16 @@
+Bootstrap: docker
+From: condaforge/miniforge3
+
+%files
+    environment_minimal.yaml /environment_minimal.yaml
+
+%post
+    conda env create -f /environment_minimal.yaml
+    conda clean --all -y
+
+%environment
+    source /opt/conda/etc/profile.d/conda.sh
+    conda activate dextrademixer
+
+%runscript
+    python "$@"

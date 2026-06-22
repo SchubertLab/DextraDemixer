@@ -1,0 +1,45 @@
+cluster:
+  mkdir -p ./logs/{rule} &&
+  
+  NODEFLAG="";
+  if [ "{resources.node}" != "" ]; then
+      NODEFLAG="--nodelist={resources.node}";
+  fi;
+
+  sbatch
+    --partition=cpu_p
+    --qos=cpu_preemptible
+    --nice=0
+    -t 1-00:00:00
+    --mem={resources.mem_mb}
+    -c {resources.c}
+    --job-name={rule}-$(date +%Y%m%d_%H%M%S)-{wildcards} 
+    $NODEFLAG
+    --output=./benchmarks/{wildcards.scenario}/logs/{rule}/$(date +%Y%m%d_%H%M%S)-{wildcards}.out 
+    --error=./benchmarks/{wildcards.scenario}/logs/{rule}/$(date +%Y%m%d_%H%M%S)-{wildcards}.err
+    --parsable
+
+default-resources:
+  - c=2
+  - mem_mb=16000
+  - mem="16G"
+  - disk_mb=160000
+
+set-resources:
+  - dummy_rule:c=2
+  - dummy_rule:mem=16000
+  - dummy_rule:mem_mb=16000
+  - run_simulation:c=1
+
+set-threads:
+  - dummy_rule=20
+
+restart-times: 0
+max-jobs-per-second: 500
+max-status-checks-per-second: 1
+latency-wait: 60
+jobs: 1000
+keep-going: True
+printshellcmds: True
+scheduler: greedy
+use-conda: True

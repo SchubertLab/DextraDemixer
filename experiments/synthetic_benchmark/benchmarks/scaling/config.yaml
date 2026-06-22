@@ -1,0 +1,7 @@
+total_cells: [10000, 20000, 40000, 60000, 80000, 100000, ]
+binding_ratio: [0.01, 0.1]
+p_binding_outlier: [0.0]
+mean_inc: [20.0, 50.0]
+i: [0, 1, 2, 3, 4]
+
+model_config: ['DextraDemixer', 'DextraDemixer+neg.']
