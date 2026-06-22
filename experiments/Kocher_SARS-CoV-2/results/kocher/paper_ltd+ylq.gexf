@@ -1,0 +1,707 @@
+<?xml version='1.0' encoding='utf-8'?>
+<gexf xmlns="http://www.gexf.net/1.2draft" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.gexf.net/1.2draft http://www.gexf.net/1.2draft/gexf.xsd" version="1.2">
+  <meta lastmodifieddate="2026-06-22">
+    <creator>NetworkX 3.6</creator>
+  </meta>
+  <graph defaultedgetype="undirected" mode="static" name="">
+    <attributes mode="static" class="node">
+      <attribute id="0" title="Epitope" type="string" />
+    </attributes>
+    <nodes>
+      <node id="28.0" label="28.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="52.0" label="52.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="119.0" label="119.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="311.0" label="311.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="354.0" label="354.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="7364.0" label="7364.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="46.0" label="46.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="323.0" label="323.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="835.0" label="835.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="2222.0" label="2222.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="5444.0" label="5444.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="6140.0" label="6140.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="6467.0" label="6467.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="7559.0" label="7559.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="11445.0" label="11445.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="11633.0" label="11633.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="14648.0" label="14648.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="767.0" label="767.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="2400.0" label="2400.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="5652.0" label="5652.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="17592.0" label="17592.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="6604.0" label="6604.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="349.0" label="349.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="445.0" label="445.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="5878.0" label="5878.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="11130.0" label="11130.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="11693.0" label="11693.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="434.0" label="434.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="12420.0" label="12420.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="498.0" label="498.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="5928.0" label="5928.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="10749.0" label="10749.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="10854.0" label="10854.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="11373.0" label="11373.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="17704.0" label="17704.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="703.0" label="703.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="4668.0" label="4668.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="8472.0" label="8472.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="5454.0" label="5454.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="5766.0" label="5766.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="7411.0" label="7411.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="9825.0" label="9825.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="11193.0" label="11193.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="3695.0" label="3695.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="2419.0" label="2419.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="7212.0" label="7212.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="7750.0" label="7750.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="6688.0" label="6688.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="12703.0" label="12703.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="9983.0" label="9983.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="14310.0" label="14310.0">
+        <attvalues>
+          <attvalue for="0" value="YLQ" />
+        </attvalues>
+      </node>
+      <node id="277.0" label="277.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="7894.0" label="7894.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="19902.0" label="19902.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="317.0" label="317.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="3155.0" label="3155.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="3936.0" label="3936.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="6548.0" label="6548.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="7758.0" label="7758.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="5170.0" label="5170.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="5356.0" label="5356.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="16867.0" label="16867.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="19469.0" label="19469.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="684.0" label="684.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="19664.0" label="19664.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="718.0" label="718.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="10813.0" label="10813.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="763.0" label="763.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="11195.0" label="11195.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="772.0" label="772.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="6302.0" label="6302.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="6844.0" label="6844.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="5251.0" label="5251.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="5469.0" label="5469.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="8172.0" label="8172.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="10832.0" label="10832.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="11151.0" label="11151.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="41.0" label="41.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="19579.0" label="19579.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="5458.0" label="5458.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="7156.0" label="7156.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="7936.0" label="7936.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="2495.0" label="2495.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="17644.0" label="17644.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="1701.0" label="1701.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+      <node id="5546.0" label="5546.0">
+        <attvalues>
+          <attvalue for="0" value="LTD" />
+        </attvalues>
+      </node>
+    </nodes>
+    <edges>
+      <edge source="28.0" target="52.0" id="0" weight="1" />
+      <edge source="28.0" target="119.0" id="1" weight="1" />
+      <edge source="28.0" target="311.0" id="2" weight="1" />
+      <edge source="28.0" target="354.0" id="3" weight="1" />
+      <edge source="28.0" target="7364.0" id="4" weight="1" />
+      <edge source="52.0" target="119.0" id="5" weight="1" />
+      <edge source="52.0" target="311.0" id="6" weight="1" />
+      <edge source="52.0" target="354.0" id="7" weight="1" />
+      <edge source="119.0" target="311.0" id="8" weight="1" />
+      <edge source="119.0" target="354.0" id="9" weight="1" />
+      <edge source="311.0" target="354.0" id="10" weight="1" />
+      <edge source="311.0" target="6604.0" id="11" weight="1" />
+      <edge source="311.0" target="7364.0" id="12" weight="1" />
+      <edge source="354.0" target="11693.0" id="13" weight="1" />
+      <edge source="7364.0" target="6604.0" id="14" weight="1" />
+      <edge source="46.0" target="323.0" id="15" weight="1" />
+      <edge source="46.0" target="835.0" id="16" weight="1" />
+      <edge source="46.0" target="2222.0" id="17" weight="1" />
+      <edge source="46.0" target="5444.0" id="18" weight="1" />
+      <edge source="46.0" target="6140.0" id="19" weight="1" />
+      <edge source="46.0" target="6467.0" id="20" weight="1" />
+      <edge source="46.0" target="7559.0" id="21" weight="1" />
+      <edge source="46.0" target="11445.0" id="22" weight="1" />
+      <edge source="46.0" target="11633.0" id="23" weight="1" />
+      <edge source="46.0" target="14648.0" id="24" weight="1" />
+      <edge source="323.0" target="767.0" id="25" weight="1" />
+      <edge source="323.0" target="835.0" id="26" weight="1" />
+      <edge source="323.0" target="2222.0" id="27" weight="1" />
+      <edge source="323.0" target="2400.0" id="28" weight="1" />
+      <edge source="323.0" target="5652.0" id="29" weight="1" />
+      <edge source="323.0" target="6140.0" id="30" weight="1" />
+      <edge source="323.0" target="6467.0" id="31" weight="1" />
+      <edge source="323.0" target="7559.0" id="32" weight="1" />
+      <edge source="323.0" target="11445.0" id="33" weight="1" />
+      <edge source="323.0" target="11633.0" id="34" weight="1" />
+      <edge source="323.0" target="14648.0" id="35" weight="1" />
+      <edge source="323.0" target="17592.0" id="36" weight="1" />
+      <edge source="835.0" target="2222.0" id="37" weight="1" />
+      <edge source="835.0" target="2400.0" id="38" weight="1" />
+      <edge source="835.0" target="3695.0" id="39" weight="1" />
+      <edge source="835.0" target="6140.0" id="40" weight="1" />
+      <edge source="835.0" target="6467.0" id="41" weight="1" />
+      <edge source="835.0" target="8472.0" id="42" weight="1" />
+      <edge source="835.0" target="11445.0" id="43" weight="1" />
+      <edge source="835.0" target="11633.0" id="44" weight="1" />
+      <edge source="835.0" target="14648.0" id="45" weight="1" />
+      <edge source="835.0" target="17592.0" id="46" weight="1" />
+      <edge source="2222.0" target="767.0" id="47" weight="1" />
+      <edge source="2222.0" target="2400.0" id="48" weight="1" />
+      <edge source="2222.0" target="5652.0" id="49" weight="1" />
+      <edge source="2222.0" target="6140.0" id="50" weight="1" />
+      <edge source="2222.0" target="6467.0" id="51" weight="1" />
+      <edge source="2222.0" target="7411.0" id="52" weight="1" />
+      <edge source="2222.0" target="8472.0" id="53" weight="1" />
+      <edge source="2222.0" target="11193.0" id="54" weight="1" />
+      <edge source="2222.0" target="11445.0" id="55" weight="1" />
+      <edge source="2222.0" target="11633.0" id="56" weight="1" />
+      <edge source="2222.0" target="14648.0" id="57" weight="1" />
+      <edge source="2222.0" target="17592.0" id="58" weight="1" />
+      <edge source="5444.0" target="767.0" id="59" weight="1" />
+      <edge source="5444.0" target="5652.0" id="60" weight="1" />
+      <edge source="5444.0" target="7212.0" id="61" weight="1" />
+      <edge source="5444.0" target="11193.0" id="62" weight="1" />
+      <edge source="6140.0" target="767.0" id="63" weight="1" />
+      <edge source="6140.0" target="2400.0" id="64" weight="1" />
+      <edge source="6140.0" target="2419.0" id="65" weight="1" />
+      <edge source="6140.0" target="5652.0" id="66" weight="1" />
+      <edge source="6140.0" target="5766.0" id="67" weight="1" />
+      <edge source="6140.0" target="6467.0" id="68" weight="1" />
+      <edge source="6140.0" target="7411.0" id="69" weight="1" />
+      <edge source="6140.0" target="8472.0" id="70" weight="1" />
+      <edge source="6140.0" target="11445.0" id="71" weight="1" />
+      <edge source="6140.0" target="11633.0" id="72" weight="1" />
+      <edge source="6140.0" target="11693.0" id="73" weight="1" />
+      <edge source="6140.0" target="14648.0" id="74" weight="1" />
+      <edge source="6140.0" target="17592.0" id="75" weight="1" />
+      <edge source="6467.0" target="703.0" id="76" weight="1" />
+      <edge source="6467.0" target="767.0" id="77" weight="1" />
+      <edge source="6467.0" target="2400.0" id="78" weight="1" />
+      <edge source="6467.0" target="4668.0" id="79" weight="1" />
+      <edge source="6467.0" target="5454.0" id="80" weight="1" />
+      <edge source="6467.0" target="5652.0" id="81" weight="1" />
+      <edge source="6467.0" target="5766.0" id="82" weight="1" />
+      <edge source="6467.0" target="7411.0" id="83" weight="1" />
+      <edge source="6467.0" target="8472.0" id="84" weight="1" />
+      <edge source="6467.0" target="9825.0" id="85" weight="1" />
+      <edge source="6467.0" target="11193.0" id="86" weight="1" />
+      <edge source="6467.0" target="11445.0" id="87" weight="1" />
+      <edge source="6467.0" target="11633.0" id="88" weight="1" />
+      <edge source="6467.0" target="11693.0" id="89" weight="1" />
+      <edge source="6467.0" target="14648.0" id="90" weight="1" />
+      <edge source="6467.0" target="17592.0" id="91" weight="1" />
+      <edge source="7559.0" target="11445.0" id="92" weight="1" />
+      <edge source="11445.0" target="2400.0" id="93" weight="1" />
+      <edge source="11445.0" target="8472.0" id="94" weight="1" />
+      <edge source="11445.0" target="17592.0" id="95" weight="1" />
+      <edge source="11633.0" target="703.0" id="96" weight="1" />
+      <edge source="11633.0" target="767.0" id="97" weight="1" />
+      <edge source="11633.0" target="2400.0" id="98" weight="1" />
+      <edge source="11633.0" target="5454.0" id="99" weight="1" />
+      <edge source="11633.0" target="5652.0" id="100" weight="1" />
+      <edge source="11633.0" target="5766.0" id="101" weight="1" />
+      <edge source="11633.0" target="7411.0" id="102" weight="1" />
+      <edge source="11633.0" target="8472.0" id="103" weight="1" />
+      <edge source="11633.0" target="9825.0" id="104" weight="1" />
+      <edge source="11633.0" target="11193.0" id="105" weight="1" />
+      <edge source="11633.0" target="11693.0" id="106" weight="1" />
+      <edge source="11633.0" target="14648.0" id="107" weight="1" />
+      <edge source="11633.0" target="17592.0" id="108" weight="1" />
+      <edge source="14648.0" target="703.0" id="109" weight="1" />
+      <edge source="14648.0" target="767.0" id="110" weight="1" />
+      <edge source="14648.0" target="2400.0" id="111" weight="1" />
+      <edge source="14648.0" target="2419.0" id="112" weight="1" />
+      <edge source="14648.0" target="5454.0" id="113" weight="1" />
+      <edge source="14648.0" target="5652.0" id="114" weight="1" />
+      <edge source="14648.0" target="5766.0" id="115" weight="1" />
+      <edge source="14648.0" target="7411.0" id="116" weight="1" />
+      <edge source="14648.0" target="8472.0" id="117" weight="1" />
+      <edge source="14648.0" target="9825.0" id="118" weight="1" />
+      <edge source="14648.0" target="11193.0" id="119" weight="1" />
+      <edge source="14648.0" target="11693.0" id="120" weight="1" />
+      <edge source="14648.0" target="17592.0" id="121" weight="1" />
+      <edge source="767.0" target="2400.0" id="122" weight="1" />
+      <edge source="767.0" target="5454.0" id="123" weight="1" />
+      <edge source="767.0" target="5652.0" id="124" weight="1" />
+      <edge source="767.0" target="5766.0" id="125" weight="1" />
+      <edge source="767.0" target="7411.0" id="126" weight="1" />
+      <edge source="767.0" target="8472.0" id="127" weight="1" />
+      <edge source="767.0" target="9825.0" id="128" weight="1" />
+      <edge source="767.0" target="11193.0" id="129" weight="1" />
+      <edge source="767.0" target="11693.0" id="130" weight="1" />
+      <edge source="767.0" target="12420.0" id="131" weight="1" />
+      <edge source="767.0" target="17592.0" id="132" weight="1" />
+      <edge source="2400.0" target="4668.0" id="133" weight="1" />
+      <edge source="2400.0" target="5454.0" id="134" weight="1" />
+      <edge source="2400.0" target="5766.0" id="135" weight="1" />
+      <edge source="2400.0" target="7411.0" id="136" weight="1" />
+      <edge source="2400.0" target="8472.0" id="137" weight="1" />
+      <edge source="2400.0" target="17592.0" id="138" weight="1" />
+      <edge source="5652.0" target="7750.0" id="139" weight="1" />
+      <edge source="5652.0" target="11193.0" id="140" weight="1" />
+      <edge source="5652.0" target="11693.0" id="141" weight="1" />
+      <edge source="17592.0" target="5454.0" id="142" weight="1" />
+      <edge source="17592.0" target="5766.0" id="143" weight="1" />
+      <edge source="17592.0" target="7411.0" id="144" weight="1" />
+      <edge source="17592.0" target="7750.0" id="145" weight="1" />
+      <edge source="17592.0" target="8472.0" id="146" weight="1" />
+      <edge source="17592.0" target="11693.0" id="147" weight="1" />
+      <edge source="17592.0" target="14310.0" id="148" weight="1" />
+      <edge source="349.0" target="445.0" id="149" weight="1" />
+      <edge source="349.0" target="5878.0" id="150" weight="1" />
+      <edge source="349.0" target="11130.0" id="151" weight="1" />
+      <edge source="445.0" target="5878.0" id="152" weight="1" />
+      <edge source="5878.0" target="11130.0" id="153" weight="1" />
+      <edge source="11693.0" target="703.0" id="154" weight="1" />
+      <edge source="11693.0" target="2419.0" id="155" weight="1" />
+      <edge source="11693.0" target="4668.0" id="156" weight="1" />
+      <edge source="11693.0" target="5454.0" id="157" weight="1" />
+      <edge source="11693.0" target="7411.0" id="158" weight="1" />
+      <edge source="11693.0" target="7750.0" id="159" weight="1" />
+      <edge source="11693.0" target="8472.0" id="160" weight="1" />
+      <edge source="11693.0" target="9825.0" id="161" weight="1" />
+      <edge source="11693.0" target="12420.0" id="162" weight="1" />
+      <edge source="434.0" target="12420.0" id="163" weight="1" />
+      <edge source="498.0" target="5928.0" id="164" weight="1" />
+      <edge source="498.0" target="10749.0" id="165" weight="1" />
+      <edge source="498.0" target="10854.0" id="166" weight="1" />
+      <edge source="498.0" target="11373.0" id="167" weight="1" />
+      <edge source="498.0" target="17704.0" id="168" weight="1" />
+      <edge source="5928.0" target="10854.0" id="169" weight="1" />
+      <edge source="5928.0" target="11373.0" id="170" weight="1" />
+      <edge source="5928.0" target="17704.0" id="171" weight="1" />
+      <edge source="10749.0" target="7212.0" id="172" weight="1" />
+      <edge source="10854.0" target="11373.0" id="173" weight="1" />
+      <edge source="10854.0" target="17704.0" id="174" weight="1" />
+      <edge source="11373.0" target="17704.0" id="175" weight="1" />
+      <edge source="703.0" target="4668.0" id="176" weight="1" />
+      <edge source="703.0" target="8472.0" id="177" weight="1" />
+      <edge source="4668.0" target="8472.0" id="178" weight="1" />
+      <edge source="8472.0" target="5454.0" id="179" weight="1" />
+      <edge source="8472.0" target="5766.0" id="180" weight="1" />
+      <edge source="8472.0" target="9825.0" id="181" weight="1" />
+      <edge source="5454.0" target="5766.0" id="182" weight="1" />
+      <edge source="5454.0" target="9825.0" id="183" weight="1" />
+      <edge source="5454.0" target="11193.0" id="184" weight="1" />
+      <edge source="5766.0" target="7411.0" id="185" weight="1" />
+      <edge source="5766.0" target="9825.0" id="186" weight="1" />
+      <edge source="5766.0" target="11193.0" id="187" weight="1" />
+      <edge source="7411.0" target="11193.0" id="188" weight="1" />
+      <edge source="9825.0" target="11193.0" id="189" weight="1" />
+      <edge source="7750.0" target="9983.0" id="190" weight="1" />
+      <edge source="6688.0" target="12703.0" id="191" weight="1" />
+      <edge source="277.0" target="7894.0" id="192" weight="1" />
+      <edge source="277.0" target="19902.0" id="193" weight="1" />
+      <edge source="7894.0" target="19902.0" id="194" weight="1" />
+      <edge source="317.0" target="3155.0" id="195" weight="1" />
+      <edge source="317.0" target="3936.0" id="196" weight="1" />
+      <edge source="317.0" target="6548.0" id="197" weight="1" />
+      <edge source="317.0" target="7758.0" id="198" weight="1" />
+      <edge source="317.0" target="5170.0" id="199" weight="1" />
+      <edge source="317.0" target="5356.0" id="200" weight="1" />
+      <edge source="317.0" target="16867.0" id="201" weight="1" />
+      <edge source="317.0" target="19469.0" id="202" weight="1" />
+      <edge source="3155.0" target="3936.0" id="203" weight="1" />
+      <edge source="3155.0" target="6548.0" id="204" weight="1" />
+      <edge source="3155.0" target="7758.0" id="205" weight="1" />
+      <edge source="3155.0" target="5170.0" id="206" weight="1" />
+      <edge source="3155.0" target="5356.0" id="207" weight="1" />
+      <edge source="3155.0" target="16867.0" id="208" weight="1" />
+      <edge source="3155.0" target="19469.0" id="209" weight="1" />
+      <edge source="3936.0" target="6548.0" id="210" weight="1" />
+      <edge source="3936.0" target="6844.0" id="211" weight="1" />
+      <edge source="3936.0" target="7758.0" id="212" weight="1" />
+      <edge source="3936.0" target="5170.0" id="213" weight="1" />
+      <edge source="3936.0" target="5356.0" id="214" weight="1" />
+      <edge source="3936.0" target="16867.0" id="215" weight="1" />
+      <edge source="3936.0" target="19469.0" id="216" weight="1" />
+      <edge source="6548.0" target="7758.0" id="217" weight="1" />
+      <edge source="6548.0" target="5170.0" id="218" weight="1" />
+      <edge source="6548.0" target="5356.0" id="219" weight="1" />
+      <edge source="6548.0" target="16867.0" id="220" weight="1" />
+      <edge source="6548.0" target="19469.0" id="221" weight="1" />
+      <edge source="7758.0" target="5170.0" id="222" weight="1" />
+      <edge source="7758.0" target="5356.0" id="223" weight="1" />
+      <edge source="7758.0" target="16867.0" id="224" weight="1" />
+      <edge source="7758.0" target="19469.0" id="225" weight="1" />
+      <edge source="5170.0" target="5356.0" id="226" weight="1" />
+      <edge source="5170.0" target="16867.0" id="227" weight="1" />
+      <edge source="5170.0" target="19469.0" id="228" weight="1" />
+      <edge source="5356.0" target="16867.0" id="229" weight="1" />
+      <edge source="5356.0" target="19469.0" id="230" weight="1" />
+      <edge source="16867.0" target="19469.0" id="231" weight="1" />
+      <edge source="684.0" target="19664.0" id="232" weight="1" />
+      <edge source="718.0" target="10813.0" id="233" weight="1" />
+      <edge source="763.0" target="11195.0" id="234" weight="1" />
+      <edge source="772.0" target="6302.0" id="235" weight="1" />
+      <edge source="5251.0" target="5469.0" id="236" weight="1" />
+      <edge source="5251.0" target="8172.0" id="237" weight="1" />
+      <edge source="5251.0" target="10832.0" id="238" weight="1" />
+      <edge source="5251.0" target="11151.0" id="239" weight="1" />
+      <edge source="5251.0" target="41.0" id="240" weight="1" />
+      <edge source="5251.0" target="19579.0" id="241" weight="1" />
+      <edge source="5469.0" target="8172.0" id="242" weight="1" />
+      <edge source="5469.0" target="10832.0" id="243" weight="1" />
+      <edge source="5469.0" target="11151.0" id="244" weight="1" />
+      <edge source="5469.0" target="41.0" id="245" weight="1" />
+      <edge source="5469.0" target="19579.0" id="246" weight="1" />
+      <edge source="8172.0" target="10832.0" id="247" weight="1" />
+      <edge source="8172.0" target="11151.0" id="248" weight="1" />
+      <edge source="8172.0" target="41.0" id="249" weight="1" />
+      <edge source="8172.0" target="19579.0" id="250" weight="1" />
+      <edge source="10832.0" target="11151.0" id="251" weight="1" />
+      <edge source="10832.0" target="41.0" id="252" weight="1" />
+      <edge source="10832.0" target="19579.0" id="253" weight="1" />
+      <edge source="11151.0" target="41.0" id="254" weight="1" />
+      <edge source="11151.0" target="19579.0" id="255" weight="1" />
+      <edge source="41.0" target="19579.0" id="256" weight="1" />
+      <edge source="5458.0" target="7156.0" id="257" weight="1" />
+      <edge source="5458.0" target="7936.0" id="258" weight="1" />
+      <edge source="7156.0" target="7936.0" id="259" weight="1" />
+      <edge source="2495.0" target="17644.0" id="260" weight="1" />
+      <edge source="1701.0" target="5546.0" id="261" weight="1" />
+    </edges>
+  </graph>
+</gexf>
