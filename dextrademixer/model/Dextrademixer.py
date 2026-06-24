@@ -296,11 +296,7 @@ class DextraDemixer(ApMHCDeconvolution):
                                 data: Dict = None,
                                 threshold: float = None,
                                 target_fdr: float = None,
-                                quantile: float = None,
                                 cred_intvl: float = None,
-                                clonotype_adherence: bool = False,
-                                clonotype_majority_voting: bool = False,
-                                clonotype_mean_p: bool = False,
                                 clonotype_median_p: bool = False,
                                 clone_id: Array = None,
                                 ) -> Tuple[Array, Array]:
@@ -310,51 +306,37 @@ class DextraDemixer(ApMHCDeconvolution):
         If neither threshold nor target_fdr is provided the max posterior class probability will be used.
 
         Args:
-             threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
+            threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
                         probabilities
             target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
                         class probability
-            quantile: (Optional) whether and what lower quantile should be used instead of the population mean as conservative
-                      measure of p. quantile should be in (0, 0.5]
             cred_intvl: (Optional) instead of using the summarized class probability we estimate a distribution
                         over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
-            clonotype_adherence: (Optional) instead of using posterior class assignment per cell use clonotype
-                                 probability vector if available.
-            clonotype_majority_voting: (Optional) after initial assignment perform majority voting within clonotypes
-            clonotype_mean_p: (Optional) after initial probability, use mean within each clonotype for each cell
+            clonotype_median_p: (Optional) after initial probability, use median within each clonotype for each cell
             clone_id: (Optional) map each cell id to clone id, shape=(n_cells)
         Returns:
             A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
             class assignment decision
         """
         def __return_p_summary(p_sample):
-            if quantile:
-                p = jnp.quantile(p_sample, quantile, axis=0)[:, 1]
-            elif cred_intvl:
+            if cred_intvl:
                 p = p_sample
             else:
                 p = jnp.nanmean(p_sample, axis=0)[:, 1]
 
-            if clonotype_mean_p or clonotype_median_p:
-                assert not (clonotype_mean_p and clonotype_median_p), "Cannot use both `clonotype_mean_p` and `clonotype_median_p` at the same time."
+            if clonotype_median_p:
                 if clone_id is None:
                     raise ValueError("If `clonotype_mean_p`= True a clonotype vector `clone_id` must be specified.")
                 unique_ids = np.unique(clone_id)
 
                 if cred_intvl:
                     # mean for each clone while keeping posterior samples, shape (num_clones, num_samples, 2)
-                    if clonotype_mean_p:
-                        mean_p = np.stack([p[:, clone_id == cid].mean(axis=[1]) for cid in unique_ids])
-                    elif clonotype_median_p:
-                        mean_p = np.stack([jnp.quantile(p[:, clone_id == cid], q=0.5, axis=1, method='higher') for cid in unique_ids])
+                    mean_p = np.stack([jnp.quantile(p[:, clone_id == cid], q=0.5, axis=1, method='higher') for cid in unique_ids])
                     p = mean_p[clone_id].transpose(1, 0, 2)  # shape (num_posterior_samples, num_cells, 2)
 
                 else:
                     df = pd.DataFrame({"p": p, "clone_id": clone_id})
-                    if clonotype_mean_p:
-                        mean_p = df.groupby("clone_id")["p"].mean()
-                    elif clonotype_median_p:
-                        mean_p = df.groupby("clone_id")["p"].quantile(0.5, interpolation='higher')
+                    mean_p = df.groupby("clone_id")["p"].quantile(0.5, interpolation='higher')
                     p = jnp.array(mean_p.values)[clone_id]
             return p
 
@@ -366,33 +348,15 @@ class DextraDemixer(ApMHCDeconvolution):
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
 
         # posterior probability of belonging to the binding class
-        if clonotype_adherence and clone_id is not None:
-            # TODO Not used, so did not match outlier filtered data
-            posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
-                                                            sample_shape=(500,))
-            p = __return_p_summary(posterior_samples["w"])
-
-        else:
-            predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
-                                                num_samples=500)
-            samples = predictive(jax.random.PRNGKey(self.rng_key), data=data)  # self.rng_key
-            p = __return_p_summary(jnp.exp(samples["log_p"]))
+        predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
+                                            num_samples=500)
+        samples = predictive(jax.random.PRNGKey(self.rng_key), data=data)  # self.rng_key
+        p = __return_p_summary(jnp.exp(samples["log_p"]))
 
         if cred_intvl is not None:
             p, assignment, threshold = self._predict_posterior_class_dist(p, target_fdr, cred_intvl)
         else:
             assignment = self._predict_posterior_class(p, threshold, target_fdr)
-
-        if clonotype_majority_voting:
-            if clone_id is None:
-                raise ValueError("If `clonotype_mean_p`= True a clonotype vector `clone_id` must be specified.")
-            df = pd.DataFrame({"assignment": assignment, "clone_id": clone_id})
-            majority_assignment = df.groupby("clone_id")["assignment"].agg(lambda x: x.mode()[0])
-            assignment = majority_assignment.values[clone_id]
-
-        if clonotype_adherence and clone_id is not None:
-            assignment = assignment[clone_id]
-            p = p[clone_id]
 
         return p, assignment
 
