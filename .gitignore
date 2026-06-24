@@ -23,6 +23,10 @@ experiments/*/benchmarks
 *.h5mu
 *.csv
 *.xlsx
+/.history
+cache
+data
+/figures
 
 # Vagrant
 .vagrant/
