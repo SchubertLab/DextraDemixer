@@ -67,17 +67,13 @@ class DextraDemixer(ApMHCDeconvolution):
                  model_config: Dict = None):
         super().__init__()
 
-        if mode.upper() not in ("H", "I", "C"):
-            raise ValueError(f"`mode` must be either of the three `I`=independent, `H`=hierarchical, "
-                             + f"`C`=clonotype-specific but was {mode}")
-
         self.sampler = None
         self.trace = None
         self.is_svi = None
         self.svi_result = None
         self.rng_key = None
         self.guide = None
-        self.mode = mode.upper()
+        self.mode = mode.upper()  # Compatibility
         self.alpha_model = alpha_model
         self.model_config = model_config if model_config is not None else {}
 
@@ -140,10 +136,6 @@ class DextraDemixer(ApMHCDeconvolution):
 
         c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
         sigma = air.uns[ir_cov_key] if ir_cov_key is not None else None
-
-        if self.mode == "C":
-            if c is None:
-                raise ValueError("If `mode`= C a clonotype vector `ir_clone_key` must be specified.")
 
         if use_size_factor:
             pmhc_list = use_size_factor if isinstance(use_size_factor, list) else mdata[gex_key].var_names.tolist()
@@ -567,23 +559,11 @@ class DextraDemixer(ApMHCDeconvolution):
             alpha = posterior_samples["alpha"].mean(0)
         else:
             overdispersion = posterior_samples["overdispersion"].mean(0) + 1
-            if self.mode == "C":
-                # alpha.shape = (C, )
-                q_weighted = (w * q).mean(1)
-                alpha = q_weighted ** 2 / (q_weighted * (overdispersion) - q_weighted)
-            elif self.mode == "I":
-                # alpha.shape = (2, )
-                alpha = q ** 2 / (q * (overdispersion) - q)
-                if self.model._model_config['alpha_offset']:
-                    alpha = alpha + jnp.array([0, self.model._model_config['alpha_offset']])
-                
+            # alpha.shape = (2, )
+            alpha = q ** 2 / (q * (overdispersion) - q)
+            if self.model._model_config['alpha_offset']:
+                alpha = alpha + jnp.array([0, self.model._model_config['alpha_offset']])
 
-        if self.mode == "C":
-            # alpha is per clone, transform to per cell and take mean over all cells
-            alpha_cell = alpha[self.model.data["clone_continuous"]]
-            alpha_cell = alpha_cell[:, None] * w_cell
-            alpha_mean_over_cells = alpha_cell.mean(0)
-        else:
             alpha_mean_over_cells = alpha
 
         posterior_samples_mean = {"q": q, "w": w, "alpha": alpha,
@@ -693,111 +673,59 @@ class DextraDemixer(ApMHCDeconvolution):
         alpha = posterior_samples["alpha"]
         x = np.arange(0, data["x"].max())
 
-        if self.mode == "C":
-            # alpha_weighted is the mean of alpha weighted by w for each cell with shape (2, )
-            # This reflects better the contribution of each alpha on average for the binder and non-binder NB component
-            alpha_weighted = (w[data["clone_continuous"]] * alpha[data["clone_continuous"]][:, None])
-            alpha_weighted = alpha_weighted.mean(0) / w.mean(0)
+        prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha[0]).log_prob(x))
+        prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha[1]).log_prob(x))
 
-            # pdf for each cell
-            prob0 = jnp.exp(npd.NegativeBinomial2(mean=q[0], concentration=alpha[data["clone_continuous"]][:, np.newaxis]).log_prob(x))
-            prob1 = jnp.exp(npd.NegativeBinomial2(mean=q[1], concentration=alpha[data["clone_continuous"]][:, np.newaxis]).log_prob(x))
+        # Individual Negative Binomial
+        plt.subplot(3, 4, 8)
+        ax1 = sns.lineplot(x=np.arange(0, data["x"].max()), y=prob0,
+                            label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", color=sns.color_palette('tab10')[0])
+        ax2 = ax1.twinx()
+        sns.lineplot(x=np.arange(0, data["x"].max()), y=prob1, ax=ax2,
+                        label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
+        handles = ax1.lines + ax2.lines
+        labels = [h.get_label() for h in handles]
+        ax1.legend(handles, labels, frameon=False, loc='best')
+        ax2.get_legend().remove()
+        sns.despine()
+        plt.title("Posterior NB without mixing weights")
+        plt.ylabel("Probability")
 
-            # Individual Negative Binomial
-            plt.subplot(3, 4, 8)
-            ax1 = sns.lineplot(x=x, y=prob0.mean(0), c=sns.color_palette('tab10')[0],
-                               label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}")
-            plt.fill_between(x, np.quantile(prob0, 0.05, axis=0), np.quantile(prob0, 0.95, axis=0), alpha=0.3,
-                             label='5%-95% percentile')
-            ax2 = ax1.twinx()
-            sns.lineplot(x=x, y=prob1.mean(0), ax=ax2, c=sns.color_palette('tab10')[1],
-                         label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}")
-            plt.fill_between(x, np.quantile(prob1, 0.05, axis=0), np.quantile(prob1, 0.95, axis=0), alpha=0.3,
-                             label='5%-95% percentile')
-            handles = ax1.lines + ax2.lines
-            labels = [h.get_label() for h in handles]
-            ax1.legend(handles, labels, frameon=False, loc='best')
-            ax2.get_legend().remove()
-            sns.despine()
-            plt.title("Posterior NB without mixing weights")
-            plt.ylabel("Probability")
-
-            # Mixture model
-            # Use different w for each clonotype and hence cell: w.shape = (#clonotypes, 2)
-            prob0_mix = prob0 * w[data["clone_continuous"]][:, 0:1]
-            prob1_mix = prob1 * w[data["clone_continuous"]][:, 1:2]
-            w_mean = w[data["clone_continuous"]].mean(0)  # mean over all clonotypes
-
-            plt.subplot(3, 4, 4)
+        # Mixture model
+        plt.subplot(3, 4, 4)
+        if data["clone_continuous"] is not None:
+            # Use different w for each clonotype: w.shape = (#clonotypes, 2)
+            # probX = (max UMI)
+            prob0_mix = prob0[None,] * w[:, 0:1]
+            prob1_mix = prob1[None,] * w[:, 1:2]
+            w_mean = w.mean(0)
             sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
-                         label=f"q={q[0]:.2f} alpha={alpha_weighted[0]:.2f}", color=sns.color_palette('tab10')[0])
+                            label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}")
             sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1],
-                         label=f"q={q[1]:.2f} alpha={alpha_weighted[1]:.2f}", color=sns.color_palette('tab10')[0])
-            sns.lineplot(x=x, y=prob0_mix.mean(0)+prob1_mix.mean(0), c="k", linestyle=":",
-                         label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
+                            label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}")
+            sns.lineplot(x=x, y=prob0_mix.mean(0) + prob1_mix.mean(0), c="k", linestyle=":",
+                            label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
             plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0),
-                             alpha=0.3, label='5%-95% percentile')
+                                alpha=0.3, label='5%-95% percentile')
             plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
-                             alpha=0.3, label='5%-95% percentile')
+                                alpha=0.3, label='5%-95% percentile')
             plt.legend(frameon=False)
-            sns.despine()
-            plt.title("Posterior Mixture NB")
-            plt.ylabel("Probability")
+        else:
+            # w.shape = (2,)
+            prob0_mix = prob0 * w[0]
+            prob1_mix = prob1 * w[1]
+            w_mean = w
 
-        elif self.mode == "I":
-            prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha[0]).log_prob(x))
-            prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha[1]).log_prob(x))
-
-            # Individual Negative Binomial
-            plt.subplot(3, 4, 8)
-            ax1 = sns.lineplot(x=np.arange(0, data["x"].max()), y=prob0,
-                               label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", color=sns.color_palette('tab10')[0])
-            ax2 = ax1.twinx()
-            sns.lineplot(x=np.arange(0, data["x"].max()), y=prob1, ax=ax2,
-                         label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
-            handles = ax1.lines + ax2.lines
-            labels = [h.get_label() for h in handles]
-            ax1.legend(handles, labels, frameon=False, loc='best')
-            ax2.get_legend().remove()
-            sns.despine()
-            plt.title("Posterior NB without mixing weights")
-            plt.ylabel("Probability")
-
-            # Mixture model
-            plt.subplot(3, 4, 4)
-            if data["clone_continuous"] is not None:
-                # Use different w for each clonotype: w.shape = (#clonotypes, 2)
-                # probX = (max UMI)
-                prob0_mix = prob0[None,] * w[:, 0:1]
-                prob1_mix = prob1[None,] * w[:, 1:2]
-                w_mean = w.mean(0)
-                sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
-                             label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}")
-                sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1],
-                             label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}")
-                sns.lineplot(x=x, y=prob0_mix.mean(0) + prob1_mix.mean(0), c="k", linestyle=":",
-                             label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
-                plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0),
-                                 alpha=0.3, label='5%-95% percentile')
-                plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
-                                 alpha=0.3, label='5%-95% percentile')
-                plt.legend(frameon=False)
-            else:
-                # w.shape = (2,)
-                prob0_mix = prob0 * w[0]
-                prob1_mix = prob1 * w[1]
-                w_mean = w
-
-                sns.lineplot(x=x, y=prob0_mix.reshape(-1),
-                             label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", linewidth=3)
-                sns.lineplot(x=x, y=prob1_mix.reshape(-1),
-                            label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", linewidth=3)
-                sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
-                             label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
-                plt.legend(frameon=False)
-            sns.despine()
-            plt.title("Posterior Mixture NB")
-            plt.ylabel("Probability")
+            sns.lineplot(x=x, y=prob0_mix.reshape(-1),
+                            label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", linewidth=3)
+            sns.lineplot(x=x, y=prob1_mix.reshape(-1),
+                        label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", linewidth=3)
+            sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
+                            label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
+            plt.legend(frameon=False)
+        sns.despine()
+        plt.title("Posterior Mixture NB")
+        plt.ylabel("Probability")
 
         # Plot kmeans clusters
         if self.model_type == "mixturemodelkmeans":
@@ -1197,23 +1125,14 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
             # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
             overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
-
-            if self.mode == "C":
-                # For each clonotype, we have one alpha parameter, weight should adjust itself so that one alpha
-                # parameter is actually used
-                with npy.plate("clone_axis", c_nof):
-                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
-                    q_weighted = (w * q).mean(1)
-                alpha = npy.deterministic("alpha", q_weighted ** 2 / (q_weighted * overdispersion - q_weighted))
+            # For each mixture component, we have one alpha parameter
+            with npy.plate("cluster_axis", K):
+                overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
+            # Make sure that alpha > 1 to prevent exponential dist for the second component
+            if alpha_offset:
+                alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q) + jnp.array([0, alpha_offset]))
             else:
-                # For each mixture component, we have one alpha parameter
-                with npy.plate("cluster_axis", K):
-                    overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
-                # Make sure that alpha > 1 to prevent exponential dist for the second component
-                if alpha_offset:
-                    alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q) + jnp.array([0, alpha_offset]))
-                else:
-                    alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
+                alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
 
 
         elif self.alpha_model == "kmeans":
@@ -1236,12 +1155,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             # with a, b so that mean = cluster_variance and var = hyperprior_variances of the LogNormal
 
             # Convert kmeans cluster variance to alpha parameter (also dependent on cluster mean)
-            if self.mode == "C":
-                # Use mean and variance of each clone as prior, alpha_prior.shape = (c_nof)
-                alpha_prior = clone_means**2 / (np.maximum(clone_variances, 1e-1) - clone_means - 1e-8)
-            elif self.mode == "I":
-                # Use kmeans cluster mean and variance as prior, alpha_prior.shape = (2)
-                alpha_prior = cluster_means**2 / (np.maximum(cluster_variances, 1e-1) - cluster_means)
+            # Use kmeans cluster mean and variance as prior, alpha_prior.shape = (2)
+            alpha_prior = cluster_means**2 / (np.maximum(cluster_variances, 1e-1) - cluster_means)
 
             # In case of underdispersion (negative alpha), set to a high number, so var ~ mean
             alpha_prior[alpha_prior <= 0] = 100
@@ -1255,26 +1170,14 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             #
             # mu_alpha_prior = jnp.log(alpha_prior) - sigma2_alpha_hp / 2
 
-            # if self.mode == "C":
-            #     with npy.plate("clone_axis", c_nof):
-            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hp))
-            # elif self.mode == 'I':
-            #     with npy.plate("cluster_axis", K):
-            #         alpha = npy.sample("alpha", npd.LogNormal(loc=mu_alpha_prior, scale=sigma_alpha_hp))
-
             # Gamma distribution
             # compute Gamma parameters
             a = alpha_prior ** 2 / var_hp
             b = alpha_prior / var_hp
 
-            if self.mode == "C":
-                with npy.plate("clone_axis", c_nof):
-                    # shape = (c_nof, 1)
-                    alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
-            elif self.mode == 'I':
-                with npy.plate("cluster_axis", K):
-                    # shape = (2, )
-                    alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
+            with npy.plate("cluster_axis", K):
+                # shape = (2, )
+                alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
 
         else:
             raise NotImplementedError(f" {self.alpha_model} not implemented")
@@ -1287,27 +1190,14 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             s_alpha = npy.sample("s_alpha", npd.LogNormal(0.19724303327974974, 0.43970806321879075))
             overdispersion_neg = npy.deterministic("overdispersion_neg", jnp.clip(overdispersion[0] / s_alpha, a_min=1.0 + 1e-3))
             with npy.plate("sample_axis", N_sample):
-                if self.mode == "C":
-                    raise NotImplementedError
-                    # Not sure how to implement: If each clonotype has its own alpha, then we need to compute alpha_neg
-                    # for each clonotype weighted by its belonging to noise
-
-                    # q_neg_weighted = (w[:, 0] * q_neg)
-                    # alpha_neg = npy.deterministic("alpha_neg", q_neg_weighted ** 2 / (q_neg_weighted * overdispersion - q_neg_weighted))
-                    # yhat_neg = npy.sample("yhat_neg", obs=x_neg,
-                    #                       fn=npd.NegativeBinomial2(mean=q_neg, concentration=alpha_neg[clone]))
-                else:
-                    alpha_neg = npy.deterministic("alpha_neg", q_neg ** 2 / (q_neg * overdispersion_neg - q_neg))
-                    yhat_neg = npy.sample("yhat_neg", obs=x_neg,
-                                          fn=npd.NegativeBinomial2(mean=q_neg, concentration=alpha_neg, ))
+                alpha_neg = npy.deterministic("alpha_neg", q_neg ** 2 / (q_neg * overdispersion_neg - q_neg))
+                yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                                        fn=npd.NegativeBinomial2(mean=q_neg, concentration=alpha_neg, ))
 
         # Sample from the mixture model
         with npy.plate("sample_axis", N_sample):
             # target pMHC
-            if self.mode == "C":
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=s[:,None]*q, concentration=alpha[clone, None]))
-            else:
-                mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=s[:,None]*q, concentration=alpha))
+            mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=s[:,None]*q, concentration=alpha))
 
             yhat = npy.sample("yhat", mixture, obs=x)
 
