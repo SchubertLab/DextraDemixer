@@ -180,8 +180,7 @@ class DextraDemixer(ApMHCDeconvolution):
         return sampler_config
 
     def fit_svi(self, guide='normal', svi_config: Dict[str, Union[int, float]] = None,
-                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
-                y_true: Array = None) \
+                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777) \
                 -> az.InferenceData:
         """
         Implements stochastic variational inference
@@ -193,7 +192,6 @@ class DextraDemixer(ApMHCDeconvolution):
         nof_inits: number of initializations tried with different seeds to find gut init values
         use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
         rng_key: integer seed to initialize numpyros RNG-Key store
-        y_true: (Optional) ground truth labels to monitor performance during training
         """
 
         if self.model.data is None:
@@ -246,9 +244,6 @@ class DextraDemixer(ApMHCDeconvolution):
         svi_state = svi.init(rng_key=best_key)
         losses = []
         params = []
-        logs = []
-        best_f1 = 0
-        best_it = 0
         compiled_body_fn = jit(body_fn)
 
         with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
@@ -266,15 +261,6 @@ class DextraDemixer(ApMHCDeconvolution):
                         avg_loss = float("nan")
                     else:
                         avg_loss = sum(valid_losses) / num_valid
-                    if y_true is not None:
-                        self.svi_result = SVIRunResult(params=params[-1], losses=jnp.stack(losses), state=svi_state)
-                        p_pred, assignment = self.predict_posterior_class(threshold=0.5, )
-                        results = calculate_metrics(y_true, p_pred, assignment)
-                        if results["f1"] > best_f1:
-                            best_f1 = results["f1"]
-                            best_it = i
-                        results.update({"it": i, "loss": loss, "avg_loss": avg_loss, "best_f1": best_f1, "best_it": best_it})
-                        logs.append(results)
 
                     t.set_postfix_str(f"avg. loss [{i - batch + 1}-{i}]: {avg_loss:.4f}", refresh=False,)
         losses = jnp.stack(losses)
@@ -287,10 +273,7 @@ class DextraDemixer(ApMHCDeconvolution):
         posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
         inference_data = az.from_dict(posterior=posterior_samples_np)
 
-        if y_true is not None:
-            return inference_data, logs
-        else:
-            return inference_data
+        return inference_data
 
     def predict_posterior_class(self,
                                 data: Dict = None,
