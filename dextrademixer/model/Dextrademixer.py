@@ -63,7 +63,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
     """
 
-    def __init__(self, model_type: str = "mixturemodelkmeans", mode: str = "I", alpha_model="overdispersion", 
+    def __init__(self, model_type: str = "mixturemodelkmeans", 
                  model_config: Dict = None):
         super().__init__()
 
@@ -73,15 +73,11 @@ class DextraDemixer(ApMHCDeconvolution):
         self.svi_result = None
         self.rng_key = None
         self.guide = None
-        self.mode = mode.upper()  # Compatibility
-        self.alpha_model = alpha_model
         self.model_config = model_config if model_config is not None else {}
 
         if model_type not in ADextraDemixerModel.registry.keys():
             raise warnings.warn(f"`model_type` {model_type} not supported using the standard model.")
         self.model = ADextraDemixerModel.registry.get(model_type, DextraDemixerKmeansModel)()
-        self.model.mode = mode
-        self.model.alpha_model = alpha_model
         self.model._model_config.update(self.model_config)
 
     @property
@@ -108,7 +104,6 @@ class DextraDemixer(ApMHCDeconvolution):
                               neg_ctrl_key: str = None,
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
-                              ir_cov_key: str = None,
                               use_size_factor: bool = None,
                               outlier_threshold: float = None,
                               **kwargs):
@@ -135,7 +130,6 @@ class DextraDemixer(ApMHCDeconvolution):
         x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((N,)) if neg_ctrl_key else None
 
         c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
-        sigma = air.uns[ir_cov_key] if ir_cov_key is not None else None
 
         if use_size_factor:
             pmhc_list = use_size_factor if isinstance(use_size_factor, list) else mdata[gex_key].var_names.tolist()
@@ -146,10 +140,9 @@ class DextraDemixer(ApMHCDeconvolution):
         else:
             s = jnp.ones(x.shape[0], dtype=FLOAT_DTYPE)
 
-        self._check_parameters(x, x_neg, c, sigma)
-        self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, sigma=sigma, mode=self.mode,
-                                         alpha_model=self.alpha_model, outlier_threshold=outlier_threshold, **kwargs)
-    
+        self._check_parameters(x, x_neg, c)
+        self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, outlier_threshold=outlier_threshold, **kwargs)
+
     @staticmethod
     def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
         """
@@ -553,23 +546,18 @@ class DextraDemixer(ApMHCDeconvolution):
             w_mean_over_cells = w_cell.mean(0)
         else:
             w_mean_over_cells = w
-        # extract alpha, which depends on the mode and alpha_model
-        if self.alpha_model == 'kmeans':
-            # shape will be defined by mode, mode=='C': (C, ), mode=='I': (2, )
-            alpha = posterior_samples["alpha"].mean(0)
-        else:
-            overdispersion = posterior_samples["overdispersion"].mean(0) + 1
-            # alpha.shape = (2, )
-            alpha = q ** 2 / (q * (overdispersion) - q)
-            if self.model._model_config['alpha_offset']:
-                alpha = alpha + jnp.array([0, self.model._model_config['alpha_offset']])
 
-            alpha_mean_over_cells = alpha
+        overdispersion = posterior_samples["overdispersion"].mean(0) + 1
+        # alpha.shape = (2, )
+        alpha = q ** 2 / (q * (overdispersion) - q)
+        if self.model._model_config['alpha_offset']:
+            alpha = alpha + jnp.array([0, self.model._model_config['alpha_offset']])
+
+        alpha_mean_over_cells = alpha
 
         posterior_samples_mean = {"q": q, "w": w, "alpha": alpha,
                                   "w_mean_over_cells": w_mean_over_cells, "alpha_mean_over_cells": alpha_mean_over_cells}
-        if self.alpha_model == 'overdispersion':
-            posterior_samples_mean["overdispersion"] = overdispersion
+        posterior_samples_mean["overdispersion"] = overdispersion
         # Negative control model
         if 'noise_mean_inv_inc' in posterior_samples:
             s = jnp.ones(self.model.data["x"].shape[0]) if self.model.data["s"] is None else self.model.data["s"]
@@ -832,21 +820,16 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
     """
 
     def __init__(self):
-        self.mode = None
         self._name = "Abstract"
         self._version = "0.0.0"
         self._data = None
         self._kmeans_dict = None
-        self.alpha_model = None
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
                               s: Union[pd.Series, np.ndarray, Array] = None,
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
-                              sigma: Union[np.ndarray, Array] = None,
-                              mode: str = "H",
-                              alpha_model="overdispersion",
                               **kwargs):
         """
         """
@@ -860,7 +843,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                           "clone": clone,
                           # If clone is not contiuous, then there will be problems with indexing
                           "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
-                          "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE),
                           }
         # Without outliers
         self.data = {"x": jnp.array(x[jnp.where(zscore < outlier_threshold)], dtype=INT_DTYPE),
@@ -868,7 +850,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                      "x_neg": jnp.array(neg_cont[jnp.where(zscore < outlier_threshold)], dtype=FLOAT_DTYPE) if neg_cont is not None else None,
                      "clone": jnp.array(clone[jnp.where(zscore < outlier_threshold)], dtype=INT_DTYPE) if clone is not None else None,
                      "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone[jnp.where(zscore < outlier_threshold)]),
-                     "sigma": None if sigma is None else jnp.array(sigma, dtype=FLOAT_DTYPE)[jnp.where(zscore < outlier_threshold)],
                      }
 
     def _init_kmeans(self, scale_factor=1.0, outlier_threshold=None) -> Dict:
@@ -886,7 +867,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         x = self.data["x"].copy()
         x_no_outliers = x
         clone = self.data.get("clone_continuous", None)
-        sigma = self.data.get("sigma", None)
         n_clusters = 2  # KMeans with 2 clusters
 
         # Perform KMeans clustering
@@ -926,42 +906,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         cluster_variances = np.array(cluster_variances)[sorted_indices]
         cluster_proportions = np.array(cluster_proportions)[sorted_indices]
 
-        if clone is not None and sigma is not None:
-            p1 = cluster_proportions[1]
-            log_odds_p1 = np.log(p1 / (1 - p1))
-            kmeans_dict.update({"mu_w_mean_prior": log_odds_p1,
-                                "mu_w_var_prior": jnp.clip(scale_factor * np.std(cluster_proportions),
-                                                           0.1, 10.0)})
-
-        # Set mode-specific parameters (mode "C" for clonotypes)
-        if clone is not None:
-            unique_clones = jnp.unique(clone)
-            clone_proportions = []
-            clone_means = []
-            clone_means_per_cluster = []
-            clone_variances = []
-            clone_variances_per_cluster = []
-
-            for unique_clone in unique_clones:
-                clone_points = x[clone == unique_clone]
-                clone_labels = labels[clone == unique_clone]
-
-                # Clone-specific proportions
-                clone_cluster_counts = np.bincount(clone_labels, minlength=2)[sorted_indices]
-                clone_proportions.append(clone_cluster_counts / len(clone_points))
-
-                # Clone-specific means and variances
-                clone_means.append(np.mean(clone_points))
-                clone_means_per_cluster.append([np.mean(clone_points[clone_labels == 0]), np.mean(clone_points[clone_labels == 1])])
-                clone_variances.append(np.var(clone_points))
-                clone_variances_per_cluster.append([np.var(clone_points[clone_labels == 0]), np.var(clone_points[clone_labels == 1])])
-
-            cluster_proportions = np.array(clone_proportions)
-            clone_means = np.array(clone_means)
-            clone_variances = np.array(clone_variances)
-            clone_means_per_cluster = np.array(clone_means_per_cluster)
-            clone_variances_per_cluster = np.array(clone_variances_per_cluster)
-
         # Update model configuration with calculated priors
         kmeans_dict.update({
             "z": labels,
@@ -969,10 +913,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
             "cluster_variances": cluster_variances,  # variance for each cluster
             "cluster_proportion": cluster_proportions,
             "tau_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
-            "clone_means": clone_means if clone is not None else None,  # Mean for each clonotype
-            "clone_variances": clone_variances if clone is not None else None,  # Variance for each clonotype
-            "clone_means_per_cluster": clone_means_per_cluster if clone is not None else None,  # Mean for each clonotype per cluster
-            "clone_variances_per_cluster": clone_variances_per_cluster if clone is not None else None,  # Variance for each clonotype per cluster
         })
 
         return kmeans_dict
@@ -1039,15 +979,11 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                               s: Union[pd.Series, np.ndarray, Array] = None,
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
-                              sigma: Union[np.ndarray, Array] = None,
-                              alpha_model="overdispersion",
-                              mode: str = "H",
                               scale_factor: float = 1.0,
                               outlier_threshold: float = None,
                               **kwargs):
 
-        super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c, sigma=sigma, mode=mode,
-                                      alpha_model=alpha_model, **kwargs)
+        super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c, **kwargs)
         self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor,
                                               outlier_threshold=outlier_threshold)
         self._model_config.update(self._kmeans_dict)
@@ -1069,122 +1005,47 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         x = data["x"]
         s = data["s"]
         x_neg = data["x_neg"]
-        clone = data["clone_continuous"]
-        sigma = data["sigma"]
         N_sample = x.shape[0]
-        c_nof = np.unique(clone).size if clone is not None else 0
         K = 2
 
         # Extract hyperpriors
-        mu_w_mean_prior = model_config["mu_w_mean_prior"]
-        mu_w_var_prior = model_config["mu_w_var_prior"]
         cluster_means = model_config["cluster_means"]
         cluster_variances = model_config["cluster_variances"]
-        var_hp = model_config["var_hyperprior"]  # Variance for priors if using alpha_model = kmeans
         tau_concentration_prior = model_config["tau_concentration_prior"]
         overdispersion_scale_prior = model_config["overdispersion_scale_prior"]
         alpha_offset = model_config.get("alpha_offset", False)
 
-        clone_means = model_config.get("clone_means", None)  # Mean for each clonotype
-        clone_variances = model_config.get("clone_variances", None)
-        cluster_proportion = model_config.get("cluster_proportion", None)  # Variance for priors if using alpha_model = kmeans
-
         # Cluster probability prior
-        if clone is not None:
-            if sigma is not None:
-                mu_w = npy.sample("mu_w", npd.Normal(mu_w_mean_prior, mu_w_var_prior))
-                with npy.plate("clone_axis", c_nof):
-                    gamma_w = npy.sample("gamma_w", npd.Normal(loc=0, scale=1))
-                L = jnp.linalg.cholesky(sigma)
-                w_raw = jax.scipy.special.ndtr(jnp.clip(mu_w + jnp.dot(L, gamma_w), -5, 5))
-                w = npy.deterministic("w", jnp.stack([1 - w_raw, w_raw], axis=-1))
-            else:
-                with npy.plate("clone_axis", c_nof):
-                    w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
-            z = npd.Categorical(probs=w[clone])
+        w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
+        z = npd.Categorical(probs=w)
+
+        # Convert kmeans priors to deltas, due to cumsum ordering
+        mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
+        var_deltas = jnp.array([max(cluster_variances[0], 1e-1), max(cluster_variances[1] - cluster_variances[0], 1)])
+
+        # Convert kmeans parameters to lognormal parameters with target mean and variance
+        # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
+        sigma2_q_prior = jnp.log(var_deltas / mean_deltas ** 2 + 1)
+        sigma_q_prior = jnp.maximum(jnp.sqrt(sigma2_q_prior), 0.01)  # avoid sigma=0
+        mu_q_prior = jnp.log(mean_deltas) - sigma2_q_prior / 2
+
+        # Sample delta_q from lognormal distribution and cumsum to create ordered q
+        with npy.plate("cluster_axis", K):
+            delta_q = npy.sample("delta_q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
+        q = npy.deterministic("q", jnp.cumsum(delta_q, axis=0))
+
+        # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
+        overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
+        # For each mixture component, we have one alpha parameter
+        with npy.plate("cluster_axis", K):
+            overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
+        # Make sure that alpha > 1 to prevent exponential dist for the second component
+        if alpha_offset:
+            alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q) + jnp.array([0, alpha_offset]))
         else:
-            w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
-            z = npd.Categorical(probs=w)
-
-        # Variant 1: Model alpha as through overdispersion
-        if self.alpha_model == "overdispersion":
-            # Convert kmeans priors to deltas, due to cumsum ordering
-            mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
-            var_deltas = jnp.array([max(cluster_variances[0], 1e-1), max(cluster_variances[1] - cluster_variances[0], 1)])
-
-            # Convert kmeans parameters to lognormal parameters with target mean and variance
-            # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
-            sigma2_q_prior = jnp.log(var_deltas / mean_deltas ** 2 + 1)
-            sigma_q_prior = jnp.maximum(jnp.sqrt(sigma2_q_prior), 0.01)  # avoid sigma=0
-            mu_q_prior = jnp.log(mean_deltas) - sigma2_q_prior / 2
-
-            # Sample delta_q from lognormal distribution and cumsum to create ordered q
-            with npy.plate("cluster_axis", K):
-                delta_q = npy.sample("delta_q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
-            q = npy.deterministic("q", jnp.cumsum(delta_q, axis=0))
-
-            # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
-            overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
-            # For each mixture component, we have one alpha parameter
-            with npy.plate("cluster_axis", K):
-                overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
-            # Make sure that alpha > 1 to prevent exponential dist for the second component
-            if alpha_offset:
-                alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q) + jnp.array([0, alpha_offset]))
-            else:
-                alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
-
-
-        elif self.alpha_model == "kmeans":
-            # NB mean parameter: q ~ LogNormal(mu_q, sigma_q),
-            # with prior on cluster means and hyperprior variances
-            mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
-            # Cumsum also cumsums the variances, use a small value to be added
-            var_hp_deltas = jnp.array([var_hp, 1])
-
-            sigma2_q_hp = jnp.log(var_hp_deltas / mean_deltas ** 2 + 1)
-            sigma_q_hp = jnp.sqrt(sigma2_q_hp)
-            mu_q_prior = jnp.log(mean_deltas) - sigma2_q_hp / 2
-
-            with npy.plate("cluster_axis", K):
-                delta_q = npy.sample("delta_q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_hp))
-            q = npy.deterministic("q", jnp.cumsum(delta_q, axis=0))
-
-            # NB concentration parameter alpha: convert kmeans variance priors to Gamma parameters,
-            # alpha ~ Gamma(a, b),
-            # with a, b so that mean = cluster_variance and var = hyperprior_variances of the LogNormal
-
-            # Convert kmeans cluster variance to alpha parameter (also dependent on cluster mean)
-            # Use kmeans cluster mean and variance as prior, alpha_prior.shape = (2)
-            alpha_prior = cluster_means**2 / (np.maximum(cluster_variances, 1e-1) - cluster_means)
-
-            # In case of underdispersion (negative alpha), set to a high number, so var ~ mean
-            alpha_prior[alpha_prior <= 0] = 100
-
-            # Set prior to 1 if between 0 and 1 to avoid numerical issues
-            alpha_prior[(alpha_prior > 0) & (alpha_prior < 1)] = 1
-
-            # LogNormal
-            # sigma2_alpha_hp = jnp.log(var_hp / alpha_prior ** 2 + 1)
-            # sigma_alpha_hp = jnp.sqrt(sigma2_alpha_hp)
-            #
-            # mu_alpha_prior = jnp.log(alpha_prior) - sigma2_alpha_hp / 2
-
-            # Gamma distribution
-            # compute Gamma parameters
-            a = alpha_prior ** 2 / var_hp
-            b = alpha_prior / var_hp
-
-            with npy.plate("cluster_axis", K):
-                # shape = (2, )
-                alpha = npy.sample("alpha", npd.Gamma(concentration=a, rate=b))
-
-        else:
-            raise NotImplementedError(f" {self.alpha_model} not implemented")
+            alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
 
         if x_neg is not None:
-            if self.alpha_model == 'kmeans':
-                raise NotImplementedError("Not implemented, kmeans model will be killed")
             s_q = npy.sample("s_q", npd.LogNormal(0.9692917285815055, 0.6293977074906485))
             q_neg = npy.deterministic("q_neg", jnp.clip(s * q[0] / s_q, a_min=1e-3))
             s_alpha = npy.sample("s_alpha", npd.LogNormal(0.19724303327974974, 0.43970806321879075))

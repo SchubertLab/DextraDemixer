@@ -83,7 +83,7 @@ class ApMHCDeconvolution:
 
 
     @staticmethod
-    def _check_parameters(x, neg_x, c, sigma):
+    def _check_parameters(x, neg_x, c):
         """
         checks consistency of input data before initializing the model
         """
@@ -101,13 +101,4 @@ class ApMHCDeconvolution:
 
             if N_neg != N:
                 raise ValueError(f"x_neg must have the same size than x but got {N_neg} vs {N}.")
-
-        if sigma is not None:
-            if c is None:
-                raise ValueError("If `sigma` is given, clonality vector `c` must be given as well")
-            else:
-                C_nof = len(jnp.unique(c))
-                if sigma.shape[0] != C_nof:
-                    raise ValueError(f"Sigma must have shape ({C_nof},{C_nof}) and defined over clonotypes but has"
-                                     + f"{sigma.shape}")
 
