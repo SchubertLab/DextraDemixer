@@ -69,7 +69,6 @@ class DextraDemixer(ApMHCDeconvolution):
 
         self.sampler = None
         self.trace = None
-        self.is_svi = None
         self.svi_result = None
         self.rng_key = None
         self.guide = None
@@ -117,8 +116,6 @@ class DextraDemixer(ApMHCDeconvolution):
             neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
             ir_key: the MuData AIRR module key
             ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
-            ir_cov_key: (Optional) the key in AIRR module's `.uns` that contains a full, symmetric and square distance matrix
-                         for all clonotype cluster
             use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, is use all
             kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
         """
@@ -165,24 +162,14 @@ class DextraDemixer(ApMHCDeconvolution):
     def get_default_sampler_config():
 
         sampler_config = {
-            "mcmc": {
-                "num_samples": 1000,
-                "num_warmup": 1000,
-                "num_chains": 4,
-                "progress_bar": False,
-                "nuts": {
-                    "target_accept_prob": 0.9,
-                    "max_tree_depth": 15
-                }
-            },
             "svi": {
-                "maxiter": 5000,
+                "maxiter": 1000,
                 "progress_bar": True,
                 "adam": {
-                    "init_value": 1e-2,
-                    "transition_steps": 1000,
-                    "decay_rate": 0.99,
-                    "end_value": 1e-7
+                    "init_value": 3e-1,
+                    "transition_steps": 1,
+                    "decay_rate": 0.995,
+                    "end_value": 3e-3,
                 },
                 "tracer": {
                     "num_particles": 10,
@@ -191,29 +178,6 @@ class DextraDemixer(ApMHCDeconvolution):
         }
 
         return sampler_config
-
-    def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng_key: int = 3) -> az.InferenceData:
-        """
-        fits the mixture model with MCMC and returns the trace
-        """
-        if self.model.data is None:
-            raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
-
-        if sampler_config is None:
-            sampler_config = self.get_default_sampler_config()["mcmc"]
-
-        nuts_config = {**self.get_default_sampler_config()["mcmc"]["nuts"], **sampler_config.get("nuts", {})}
-        sampling_config = {**self.get_default_sampler_config()["mcmc"], **sampler_config}
-        sampling_config.pop("nuts", None)
-
-        self.sampler = npy.infer.MCMC(
-            npy.infer.NUTS(self.model.model, **nuts_config),
-            **sampling_config
-        )
-
-        self.sampler.run(random.PRNGKey(rng_key))
-
-        return self.__make_arvis()
 
     def fit_svi(self, guide='normal', svi_config: Dict[str, Union[int, float]] = None,
                 nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
@@ -235,7 +199,6 @@ class DextraDemixer(ApMHCDeconvolution):
         if self.model.data is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
-        self.is_svi = True
         self.rng_key = rng_key
 
         if svi_config is None:
@@ -290,7 +253,6 @@ class DextraDemixer(ApMHCDeconvolution):
 
         with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
                          disable=(not svi_config.get("progress_bar", False)), mininterval=10) as t:
-            # batch = max(svi_config.get("maxiter", 1000) // 100, 1)
             batch = 10
             for i in t:
                 svi_state, loss, param = compiled_body_fn(svi_state, i)
@@ -404,25 +366,17 @@ class DextraDemixer(ApMHCDeconvolution):
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
 
         # posterior probability of belonging to the binding class
-        if self.is_svi:
-            if clonotype_adherence and clone_id is not None:
-                # TODO Not used, so did not match outlier filtered data
-                posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
-                                                                sample_shape=(500,))
-                p = __return_p_summary(posterior_samples["w"])
-
-            else:
-                predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
-                                                  num_samples=500)
-                samples = predictive(jax.random.PRNGKey(self.rng_key), data=data)  # self.rng_key
-                p = __return_p_summary(jnp.exp(samples["log_p"]))
+        if clonotype_adherence and clone_id is not None:
+            # TODO Not used, so did not match outlier filtered data
+            posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
+                                                            sample_shape=(500,))
+            p = __return_p_summary(posterior_samples["w"])
 
         else:
-            # TODO Unused, did not update with outlier filtered data
-            if clonotype_adherence and clone_id is not None:
-                p = __return_p_summary(self.sampler.get_samples()["w"])
-            else:
-                p = __return_p_summary(jnp.exp(self.sampler.get_samples()["log_p"][..., [0,1]]))
+            predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
+                                                num_samples=500)
+            samples = predictive(jax.random.PRNGKey(self.rng_key), data=data)  # self.rng_key
+            p = __return_p_summary(jnp.exp(samples["log_p"]))
 
         if cred_intvl is not None:
             p, assignment, threshold = self._predict_posterior_class_dist(p, target_fdr, cred_intvl)
@@ -446,16 +400,13 @@ class DextraDemixer(ApMHCDeconvolution):
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
 
-        if self.is_svi:
-            posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
-                                                            sample_shape=(500,))
+        posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
+                                                        sample_shape=(500,))
 
-            # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
-            posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
-            inference_data = az.from_dict(posterior=posterior_samples_np)
-            return az.summary(inference_data, var_names=["~log_p"])
-        else:
-            return az.summary(self.trace, var_names=["~log_p"])
+        # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
+        posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
+        inference_data = az.from_dict(posterior=posterior_samples_np)
+        return az.summary(inference_data, var_names=["~log_p"])
 
     def __make_arvis(self):
         self.trace = az.from_numpyro(self.sampler)
@@ -530,11 +481,8 @@ class DextraDemixer(ApMHCDeconvolution):
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
 
-        if self.is_svi:  # svi
-            predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=num_samples)
-            posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
-        else:  # mcmc inference
-            posterior_samples = self.sampler.get_samples(num_samples)
+        predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=num_samples)
+        posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
 
         # Extract mean from posterior samples
         q = posterior_samples["delta_q"].mean(0).cumsum(0)
