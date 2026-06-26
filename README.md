@@ -1,44 +1,38 @@
-# DextraDemixer Package
+# DextraDemixer
 
-This module implements several mixture models to infer pMHC dextramere specificity from single-cell immune profiling data
-with increasing usage of information
+DextraDemixer is a Python package for identifying antigen-specific T cells from pMHC multimer experiments.
 
-**Given**:
+The package implements the mixture model described in **DextraDemixer enables accurate identification of antigen-specific T cells from pMHC multimer experiments** [link](https://www.biorxiv.org/content/10.64898/2026.06.23.733339v1)
 
-A read count matrix **$X_{ij}\in \mathbb{N}$** approximating the avidity of $i\in N$ T cell for the $j\in M$ epitope. The $N$ T cells can be grouped based on their T-cell receptor sequence into $C$ cluster.
+DextraDemixer models pMHC multimer UMI counts to distinguish antigen-specific binders from nonspecific binders, enabling more accurate identification of T cells recognizing specific peptide–MHC targets.
 
-**Assumption**:
+DextraDemixer is under active development. We are continuously improving the usability, documentation, and functionality of the package. Feedback and contributions are welcome.
 
-1) Each read counts $X_{.j}$ of an epitope is iid.
-2) We assume that $X_{.j}$ can be represented as a mixture of two Negative Binomial distributions. Each clonal group $c \in C$ belongs to either the clone-specific **Binding** or the **Non-Binding** component. The **Non-Binding** component represents unspecific epitope binding and assay noise.
-3) It is assumed that unspecific binding T cells and non-binding T cells exhibit lower read counts compared to specifically binding T cell after appropriate normalization.
-4) T cells of a clonal group $c\in C$ are drawn from the same distribution.
+## Installation and Tutorial
 
-# Help needed!
+Please execute the following to install DextraDemixer:
 
-I am looking for volunteers who are interested in developing and testing this package with
-me. TODOS will be managed as issues.
-
-# Installation
-
-DextraDemixer requires python>=3.10
-
-**Pip**:
-```
-TODO: create pip package
-pip install DextraDemixer
-```
-
-**From Repository**:
-```
+```bash
 git clone git@github.com:SchubertLab/DextraDemixer.git
 cd DextraDemixer
-pip install -e .
+conda env create -f environment.yaml
 ```
 
-# Citation
-If you found this tool helpful in your research, please cite:
-```
-@article {dextraMixerTODO
+A tutorial can be found in `Tutorial.ipynb`.
+
+## Citation
+
+If you found this tool helpful for your research, please cite:
+
+```bibtex
+@article {An2026DextraDemixer,
+author = {An, Yang and Drost, Felix and Bonafonte-Pard{\`a}s, Irene and Grotz, Myriam and Schober, Kilian and Schubert, Benjamin},
+title = {DextraDemixer enables accurate identification of antigen-specific T cells from pMHC multimer experiments},
+elocation-id = {2026.06.23.733339},
+year = {2026},
+doi = {10.64898/2026.06.23.733339},
+publisher = {Cold Spring Harbor Laboratory},
+URL = {https://www.biorxiv.org/content/early/2026/06/25/2026.06.23.733339},
+journal = {bioRxiv}
 }
 ```
