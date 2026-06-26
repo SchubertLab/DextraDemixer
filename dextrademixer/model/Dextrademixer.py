@@ -470,63 +470,32 @@ class DextraDemixer(ApMHCDeconvolution):
             posterior_samples_mean['overdispersion_neg'] = overdispersion_neg
         return posterior_samples_mean
 
-    def plot_results(self, assignment, p_pred, y_true=None, seed=42, config='', additional_text=None,
-                     save_dir='figs/', show=False, return_plt=False, data=None):
+    def plot_results(self, assignment, p_pred, y_true=None, seed=42, show=False, return_plt=False, data=None):
 
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
 
         if y_true is None:
+            # Create pseudo ground-truth label for plotting
             y_true = np.zeros_like(assignment)
-        plt.figure(figsize=(16, 12))
-
+        
         data = data if data is not None else self.model.data_full
+        
+        plt.figure(figsize=(10, 7))
 
-        # Plot data colored in predicted class assignment
-        plt.subplot(3, 4, 1)
-        ax = sns.histplot(x=data["x"], hue=assignment,
-                          discrete=True, element="step", alpha=0.3)
-        leg = ax.get_legend()
-        leg.set_title("Pred class")
-        leg.set_frame_on(False)
-
-        sns.despine()
-        plt.title("Predicted class assignment")
-
-        plt.subplot(3, 4, 5)
-        ax = sns.histplot(x=data["x"], hue=assignment,
-                          discrete=True, element="step", alpha=0.3)
-        leg = ax.get_legend()
-        leg.set_title("Pred class")
-        leg.set_frame_on(False)
-        sns.despine()
-        plt.yscale("log")
-        plt.title("Predicted class assignment log-scale")
-
-        plt.subplot(3, 4, 9)
-        ax = sns.scatterplot(x=data["x"], y=p_pred, hue=assignment,
-                             markers={0: ".", 1: "X"}, alpha=0.3)
-        leg = ax.get_legend()
-        leg.set_title("Pred class")
-        leg.set_frame_on(False)
-        sns.despine()
-        plt.xlabel("UMI count")
-        plt.ylabel("Posterior probability")
-        plt.title("Pred prob and pred label")
-
-        # Plot data colored in true class assignment
-        plt.subplot(3, 4, 2)
-        ax = sns.histplot(x=data["x"], hue=y_true,
-                          discrete=True, element="step", alpha=0.3)
+        # FIRST COLUMN - TRUE CLASS ASSIGNMENT
+        # Plot data colored in TRUE class assignment
+        plt.subplot(3, 3, 1)
+        ax = sns.histplot(x=data["x"], hue=y_true, discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
         leg.set_frame_on(False)
         sns.despine()
         plt.title("True class assignment")
 
-        plt.subplot(3, 4, 6)
-        ax = sns.histplot(x=data["x"], hue=y_true,
-                          discrete=True, element="step", alpha=0.3)
+        # Plot data colored in TRUE class assignment log-scale
+        plt.subplot(3, 3, 4)
+        ax = sns.histplot(x=data["x"], hue=y_true, discrete=True, element="step", alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
         leg.set_frame_on(False)
@@ -534,7 +503,8 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.yscale("log")
         plt.title("True class assignment log-scale")
 
-        plt.subplot(3, 4, 10)
+        # Plot UMI count vs predicted probability colored in TRUE class assignment
+        plt.subplot(3, 3, 7)
         ax = sns.scatterplot(x=data["x"], y=p_pred, hue=y_true, alpha=0.3)
         leg = ax.get_legend()
         leg.set_title("True class")
@@ -544,12 +514,39 @@ class DextraDemixer(ApMHCDeconvolution):
         plt.ylabel("Posterior probability")
         plt.title("Pred prob and true label")
 
-        if additional_text is not None:
-            plt.subplot(3, 4, 11)
-            plt.text(0.01, 0.95, additional_text, fontsize=10, ha='left', va='top')
-            plt.axis('off')
+        # SECOND COLUMN - PREDICTED CLASS ASSIGNMENT
+        # Plot data colored in PREDICTED class assignment
+        plt.subplot(3, 3, 2)
+        ax = sns.histplot(x=data["x"], hue=assignment, discrete=True, element="step", alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.title("Predicted class assignment")
 
-        # # Plot posterior distribution of Negative Binomial
+        # Plot data colored in PREDICTED class assignment in log scale
+        plt.subplot(3, 3, 5)
+        ax = sns.histplot(x=data["x"], hue=assignment, discrete=True, element="step", alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.yscale("log")
+        plt.title("Predicted class assignment log-scale")
+
+        # Plot UMI count vs predicted probability colored in PREDICTED class assignment
+        plt.subplot(3, 3, 8)
+        ax = sns.scatterplot(x=data["x"], y=p_pred, hue=assignment, markers={0: ".", 1: "X"}, alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.xlabel("UMI count")
+        plt.ylabel("Posterior probability")
+        plt.title("Pred prob and pred label")
+
+        # THIRD COLUMN - POSTERIOR DISTRIBUTION OF NEGATIVE BINOMIAL
+        # Plot posterior distribution of Negative Binomial
         posterior_samples = self.get_posterior_samples(num_samples=1000, seed=seed)
         q = posterior_samples["q"]
         w = posterior_samples["w"]
@@ -560,118 +557,45 @@ class DextraDemixer(ApMHCDeconvolution):
         prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha[1]).log_prob(x))
 
         # Individual Negative Binomial
-        plt.subplot(3, 4, 8)
+        plt.subplot(3, 3, 6)
         ax1 = sns.lineplot(x=np.arange(0, data["x"].max()), y=prob0,
-                            label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", color=sns.color_palette('tab10')[0])
+                            label=fr"$q={q[0]:.1f}\ \alpha={alpha[0]:.1f}$", color=sns.color_palette('tab10')[0])
         ax2 = ax1.twinx()
         sns.lineplot(x=np.arange(0, data["x"].max()), y=prob1, ax=ax2,
-                        label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", color=sns.color_palette('tab10')[1])
+                        label=fr"$q={q[1]:.1f}\ \alpha={alpha[1]:.1f}$", color=sns.color_palette('tab10')[1])
         handles = ax1.lines + ax2.lines
         labels = [h.get_label() for h in handles]
         ax1.legend(handles, labels, frameon=False, loc='best')
         ax2.get_legend().remove()
         sns.despine()
-        plt.title("Posterior NB without mixing weights")
+        plt.title("Posterior NB components")
         plt.ylabel("Probability")
 
         # Mixture model
-        plt.subplot(3, 4, 4)
-        if data["clone_continuous"] is not None:
-            # Use different w for each clonotype: w.shape = (#clonotypes, 2)
-            # probX = (max UMI)
-            prob0_mix = prob0[None,] * w[:, 0:1]
-            prob1_mix = prob1[None,] * w[:, 1:2]
-            w_mean = w.mean(0)
-            sns.lineplot(x=x, y=prob0_mix.mean(0), c=sns.color_palette('tab10')[0],
-                            label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}")
-            sns.lineplot(x=x, y=prob1_mix.mean(0), c=sns.color_palette('tab10')[1],
-                            label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}")
-            sns.lineplot(x=x, y=prob0_mix.mean(0) + prob1_mix.mean(0), c="k", linestyle=":",
-                            label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}")
-            plt.fill_between(x, np.quantile(prob0_mix, 0.05, axis=0), np.quantile(prob0_mix, 0.95, axis=0),
-                                alpha=0.3, label='5%-95% percentile')
-            plt.fill_between(x, np.quantile(prob1_mix, 0.05, axis=0), np.quantile(prob1_mix, 0.95, axis=0),
-                                alpha=0.3, label='5%-95% percentile')
-            plt.legend(frameon=False)
-        else:
-            # w.shape = (2,)
-            prob0_mix = prob0 * w[0]
-            prob1_mix = prob1 * w[1]
-            w_mean = w
+        plt.subplot(3, 3, 3)
+        # w.shape = (2,)
+        prob0_mix = prob0 * w[0]
+        prob1_mix = prob1 * w[1]
+        w_mean = w
 
-            sns.lineplot(x=x, y=prob0_mix.reshape(-1),
-                            label=f"q={q[0]:.2f} alpha={alpha[0]:.2f}", linewidth=3)
-            sns.lineplot(x=x, y=prob1_mix.reshape(-1),
-                        label=f"q={q[1]:.2f} alpha={alpha[1]:.2f}", linewidth=3)
-            sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
-                            label=f"mixture w={w_mean[0]:.4f}, {w_mean[1]:.4f}", linestyle="--")
-            plt.legend(frameon=False)
+        sns.lineplot(x=x, y=prob0_mix.reshape(-1),
+                        label=fr"$q={q[0]:.1f}\ \alpha={alpha[0]:.1f}$", linewidth=3)
+        sns.lineplot(x=x, y=prob1_mix.reshape(-1),
+                    label=fr"$q={q[1]:.1f}\ \alpha={alpha[1]:.1f}$", linewidth=3)
+        sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
+                        label=f"w={w_mean[0]:.2f}, {w_mean[1]:.3f}", linestyle="--")
+        plt.legend(frameon=False)
         sns.despine()
         plt.title("Posterior Mixture NB")
         plt.ylabel("Probability")
 
-        # Plot kmeans clusters
-        if self.model_type == "mixturemodelkmeans":
-            cluster_means = self.model._kmeans_dict["cluster_means"]
-            cluster_vars = self.model._kmeans_dict["cluster_variances"]
-            dists = jnp.abs(data["x"][:, None].repeat(2, axis=1) - cluster_means)
-            labels = np.argmin(dists, axis=1)
+        plt.tight_layout()
 
-            plt.subplot(3, 4, 3)
-            ax = sns.histplot(x=data["x"], hue=labels, discrete=True, element="step", alpha=0.3, stat='percent')
-            leg = ax.get_legend()
-            leg.set_title("KMeans cluster")
-            leg.set_frame_on(False)
-            plt.axvline(cluster_means[0], color="red", linestyle="--")
-            plt.axvline(cluster_means[1], color="red", linestyle="--")
-            sns.despine()
-            plt.title("KMeans clustering")
-            plt.ylabel("Percent")
-
-            plt.subplot(3, 4, 7)
-            ax = sns.histplot(x=data["x"], hue=labels, discrete=True, element="step", alpha=0.3, stat='percent')
-            leg = ax.get_legend()
-            leg.set_title("KMeans cluster")
-            leg.set_frame_on(False)
-            plt.yscale("log")
-            plt.axvline(cluster_means[0], color="red", linestyle="--")
-            plt.axvline(cluster_means[1], color="red", linestyle="--")
-            sns.despine()
-            plt.title("KMeans cluster log-scale")
-            plt.ylabel("Percent")
-
-            plt.subplot(3, 4, 12)
-            alpha = cluster_means**2 / (cluster_vars - cluster_means)
-            alpha[alpha < 0] = 100
-            x = np.arange(0, data["x"].max())
-            prob0 = jnp.exp(npd.NegativeBinomial2(cluster_means[0], alpha[0]).log_prob(x))
-            prob1 = jnp.exp(npd.NegativeBinomial2(cluster_means[1], alpha[1]).log_prob(x))
-
-            sns.lineplot(x=x, y=prob0, label=f"q={cluster_means[0]:.2f} alpha={alpha[0]:.2f}")
-            sns.lineplot(x=x, y=prob1, label=f"q={cluster_means[1]:.2f} alpha={alpha[1]:.2f}")
-            plt.legend(title="KMeans cluster", frameon=False)
-            sns.despine()
-            plt.title("kMeans determined distribution")
-            plt.ylabel("Probability")
-
-        # Save plot
-        try:
-            f1 = f1_score(assignment, y_true)
-        except:
-            # if y_true is None or str
-            f1 = -1
-        plt.suptitle(config.replace("_", " ")
-                     .replace("ncell", "\nncell") + f"\nF1-score {f1:.3f}",)
-        if save_dir is not None:
-            os.makedirs(save_dir, exist_ok=True)
-            plt.savefig(os.path.join(save_dir, f"{config}.png"))
         if show:
             plt.show()
         if return_plt:
             return
         plt.close()
-
-        return q, alpha, w
 
     def save_model(self, filepath):
         """
