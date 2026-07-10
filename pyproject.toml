@@ -24,7 +24,7 @@ dependencies = [
     "statsmodels>=0.14.5",
     "tqdm>=4.68.3",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 description = "Bayesian model for antigen-specificity assignment of single-cell pMHC multimer data"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -37,6 +37,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
     "Programming Language :: Python :: 3 :: Only",
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [project.urls]
 Homepage = "https://github.com/SchubertLab/DextraDemixer"
