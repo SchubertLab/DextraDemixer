@@ -460,10 +460,10 @@ class DextraDemixer(ApMHCDeconvolution):
             posterior_samples_mean['noise_mean_inv_inc'] = posterior_samples['noise_mean_inv_inc'].mean(0)
             posterior_samples_mean['noise_overdisp_inv_inc'] = posterior_samples['noise_overdisp_inv_inc'].mean(0)
 
-            q_neg = jnp.clip(s * q[0] / posterior_samples_mean['noise_mean_inv_inc'], a_min=1e-3)
+            q_neg = jnp.clip(s * q[0] / posterior_samples_mean['noise_mean_inv_inc'], 1e-3, None)
             overdispersion_neg = jnp.clip(
                 posterior_samples_mean['overdispersion'][0] / posterior_samples_mean['noise_overdisp_inv_inc'],
-                a_min=1.0 + 1e-3)
+                1.0 + 1e-3, None)
             alpha_neg = q_neg ** 2 / (q_neg * overdispersion_neg - q_neg)
             posterior_samples_mean['q_neg'] = q_neg.mean()
             posterior_samples_mean['alpha_neg'] = alpha_neg.mean()
@@ -866,9 +866,9 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
         if x_neg is not None:
             s_q = npy.sample("s_q", npd.LogNormal(0.9692917285815055, 0.6293977074906485))
-            q_neg = npy.deterministic("q_neg", jnp.clip(s * q[0] / s_q, a_min=1e-3))
+            q_neg = npy.deterministic("q_neg", jnp.clip(s * q[0] / s_q, 1e-3, None))
             s_alpha = npy.sample("s_alpha", npd.LogNormal(0.19724303327974974, 0.43970806321879075))
-            overdispersion_neg = npy.deterministic("overdispersion_neg", jnp.clip(overdispersion[0] / s_alpha, a_min=1.0 + 1e-3))
+            overdispersion_neg = npy.deterministic("overdispersion_neg", jnp.clip(overdispersion[0] / s_alpha, 1.0 + 1e-3, None))
             with npy.plate("sample_axis", N_sample):
                 alpha_neg = npy.deterministic("alpha_neg", q_neg ** 2 / (q_neg * overdispersion_neg - q_neg))
                 yhat_neg = npy.sample("yhat_neg", obs=x_neg,
