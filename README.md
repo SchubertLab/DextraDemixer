@@ -20,6 +20,10 @@ conda env create -f environment.yaml
 
 A tutorial can be found in `Tutorial.ipynb`.
 
+## Reproducibility
+
+Due to version differences in dependencies (e.g. `jax`, `numpyro`, `optax`), results may differ slightly from run to run and across environments. For full reproducibility of the results reported in our paper, please use the exact pinned environment in the [DextraDemixer_reproducibility](https://github.com/SchubertLab/DextraDemixer_reproducibility) repository.
+
 ## Citation
 
 If you found this tool helpful for your research, please cite:
