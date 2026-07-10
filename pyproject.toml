@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dextrademixer"
+version = "0.0.1"
+dependencies = [
+    "anndata>=0.12.17",
+    "arviz>=0.22.0",
+    "jax>=0.8.1",
+    "matplotlib>=3.10.7",
+    "mudata>=0.3.2",
+    "muon>=0.1.7",
+    "numpy>=2.3.5",
+    "numpyro>=0.19.0",
+    "optax>=0.2.6",
+    "pandas>=2.3.3",
+    "scanpy>=1.11.5",
+    "scikit-learn>=1.7.2",
+    "scipy>=1.16.3",
+    "scirpy>=0.22.3",
+    "seaborn>=0.13.2",
+    "statsmodels>=0.14.5",
+    "tqdm>=4.68.3",
+]
+requires-python = ">=3.10"
+description = "Bayesian model for antigen-specificity assignment of single-cell pMHC multimer data"
+readme = "README.md"
+license = "BSD-3-Clause"
+authors = [{name = "Benjamin Schubert", email = "benjamin.schubert@helmholtz-munich.de"}, {name = "Yang An"}, {name = "Felix Drost"}, {name = "Irene Bonafonte-Pardàs"}]
+maintainers = [{name = "Benjamin Schubert", email = "benjamin.schubert@helmholtz-munich.de"}]
+keywords = ["single-cell", "pMHC", "binder", "assignment"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.urls]
+Homepage = "https://github.com/SchubertLab/DextraDemixer"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dextrademixer*"]
+exclude = ["dextrademixer.test", "dextrademixer.test.*"]
