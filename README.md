@@ -1,28 +1,35 @@
 # DextraDemixer
-
+![Framework](Framework.png)
 DextraDemixer is a Python package for identifying antigen-specific T cells from pMHC multimer experiments.
 
-The package implements the mixture model described in **DextraDemixer enables accurate identification of antigen-specific T cells from pMHC multimer experiments** [link](https://www.biorxiv.org/content/10.64898/2026.06.23.733339v1)
+The package implements the mixture model described in [**DextraDemixer enables accurate identification of antigen-specific T cells from pMHC multimer experiments**](https://www.biorxiv.org/content/10.64898/2026.06.23.733339v1)
 
 DextraDemixer models pMHC multimer UMI counts to distinguish antigen-specific binders from nonspecific binders, enabling more accurate identification of T cells recognizing specific peptide–MHC targets.
 
 DextraDemixer is under active development. We are continuously improving the usability, documentation, and functionality of the package. Feedback and contributions are welcome.
 
 ## Installation and Tutorial
+The easiest way to install DextraDemixer into your existing environment is to run
+```bash
+pip install dextrademixer
+```
 
-Please execute the following to install DextraDemixer:
+Alternatively, install DextraDemixer in editable/development mode:
 
 ```bash
 git clone git@github.com:SchubertLab/DextraDemixer.git
 cd DextraDemixer
-conda env create -f environment.yaml
+## Uncomment if you want to use the pinned dependency versions used for the results in the paper for reproducibility
+# conda env create -f environment.yaml  
+# conda activate dextrademixer
+pip install -e .
 ```
 
 A tutorial can be found in `Tutorial.ipynb`.
 
 ## Reproducibility
 
-Due to version differences in dependencies (e.g. `jax`, `numpyro`, `optax`), results may differ slightly from run to run and across environments. For full reproducibility of the results reported in our paper, please use the exact pinned environment in the [DextraDemixer_reproducibility](https://github.com/SchubertLab/DextraDemixer_reproducibility) repository.
+Due to version differences in dependencies (e.g. `jax`, `numpyro`, `optax`), results may differ slightly from run to run and across environments. For full reproducibility of the results reported in our paper, please use the exact pinned environment and code in the [DextraDemixer_reproducibility](https://github.com/SchubertLab/DextraDemixer_reproducibility) repository.
 
 ## Citation
 
