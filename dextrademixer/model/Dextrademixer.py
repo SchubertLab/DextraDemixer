@@ -266,14 +266,6 @@ class DextraDemixer(ApMHCDeconvolution):
         losses = jnp.stack(losses)
         params = params[jnp.nanargmin(losses)] if use_minimal_loss else params[-1]
         self.svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
-        posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
-                                                        sample_shape=(500,))
-
-        # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
-        posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
-        inference_data = az.from_dict(posterior=posterior_samples_np)
-
-        return inference_data
 
     def predict_posterior_class(self,
                                 data: Dict = None,
@@ -354,10 +346,6 @@ class DextraDemixer(ApMHCDeconvolution):
         posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
         inference_data = az.from_dict(posterior=posterior_samples_np)
         return az.summary(inference_data, var_names=["~log_p"])
-
-    def __make_arvis(self):
-        self.trace = az.from_numpyro(self.sampler)
-        return self.trace
 
     @staticmethod
     def _predict_posterior_class_dist(p_samples, target_fdr, cred_intvl, nof_thresh=100):
