@@ -123,11 +123,13 @@ class TestDextraDemixer:
     def test_model_registration(self):
         assert DextraDemixer.available_methods()
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("experiment", EXPERIMENTS)
     @pytest.mark.parametrize("model_variant", ALL_MODEL_VARIANTS)
     def test_model_variants_threshold(self, model_variant, experiment, expected_results):
         _run_model(model_variant, experiment, expected_results, threshold=0.5)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("experiment", EXPERIMENTS)
     @pytest.mark.parametrize("prediction_mode", FDR_PREDICTION_MODES, ids=["target_fdr", "target_fdr_cred_intvl"])
     @pytest.mark.parametrize("model_variant", FDR_CAPABLE_MODEL_VARIANTS)
