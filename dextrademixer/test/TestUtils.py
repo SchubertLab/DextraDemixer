@@ -1,6 +1,8 @@
 import unittest
 
-from dextrademixer.utils import *
+import jax.numpy as jnp
+
+from dextrademixer.utils import dist_to_cov_psd, nearest_psd
 
 
 class MyTestCase(unittest.TestCase):

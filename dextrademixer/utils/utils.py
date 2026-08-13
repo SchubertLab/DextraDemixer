@@ -21,13 +21,17 @@ from tqdm import tqdm
 
 def gower_centering(distance_matrix):
     """
-    Applies Gower's 1966 centering method to the distance matrix to obtain a covariance matrix.
+    Apply Gower centering to a distance matrix.
 
-    Parameters:
-        distance_matrix (jax.numpy.ndarray): Symmetric distance matrix.
+    Parameters
+    ----------
+    distance_matrix : jax.Array
+        Symmetric distance matrix.
 
-    Returns:
-        jax.numpy.ndarray: Covariance matrix.
+    Returns
+    -------
+    jax.Array
+        Centered covariance matrix.
     """
     n = distance_matrix.shape[0]
 
@@ -45,14 +49,22 @@ def gower_centering(distance_matrix):
 
 def nearest_psd(matrix, thresh=0.0, use_abs=False):
     """
-    Adjusts a matrix to ensure it is positive semi-definite using JAX.
+    Adjust a matrix to be positive semidefinite.
 
-    Parameters:
-        matrix (jax.numpy.ndarray): Input matrix.
-        use_abs (bool): specify if eigenvalues are adjusted by taking the absolut values or setting negative values to 0
-                        (default False)
-    Returns:
-        jax.numpy.ndarray: Adjusted positive semi-definite matrix.
+    Parameters
+    ----------
+    matrix : jax.Array
+        Input matrix.
+    thresh : float, default=0.0
+        Eigenvalues below this threshold are replaced by a small positive
+        value when ``use_abs`` is false.
+    use_abs : bool, default=False
+        Replace eigenvalues by their absolute values instead of thresholding.
+
+    Returns
+    -------
+    jax.Array
+        Positive-semidefinite matrix.
     """
     matrix = (matrix + matrix.T) / 2
 
@@ -67,15 +79,19 @@ def nearest_psd(matrix, thresh=0.0, use_abs=False):
 
 def dist_to_cov_psd(d, use_abs=False):
     """
-    Converts a symmetric distance matrix into a symmetric positive semi-definite covariance matrix using Gower's
-    centering method.
+    Convert distances to a positive-semidefinite covariance matrix.
 
-    Args:
-        d (jax.numpy.ndarray): Symmetric distance matrix.
-        use_abs (bool): specify if eigenvalues are adjusted by taking the absolut values or setting negative values to 0
-                        (default False)
-    Returns:
-        jax.numpy.ndarray: Symmetric positive semi-definite covariance matrix.
+    Parameters
+    ----------
+    d : jax.Array
+        Symmetric distance matrix.
+    use_abs : bool, default=False
+        Replace covariance eigenvalues by their absolute values.
+
+    Returns
+    -------
+    jax.Array
+        Symmetric positive-semidefinite covariance matrix.
     """
     return nearest_psd(gower_centering(d), use_abs)
 
@@ -87,19 +103,31 @@ def normalize_distance_matrix(D):
 
 
 def dist_to_sim(d, nearest_psed=False, normalize=True, sigma=None, epsilon=None):
-    """"
-    Converts a symmetric distance matrix into a symmetric positive semi-definite similarity matrix using an RBF Kernel:
+    """
+    Convert a symmetric distance matrix to an RBF similarity matrix.
 
-    Kij = exp(- Dij^2/(2*sigma^2))
+    Parameters
+    ----------
+    d : jax.Array
+        Symmetric distance matrix.
+    nearest_psed : bool, default=False
+        Project the result to the nearest positive-semidefinite matrix.
+    normalize : bool, default=True
+        Min-max normalize distances before applying the kernel.
+    sigma : float, optional
+        RBF bandwidth. The median nonzero distance is used by default.
+    epsilon : float, optional
+        Diagonal regularization added to the similarity matrix.
 
-    Args:
-        d (jax.numpy.ndarray): Symmetric distance matrix.
-        nearest_psed (bool): indicating whether the nearest PSD matrix should be constructed
-        normalize (bool): indicating whether  Min-Max normalize should be applied
-        sigma (float): the hyperparameter of the RBF Kernel, if None then the median of the non-zero elements will be used
-        epsilon(float): a small float 1e-6 that is added to the diagonal of the similarity matrix to stabilize it
-    Returns:
-        jax.numpy.ndarray: Symmetric positive semi-definite covariance matrix.
+    Returns
+    -------
+    jax.Array
+        Symmetric similarity matrix.
+
+    Raises
+    ------
+    ValueError
+        If ``d`` is not square and symmetric.
     """
     distance_matrix = jnp.array(d)
     if normalize:
@@ -131,8 +159,26 @@ def calculate_clonotype_kernel(mdat,
                                nearest_psed=False,
                                epsilon=1e-8):
     """
-        calculates TCR dist based on specified metric for unique clones (based on aa sequence identity),
-        calculates kernel based on that, and stores the kernel under specified `airr`.uns.
+    Calculate and store a clonotype similarity kernel.
+
+    Parameters
+    ----------
+    mdat : mudata.MuData
+        Object containing an immune-receptor modality.
+    distance : str, default="tcrdist"
+        Scirpy amino-acid distance metric.
+    ir_key : str, default="airr"
+        Immune-receptor modality key.
+    key_added : str, default="dextrademixer"
+        Prefix for stored distance, kernel, and clonotype fields.
+    normalize : bool, default=False
+        Normalize distances before kernel conversion.
+    sigma : float, optional
+        RBF bandwidth.
+    nearest_psed : bool, default=False
+        Project the kernel to the nearest positive-semidefinite matrix.
+    epsilon : float, default=1e-8
+        Diagonal regularization for the kernel.
     """
     ir.pp.ir_dist(mdat, metric="identity", sequence="aa", cutoff=int(1e8))
     ir.pp.ir_dist(mdat, metric=distance, sequence="aa", cutoff=int(1e8))
@@ -188,7 +234,22 @@ def calculate_clonotype_kernel(mdat,
 
 def sim_to_dist(s: jax.Array) -> jax.Array:
     """
-    converts a quadratic similarity matrix into a distance matrix
+    Convert a square similarity matrix to a distance matrix.
+
+    Parameters
+    ----------
+    s : jax.Array
+        Square symmetric similarity matrix.
+
+    Returns
+    -------
+    jax.Array
+        Log-transformed distance matrix.
+
+    Raises
+    ------
+    ValueError
+        If ``s`` is not square and symmetric.
     """
     if s.shape[0] != s.shape[1] or jnp.any(s != s.T):
         raise ValueError(f"Similarity matrix must be square and symmetric.")
@@ -199,13 +260,19 @@ def sim_to_dist(s: jax.Array) -> jax.Array:
 
 def sample_orthogonal_mtx(n: int, rng_key: int = 42) -> np.ndarray:
     """
-    samples an orthogonal matrix of size nxn
+    Sample an orthogonal square matrix.
 
-    Args:
-        n: dimension size of matrix
-        rng_key: a random seed
-    Returns:
-        A nxn orthonormal matrix
+    Parameters
+    ----------
+    n : int
+        Matrix dimension.
+    rng_key : int, default=42
+        Random seed.
+
+    Returns
+    -------
+    numpy.ndarray
+        Orthogonal matrix with shape ``(n, n)``.
     """
     rng = np.random.RandomState(seed=rng_key)
     return ortho_group.rvs(dim=n, random_state=rng)
@@ -213,12 +280,19 @@ def sample_orthogonal_mtx(n: int, rng_key: int = 42) -> np.ndarray:
 
 def sample_cov_from_eigs(eigs: jax.Array, rng_key: int = 42) -> ndarray[Any, dtype[bool_]]:
     """
-    samples a covariance matrix sampling an orthogonal matrix and multiplying it with eigenvalues
-    Args:
-        eigs: a list of eigenvalues of size n
-        rng_key: a random seed
-    Returns:
-        a covariance matrix of size nxn
+    Sample a covariance matrix with specified eigenvalues.
+
+    Parameters
+    ----------
+    eigs : jax.Array
+        Eigenvalues of the covariance matrix.
+    rng_key : int, default=42
+        Random seed.
+
+    Returns
+    -------
+    numpy.ndarray
+        Covariance matrix with shape ``(n, n)``.
     """
     eigs = jnp.where(eigs < 0, 1e-8, eigs)
     S = jnp.diag(eigs)
@@ -228,8 +302,23 @@ def sample_cov_from_eigs(eigs: jax.Array, rng_key: int = 42) -> ndarray[Any, dty
 
 def generate_sim_from_ltridist(ltrdist, normalize=False, sigma=None, epsilon=0.0):
     """
-    generates a symmetric similarity matrix given a lower triangular matrix of distances
+    Generate a similarity matrix from flattened lower-triangle distances.
 
+    Parameters
+    ----------
+    ltrdist : array-like
+        Strict lower-triangle values of a distance matrix.
+    normalize : bool, default=False
+        Normalize distances before kernel conversion.
+    sigma : float, optional
+        RBF bandwidth.
+    epsilon : float, default=0.0
+        Diagonal regularization.
+
+    Returns
+    -------
+    jax.Array
+        Symmetric similarity matrix.
     """
     N = jnp.int32((jnp.sqrt(8 * jnp.size(ltrdist) + 1) + 1) / 2)
 
@@ -261,9 +350,21 @@ def remove_outliers(sr, iq_range=0.8):
 
 def convert_neg_binom_params(mu, disp):
     """
-    converts mean, std to n and p of scipy.negbinom rv
+    Convert mean and dispersion to SciPy negative-binomial parameters.
 
-    See https://anton-granik.medium.com/fitting-and-visualizing-a-negative-binomial-distribution-in-python-3cc27fbc7ecf
+    Parameters
+    ----------
+    mu : float or array-like
+        Distribution mean.
+    disp : float or array-like
+        Dispersion.
+
+    Returns
+    -------
+    n : float or array-like
+        Number-of-successes parameter.
+    p : float or array-like
+        Success-probability parameter.
     """
 
     p = 1 / (1 + mu * disp)
@@ -273,21 +374,57 @@ def convert_neg_binom_params(mu, disp):
 
 def convert_to_variance(mu, disp):
     """
-    converts mean and dispersion of negative binomial to variance
+    Convert negative-binomial mean and dispersion to variance.
+
+    Parameters
+    ----------
+    mu : float or array-like
+        Distribution mean.
+    disp : float or array-like
+        Dispersion.
+
+    Returns
+    -------
+    float or array-like
+        Distribution variance.
     """
     return mu + disp * mu ** 2
 
 
 def convert_to_invdispersion(mu, var):
     """
-    converts mu and variance to inverse dispersion param of negative binomial
+    Convert negative-binomial mean and variance to inverse dispersion.
+
+    Parameters
+    ----------
+    mu : float or array-like
+        Distribution mean.
+    var : float or array-like
+        Distribution variance.
+
+    Returns
+    -------
+    float or array-like
+        Inverse-dispersion parameter.
     """
     return 1 / ((var - mu) / mu ** 2)
 
 
 def hook_optax(optimizer):
     """
-    Helper function to collect gradient norms during training
+    Wrap an Optax optimizer and collect gradient norms.
+
+    Parameters
+    ----------
+    optimizer : optax.GradientTransformation
+        Optimizer to wrap.
+
+    Returns
+    -------
+    transformation : optax.GradientTransformation
+        Wrapped optimizer transformation.
+    gradient_norms : collections.defaultdict
+        Gradient-norm history keyed by parameter name.
     """
     gradient_norms = defaultdict(list)
 
@@ -374,14 +511,23 @@ def init_worker(worker_mem_limit_mb=None):
 
 def calculate_metrics(y_true: np.ndarray, p_pred: np.ndarray, assignment: np.ndarray, full_metrics: bool = True) -> dict:
     """
-    Calculates performance metrics based on true labels, predicted probabilities, and binary assignments.
-    Args:
-        y_true (np.ndarray): True binary labels (0 or 1).
-        p_pred (np.ndarray): Predicted probabilities for the positive class.
-        assignment (np.ndarray): Binary predictions based on a threshold applied to p_pred.
-        full_metrics (bool): If True, calculates additionally AUROC, accuracy and MCC. Default is True.
-    Returns:
-        dict: A dictionary containing calculated metrics.
+    Calculate binary classification metrics.
+
+    Parameters
+    ----------
+    y_true : numpy.ndarray
+        True binary labels.
+    p_pred : numpy.ndarray
+        Positive-class probabilities.
+    assignment : numpy.ndarray
+        Binary predictions.
+    full_metrics : bool, default=True
+        Include AUROC, accuracy, and Matthews correlation coefficient.
+
+    Returns
+    -------
+    dict
+        Classification metrics and confusion-matrix counts.
     """
     results_dict = {'aps': average_precision_score(y_true, p_pred), 'f1': f1_score(y_true, assignment), 
                     'precision': precision_score(y_true, assignment), 'recall': recall_score(y_true, assignment), }
@@ -428,15 +574,25 @@ def mean_ci_t_interval(x, confidence=0.95):
 
 def aggregate_csv(experiment_path='.', output_path='agg_results.csv', rerun=False, paths=None, fps=None) -> pd.DataFrame:
     """
-    Aggregates CSV files from single experiment outputs into a single DataFrame and saves it as a CSV file using multiprocessing.
-    Args:
-        experiment_path (str): The base directory where the CSV files are located.
-        agg_fp (str): The file path for the aggregated CSV file to be saved.
-        rerun (bool): If True, forces re-aggregation even if the aggregated file already exists. Default is False.
-        paths (list of str): A list of subdirectories within experiment_path to search for CSV files. If None, it defaults to ['csv'].
-        fps (list of str): Alternative instead of using directories, use list of file paths to aggregate. If provided, paths will be ignored.
-    Returns:
-        df (pd.DataFrame): The aggregated DataFrame containing data from all CSV files.
+    Aggregate experiment CSV files and cache the result.
+
+    Parameters
+    ----------
+    experiment_path : str, default="."
+        Base directory containing experiment outputs.
+    output_path : str, default="agg_results.csv"
+        Destination for the aggregated CSV file.
+    rerun : bool, default=False
+        Rebuild the aggregate when an output file already exists.
+    paths : list of str, optional
+        Subdirectories to scan. Defaults to ``["csv"]``.
+    fps : list of str, optional
+        Explicit input files; takes precedence over ``paths``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Aggregated experiment results.
     """
     def read_csv(fp):
         return pd.read_csv(fp, index_col=0)

@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import abc
 
-from typing import TYPE_CHECKING, Tuple
-
 import mudata as md
 
+import jax
 from jax import lax
 import jax.numpy as jnp
 
-if TYPE_CHECKING:
-    from jax._src.typing import Array
-
 
 class ApMHCDeconvolution:
+    """
+    Define the common interface for pMHC deconvolution models.
+
+    Notes
+    -----
+    Concrete implementations preprocess a target pMHC feature, fit their
+    model, and return cell-level probabilities and assignments.
+    """
 
     @abc.abstractmethod
     def preprocess_model_data(self,
@@ -24,25 +28,91 @@ class ApMHCDeconvolution:
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
                               ir_cov_key: str = None,
-                              **kwargs):
+                              **kwargs) -> None:
+        """
+        Preprocess pMHC counts and initialize model state.
+
+        Parameters
+        ----------
+        mdata : mudata.MuData
+            Cell-aligned pMHC count and immune-receptor modalities.
+        pmhc_key : str
+            Name of the target pMHC feature.
+        gex_key : str, default="gex"
+            Key of the modality containing pMHC counts.
+        neg_ctrl_key : str, optional
+            Name of a negative-control feature.
+        ir_key : str, default="airr"
+            Key of the immune-receptor modality.
+        ir_clone_key : str, optional
+            Observation column containing clonotype identifiers.
+        ir_cov_key : str, optional
+            Key of a clonotype covariance or distance matrix.
+        **kwargs : object
+            Implementation-specific preprocessing values.
+        """
         pass
 
     @abc.abstractmethod
     def fit(self, *args, **kwargs):
+        """
+        Fit the deconvolution model.
+
+        Parameters
+        ----------
+        *args : object
+            Implementation-specific positional arguments.
+        **kwargs : object
+            Implementation-specific keyword arguments.
+        """
         pass
 
     @abc.abstractmethod
     def predict_posterior_class(self,
                                 threshold: float = None,
                                 target_fdr: float = None
-                                ) -> Tuple[Array, Array]:
+                                ) -> tuple[jax.Array, jax.Array]:
+        """
+        Predict binding probabilities and binary assignments.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Fixed probability threshold in ``[0, 1]``.
+        target_fdr : float, optional
+            Target Bayesian false discovery rate in ``[0, 1]``.
+
+        Returns
+        -------
+        p : jax.Array
+            Posterior binding probabilities.
+        assignment : jax.Array
+            Binary binding assignments.
+        """
         pass
 
     @staticmethod
-    def _predict_posterior_class(p: Array,
+    def _predict_posterior_class(p: jax.Array,
                                  threshold: float = None,
                                  target_fdr: float = None
-                                 ) -> Array:
+                                 ) -> jax.Array:
+        """
+        Convert binding probabilities to binary assignments.
+
+        Parameters
+        ----------
+        p : jax.Array
+            Cell-level binding probabilities.
+        threshold : float, optional
+            Fixed probability threshold.
+        target_fdr : float, optional
+            Target Bayesian false discovery rate.
+
+        Returns
+        -------
+        jax.Array
+            Binary binding assignments.
+        """
 
         if threshold is not None and target_fdr is not None:
             raise ValueError("Please specify either a manual `threshold` or a `target_fdr` but not both.")
@@ -85,7 +155,16 @@ class ApMHCDeconvolution:
     @staticmethod
     def _check_parameters(x, neg_x, c):
         """
-        checks consistency of input data before initializing the model
+        Check consistency of input arrays before model initialization.
+
+        Parameters
+        ----------
+        x : array-like
+            Target pMHC counts.
+        neg_x : array-like or None
+            Negative-control counts.
+        c : array-like or None
+            Clonotype identifiers.
         """
         N = x.shape[0]
 
@@ -101,4 +180,3 @@ class ApMHCDeconvolution:
 
             if N_neg != N:
                 raise ValueError(f"x_neg must have the same size than x but got {N_neg} vs {N}.")
-

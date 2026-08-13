@@ -13,29 +13,50 @@ def icon_assign_pmhc(adata: Union[md.MuData, ad.AnnData],
                      bg_noise_quantile: float = 0.975,
                      pmhc_keys: Union[str, List[str]] = None,
                      dex_key: str = "dex",
-                     inplace=False,
+                     inplace: bool = False,
                      faithful: bool = False,
-                     ):
+                     ) -> np.ndarray | None:
     """
-    implements the ICON assignment procedure
-    requires clonal information and dextramer counts, and optionally a negative control column to estimate background noise.
+    Assign pMHC specificity with the ICON procedure.
 
-    Args:
-        adata: A MuData object containing only dextramer counts and clonotype information,
-            or an AnnData object containing the dextramer counts and clonotype information in the specified obsm and obs keys.
-        threshold: A relative threshold to determine dextramer-specificity
-        bg_noise: (Optional) A value to substract from dextramer counts to account for background noise. 
-            If None is given, the bg_noise_quantile of the negative control column is used if specified, otherwise 10.
-        pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `dex_key` modality which should be
-            deconvolved. If None is given, the full matrix is used, excluding the negative control if specified.
-        dex_key: the dextramer signal MuData module key, or the obsm key if adata is an AnnData object
-        neg_ctrl_key: (Optional) a string specifying the negative control column in the `dex_key` matrix.
-        ir_clone_key: A string specifying the field in `obs` that holds clonotype ids. 
-            If in the immune receptor modality of a mudata object, should be `ir_key:clone_key`.
-        inplace: boolean indicating whether assignment should be stored in `obsm`
-        faithful: boolean indicating whether to use the original ICON procedure (True) or a debuged version based on the paper description
+    Parameters
+    ----------
+    adata : mudata.MuData or anndata.AnnData
+        Object containing dextramer counts and cell-level clonotype IDs.
+    ir_clone_key : str
+        Column in ``adata.obs`` containing clonotype IDs. For MuData, a
+        modality-prefixed key such as ``"airr:clone_id"`` may be used.
+    neg_ctrl_key : str, optional
+        Negative-control feature in the dextramer matrix.
+    threshold : float, default=0
+        Relative score threshold used to assign specificity.
+    bg_noise : float, optional
+        Background count subtracted from every dextramer feature. If omitted,
+        it is estimated from ``neg_ctrl_key`` or defaults to 10.
+    bg_noise_quantile : float, default=0.975
+        Negative-control quantile used to estimate background noise.
+    pmhc_keys : str or list of str, optional
+        PMHC features to assign. By default, use all features except the
+        negative control.
+    dex_key : str, default="dex"
+        MuData modality key or AnnData ``obsm`` key containing dextramer
+        counts.
+    inplace : bool, default=False
+        Store assignments in ``obsm`` instead of returning them.
+    faithful : bool, default=False
+        Reproduce the original ICON implementation when true; otherwise use
+        the corrected procedure described in the publication.
 
-    Returns: An array of pMHC assignments per cell, or modifies the adata object adding an obsm matrix at `dex_key`
+    Returns
+    -------
+    numpy.ndarray or None
+        Binary cell-by-pMHC assignment matrix, or ``None`` when ``inplace`` is
+        true.
+
+    Raises
+    ------
+    ValueError
+        If clonotype IDs contain missing values.
     """
     # check if clone key contains NA values
     if adata.obs[ir_clone_key].isna().sum() > 0:

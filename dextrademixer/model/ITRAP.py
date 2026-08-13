@@ -18,7 +18,25 @@ warnings.filterwarnings(
 
 class ITRAP:
     """
-    This class implements the ITRAP algorithm introduced by Povlsen et al. (2023).
+    Assign pMHC specificity with the ITRAP algorithm.
+
+    Parameters
+    ----------
+    filters : list of str, optional
+        Filters applied during assignment. Supported values are ``"opt_thr"``,
+        ``"hashing_singlets"``, ``"matching_HLA"``, ``"complete_TCRs"``,
+        ``"specificity_multiplets"``, and ``"is_cell"``. The default is
+        ``["opt_thr"]``.
+
+    Attributes
+    ----------
+    opt_thr : dict or None
+        Fitted UMI thresholds keyed by filter variable.
+    data : pandas.DataFrame or None
+        Preprocessed cell-level pMHC and receptor measurements.
+
+    Notes
+    -----
     First each clonotype with more than 10 cells is assigned an expected target if the highest UMI count is
     significantly higher than the second most abundant pMHC using Wilcoxon p < 0.05.
     Each cell's specificity is then assigned to the most abundant pMHC based on UMI count.
@@ -33,9 +51,12 @@ class ITRAP:
 
     def __init__(self, filters=None):
         """
-        Args:
-            filters: List of filters to apply, options=['opt_thr', 'hashing_singlets', 'matching_HLA', 'complete_TCRs',
-            'specificity_multiplets', 'is_cell'] (default: ['opt_thr'])
+        Initialize an ITRAP model.
+
+        Parameters
+        ----------
+        filters : list of str, optional
+            Filters applied during assignment. The default is ``["opt_thr"]``.
         """
         super().__init__()
         self.opt_thr = None
@@ -58,22 +79,43 @@ class ITRAP:
             chain_pairing_key: str = 'chain_pairing',
             hashing_classification_key: str = 'HTO_classification',
             **kwargs
-        ):
+        ) -> None:
         """
-        Args:
-            adata: A MuData object containing only dextramer counts and clonotype information,
-                or an AnnData object containing the dextramer counts and clonotype information in the specified obsm and obs keys.
-            pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `dex_key` modality which should be deconvolved.
-                If None is given, the full dextramer matrix is used, excluding the negative control.
-            neg_ctrl_key: A string specifying the negative control column in the `dex_key` matrix.
-            ir_clone_key: A string specifying the field in `obs` that holds clonotype ids. If adata is a MuData object, this will be prefixed with `{ir_key}:`
-            dex_key: the dextramer signal MuData module key, or the obsm key if adata is an AnnData object
-            ir_key: the MuData module key where the immune receptor data is stored, only relevant if adata is a MuData object.
-            umi_cols_TRA: list of strings specifying the columns in `obs` that hold the UMI counts for TRA, if available. If adata is a MuData object, these will be prefixed with `{ir_key}:`
-            umi_cols_TRB: list of strings specifying the columns in `obs` that hold the UMI counts for TRB, if available. If adata is a MuData object, these will be prefixed with `{ir_key}:`
-            is_cell_key: string specifying the column in `obs` that indicates whether a barcode is classified as a cell, only relevant if 'is_cell' filter is applied.
-            chain_pairing_key: string specifying the column in `obs` that indicates whether a cell has complete TCR chain pairing, only relevant if 'complete_TCRs' filter is applied.
-            hashing_classification_key: string specifying the column in `obs` that indicates the hashing classification of a cell, only relevant if 'hashing_singlets' filter is applied.
+        Preprocess dextramer and receptor measurements for ITRAP.
+
+        Parameters
+        ----------
+        adata : mudata.MuData or anndata.AnnData
+            Object containing dextramer counts and clonotype information.
+        pmhc_keys : str or list of str, optional
+            PMHC features to assign. By default, use every feature except the
+            negative control.
+        neg_ctrl_key : str
+            Negative-control feature in the dextramer matrix.
+        ir_clone_key : str, default="clone_id"
+            Observation column containing clonotype IDs.
+        dex_key : str, default="dex"
+            MuData modality or AnnData ``obsm`` key containing dextramer
+            counts.
+        ir_key : str, default="airr"
+            MuData immune-receptor modality key.
+        umi_cols_TRA : list of str, optional
+            Observation columns containing TRA UMI counts.
+        umi_cols_TRB : list of str, optional
+            Observation columns containing TRB UMI counts.
+        is_cell_key : str, default="is_cell"
+            Cell-classification column used by the ``"is_cell"`` filter.
+        chain_pairing_key : str, default="chain_pairing"
+            TCR chain-pairing column used by ``"complete_TCRs"``.
+        hashing_classification_key : str, default="HTO_classification"
+            Hashing column used by the ``"hashing_singlets"`` filter.
+        **kwargs : object
+            Additional values accepted for forward compatibility.
+
+        Raises
+        ------
+        ValueError
+            If required controls or observation columns are missing.
         """
         def calc_delta(x):
             """ Calculate UMI ratio of two most abundant pMHCs, 0.25 is a small constant to avoid division by zero"""
@@ -142,7 +184,12 @@ class ITRAP:
 
     def fit(self):
         """
-        Fit the ITRAP model to the data. Calculate the ideal UMI thresholds for filtering
+        Fit UMI thresholds used by the configured filters.
+
+        Raises
+        ------
+        Exception
+            If :meth:`preprocess_model_data` has not been called.
         """
         if self.data is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
@@ -155,18 +202,31 @@ class ITRAP:
             is_cell_keep_values: List=[True],
             chain_pairing_keep_values: List=['single pair', 'extra VDJ', 'extra VJ'],
             hashing_classification_keep_values: List=['singlet', 'Singlet'],
-        ) -> np.array:
+        ) -> np.ndarray:
         """
-        Returns the binder assignments based on the most abundant UMI count for each cell.
-        To filter out noise, different filters are applied to the data.
-        Args:
-            adata: If provided, the pMHC assignment will be added to adata.obs['itrap_pMHC_assignment'] and adata.obsm['itrap_pMHC_assignment'].
-            is_cell_keep_values: List of values in `is_cell_key` column that indicate a barcode is classified as a cell, only relevant if 'is_cell' filter is applied.
-            chain_pairing_keep_values: List of values in `chain_pairing_key` column that indicate a cell has complete TCR, only relevant if 'complete_TCRs' filter is applied.
-            hashing_classification_keep_values: List of values in `hashing_classification_key` column that indicate a cell is a singlet, only relevant if 'hashing_singlets' filter is applied.
-        Returns:
-            An assignment array with the class assignment decision.
-            If adata is not none, the assignment will be added to adata.obsm['itrap_pMHC_assignment'].
+        Assign each cell to its most abundant pMHC and apply filters.
+
+        Parameters
+        ----------
+        adata : mudata.MuData or anndata.AnnData, optional
+            Object in which assignments are also stored under
+            ``"itrap_pMHC_assignment"``.
+        is_cell_keep_values : list, default=[True]
+            Values retained by the ``"is_cell"`` filter.
+        chain_pairing_keep_values : list, optional
+            Values retained by the ``"complete_TCRs"`` filter.
+        hashing_classification_keep_values : list, optional
+            Values retained by the ``"hashing_singlets"`` filter.
+
+        Returns
+        -------
+        numpy.ndarray
+            Cell-level pMHC assignment labels.
+
+        Raises
+        ------
+        NotImplementedError
+            If the requested ``"matching_HLA"`` filter is enabled.
         """
         if self.opt_thr is None:
             print("Model has not been fit yet. Finding optimal thresholds...")

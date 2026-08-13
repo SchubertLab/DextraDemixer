@@ -25,11 +25,22 @@ from dextrademixer.utils.utils import remove_outliers, convert_neg_binom_params,
 
 
 def generate_nb_val(mu, alpha, size):
-    """Generate negative binomial distributed samples by
-    drawing a sample from a gamma distribution with mean `mu` and
-    shape parameter `alpha`, then drawing from a Poisson
-    distribution whose rate parameter is given by the sampled
-    gamma variable.
+    """
+    Generate negative-binomial samples through a gamma-Poisson mixture.
+
+    Parameters
+    ----------
+    mu : float
+        Mean of the negative-binomial distribution.
+    alpha : float
+        Gamma shape, equivalent to inverse overdispersion.
+    size : int
+        Number of independent samples.
+
+    Returns
+    -------
+    numpy.ndarray or list
+        Generated count values.
     """
     g = stats.gamma.rvs(alpha, scale=mu / alpha, size=size)
     if len(g) <= 1:
@@ -41,24 +52,31 @@ def sample_var_from_mean(mean: Union[float, np.ndarray],
                          a: float = 2.0221541172111164, b: float = 1.6969075027280063,
                          resid_std: float = 0.31049623532404225, rng: Union[int, np.random.RandomState] = 42
                          ) -> Union[float, np.ndarray]:
-    """
-    Sample a realistic variance given a mean using the fitted power-law model:
-        log(var) = a + b*log(mean) + Normal(0, resid_std^2)
+    r"""
+    Sample a variance from a fitted mean-variance power law.
 
-    Args:
-        mean : float or np.ndarray
-            Mean(s) at which to sample the variance. Must be > 0; broadcasting allowed.
-        a : float, default 2.0221541172111164
-            Proportionality constant (exp(intercept) from log–log OLS).
-        b : float, default 1.6969075027280063
-            Scaling exponent (slope from log–log OLS).
-        resid_std : float, default 0.31049623532404225
-            Residual standard deviation on the *log-variance* scale (σ from OLS residuals).
-        rng : int | np.random.RandomState, default 42
-            Source of randomness. If int, used as the seed. If None, uses SciPy/Numpy default RNG.
-    Returns:
-        float or np.ndarray
-            A sample of variance values with the same broadcasted shape as `mean`.
+    Parameters
+    ----------
+    mean : float or numpy.ndarray
+        Positive mean values at which to sample variances.
+    a : float, default=2.0221541172111164
+        Proportionality constant from the log-log regression.
+    b : float, default=1.6969075027280063
+        Scaling exponent from the log-log regression.
+    resid_std : float, default=0.31049623532404225
+        Residual standard deviation on the log-variance scale.
+    rng : int or numpy.random.RandomState, default=42
+        Random seed or state.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        Variance sample with the same shape as ``mean``.
+
+    Notes
+    -----
+    The fitted relationship is
+    :math:`\log(\mathrm{var}) = \log(a) + b\log(\mathrm{mean}) + \epsilon`.
     """
 
     if isinstance(rng, int):
@@ -83,36 +101,33 @@ def t_cell_simulation(n_clones=3,
                       binding_ratio=0.5,
                       rng_key=42):
     """
-    Generates test data for a single epitope assignment for n_clones with n_cells_per_clone following:
+    Generate a single-pMHC simulated MuData object.
 
-    1. Randomly assign  n_clones to binder or non-binder matching binding_ratio
+    Parameters
+    ----------
+    n_clones : int, default=3
+        Number of simulated clonotypes.
+    mean_binder_range : sequence of float, optional
+        Bounds for binding-component means.
+    shape_binder_range : sequence of float, optional
+        Bounds for binding-component inverse dispersion.
+    n_cells_per_binder : sequence of int, optional
+        Bounds for the number of cells in binding clonotypes.
+    mean_non_binder : float, default=50
+        Mean of the non-binding component.
+    shape_non_binder : float, default=5
+        Inverse dispersion of the non-binding component.
+    n_cells_per_non_binder : sequence of int, optional
+        Bounds for the number of cells in non-binding clonotypes.
+    binding_ratio : float, default=0.5
+        Probability that a clonotype binds the target.
+    rng_key : int, default=42
+        Random seed.
 
-    2. For each clone:
-        A. for binder: 
-            a1. draw mean randomly generally high "avidity" representing different binding strength
-            a2. draw std randomly from low to moderate range representing clone-specific variance 
-            a3. draw n_cell_per_clone uniformly from n_cell_per_binder
-            a4. draw count data from negative binomial n_cells_per_clone times with generated parameters
-        
-        B. for non-binder: 
-            b1. draw from an epitope-specific negative binomial, representing unspecific binding, with low mean and
-                moderate std
-            b2. draw n_cell_per_clone uniformly from n_cell_per_non_binder
-            b3. draw count data from negative binomial n_cells_per_clone times with generated parameters
-
-            
-    :n_clones: number of T cell clones
-    :mean_binder_range: tuple with start and end range of binding avidity means
-    :std_binder_range: tuple with start and end range of binding avidity standard deviation
-    :n_cell_per_binder: range of sampled T cells per binding clone
-    :mean_non_binder: mean avidity of non-binding T cell clones
-    :std_non_binder: std avidity of non-binding T cell clones
-    :binding_ratio: ratio of binding clones to non-binding clones
-    :n_cell_per_non_binder: range of sampled T cells per non-binding clone (lower than n_cell_per_binder)
-    :rng_key: random seed
-
-    return: two df (one epitope data and one neg control) with n_clones*n_cells_per_clone rows and avidity,
-            binary binding, and clonotype assignment as column
+    Returns
+    -------
+    mudata.MuData
+        Simulated target, negative-control, clonotype, and true-label data.
     """
 
     if n_cells_per_non_binder is None:
@@ -169,7 +184,14 @@ def t_cell_simulation(n_clones=3,
 
 class DextramerSimulator:
     """
-    Simulates dextramer single-cell data based on inferred parameters from real experiments
+    Simulate single-cell dextramer counts from fitted or default parameters.
+
+    Attributes
+    ----------
+    dist_params : dict or None
+        Parameters of distributions estimated from experimental data.
+    params : dict or None
+        Empirical measurements retained for sample-based simulation.
     """
 
     def __init__(self):
@@ -178,6 +200,15 @@ class DextramerSimulator:
 
     @staticmethod
     def default_params():
+        """
+        Return default distribution parameters for simulation.
+
+        Returns
+        -------
+        dict
+            Negative-control, clonotype-size, dispersion, and distance
+            distribution parameters.
+        """
         default_params = {
             'neg_mean': 2.471916508538899,
             'neg_concentration': 0.7342967361574478,
@@ -201,28 +232,40 @@ class DextramerSimulator:
                                    plot_qc: bool = False,
                                    rng_key: int = 42) -> Optional[plt.Axes]:
         """
-        Estimates necessary parameters from real world pMHC data. Requires a negative control pMHC dextramer
-        and known clonotype ids and clonotype distances based on some distance measure.
+        Estimate simulation distributions from experimental pMHC data.
 
-        Only QC filtering should have been performed but now normalization yet
+        Parameters
+        ----------
+        mdata : mudata.MuData
+            QC-filtered, unnormalized count and immune-receptor modalities.
+        neg_ctrl_key : str
+            Negative-control feature identifier.
+        gex_key : str, default="gex"
+            Key of the modality containing pMHC counts.
+        ir_key : str, default="airr"
+            Key of the immune-receptor modality.
+        ir_dist_key : str, default="dist"
+            Key in ``mdata.mod[ir_key].uns`` containing a square clonotype
+            distance matrix.
+        filter_extreme_values : bool or list of bool, default=False
+            Whether to remove extreme values for each of four fitted
+            distribution categories.
+        iq_range : float or list of float, default=0.8
+            Interquantile ranges used for extreme-value filtering.
+        plot_qc : bool, default=False
+            Return diagnostic plots of fitted distributions.
+        rng_key : int, default=42
+            Random seed.
 
-        Args:
-            mdata: A Mudata containing only dextramer counts and clonotype information
-            neg_ctrl_key: a string specifying the negative control column
-            gex_key: the MuData transcriptome module key
-            ir_key: the MuData AIRR module key
-            ir_dist_key: the key in AIRR module's '.uns' that contains a full, symmetric and square distance matrix
-                         for all clonotype cluster
-            filter_extreme_values: boolean or list of booleans indicating whether extreme values should be filtered
-                                   before fitting the theoretical distributions. If a list is provided, at least five
-                                   booleans, one per fitted category of distributions, must be provided.
-            iq_range: inter-quantile range or list of iqr range used to determine extreme values
-                      (Only used if `filter_extreme_values` = True). If a list is provided, at least five
-                                   iqr, one per fitted category of distributions, must be provided.
-            plot_qc: bool determining whether to generate QC-plots for each theoretical dist
-            rng_key: random seed.
-        Returns:
-            (Optional) Matplotlib.Axis array if `plot_qc` = True
+        Returns
+        -------
+        matplotlib.axes.Axes or None
+            Diagnostic axes when ``plot_qc`` is true; otherwise ``None``.
+
+        Raises
+        ------
+        ValueError
+            If inputs have the wrong type or filtering lists are too short.
         """
         rng = np.random.RandomState(seed=rng_key)
         i = 0
@@ -450,31 +493,55 @@ class DextramerSimulator:
                                              rep: int = 0,
                                              ) -> Union[Tuple[MuData, Any], MuData]:
         """
-        Given distribution parameters generate binding data for one pMHC. If certain parameters are not specified,
-        they will be sampled from fitted distributions of real data.
+        Simulate one pMHC from fitted or default parameter distributions.
 
-        Args:
-            total_cells: number of total cell to generate
-            nof_clones: number of clones measured in experiments.
-            binding_ratio: ratio of binder vs non-binder
-            mean_non_binder: mean of non-binder, if specified use this value, else sampled from fitted distribution
-            concentration_non_binder: concentration parameter of non-binder, if specified use this value,
-                                      else sampled from fitted distribution
-            mean_neg_ctrl: mean of negative control, if specified use this value, else sampled from fitted distribution
-            concentration_neg_ctrl: concentration parameter of negative control, if specified use this value,
-                                    else sampled from fitted distribution
-            mean_inc: fold increase of mean of binder vs non-binder, if specified use this value,
-                      else sampled from fitted distribution
-            var_inc: fold increase of the variance to the mean for binder NB distribution, if specified use this value,
-                     else sampled from fitted distribution
-            p_binding_outlier: the probability of a cell of binding clonotype to have low (noise-level) counts
-            use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
-            simulate_neg_control: whether to simulate a negative control pMHC for each cell (default: False)
-            plot_data: boolean whether to plot simulated data (default: False)
-            rng_key: random seed.
+        Parameters
+        ----------
+        total_cells : int, default=5000
+            Total number of cells to generate.
+        nof_clones : int, default=150
+            Number of clonotypes.
+        binding_ratio : float, default=0.05
+            Fraction of binding clonotypes.
+        mean_non_binder : float, optional
+            Non-binding mean; sampled from defaults when omitted.
+        concentration_non_binder : float, optional
+            Non-binding inverse dispersion; sampled when omitted.
+        mean_neg_ctrl : float, optional
+            Negative-control mean; sampled when omitted.
+        concentration_neg_ctrl : float, optional
+            Negative-control inverse dispersion; sampled when omitted.
+        mean_inc : float, optional
+            Fold increase of the binding mean over the non-binding mean.
+        var_inc : float, optional
+            Fold increase used to determine binding-component variance.
+        p_nonbinding_clone_outlier : float, default=0.0
+            Probability of assigning a non-binding clone to a binding
+            clonotype cluster.
+        p_binding_outlier : float, default=0.0
+            Probability that a binding cell receives noise-level counts.
+        nof_clonotype_cluster : int, optional
+            Number of simulated clonotype clusters.
+        use_clonotype_cov : bool, default=False
+            Use clonotype covariance when assigning binding status.
+        simulate_neg_control : bool, default=False
+            Include a negative-control pMHC feature.
+        plot_data : bool, default=False
+            Return a diagnostic plot with the simulated data.
+        rng_key : int, default=42
+            Random seed.
+        rep : int, default=0
+            Replicate identifier stored in the simulation metadata.
 
-        Returns:
-            An Anndata object containing all generated count data and clonal information, and binder status
+        Returns
+        -------
+        mudata.MuData or tuple of mudata.MuData and object
+            Simulated data, optionally paired with a diagnostic plot.
+
+        Raises
+        ------
+        ValueError
+            If the requested number of clonotype clusters is invalid.
         """
         rng = np.random.RandomState(seed=rng_key)
 
@@ -662,21 +729,43 @@ class DextramerSimulator:
                                        rng_key: int = 42
                                        ) -> Union[Tuple[MuData, Any], MuData]:
         """
-        Given negative control samples and other parameters sampled from real world data, generate binding data for
-        one pMHC with predefined positive fold-change.
+        Simulate one pMHC from empirical negative-control samples.
 
-        Args:
-            total_cells: number of total cell to generate
-            nof_clones: number of clones measured in experiments.
-            binding_ratio: ratio of binder vs non-binder
-            binding_fold_increase_range: list of fold increase for pMHC binding cells
-            use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
-            simulate_neg_control: whether to simulate a negative control pMHC for each cell (default: False)
-            plot_data: boolean whether to plot simulated data (default: False)
-            rng_key: random seed.
+        Parameters
+        ----------
+        total_cells : int, default=5000
+            Total number of cells to generate.
+        nof_clones : int, default=150
+            Number of clonotypes.
+        binding_ratio : float, default=0.05
+            Fraction of binding clonotypes.
+        binding_fold_increase_range : list of float, optional
+            Candidate fold increases for binding cells.
+        use_clonotype_cov : bool, default=False
+            Use clonotype covariance when assigning binding status.
+        nof_clonotype_cluster : int, optional
+            Number of simulated clonotype clusters.
+        p_nonbinding_clone_outlier : float, default=0.0
+            Probability of assigning a non-binding clone to a binding
+            clonotype cluster.
+        simulate_neg_control : bool, default=False
+            Include a negative-control pMHC feature.
+        plot_data : bool, default=False
+            Return a diagnostic plot with the simulated data.
+        rng_key : int, default=42
+            Random seed.
 
-        Returns:
-            An Anndata object containing all generated count data and clonal information, and binder status
+        Returns
+        -------
+        mudata.MuData or tuple of mudata.MuData and object
+            Simulated data, optionally paired with a diagnostic plot.
+
+        Raises
+        ------
+        RuntimeError
+            If :meth:`estimate_simulation_params` has not been called.
+        ValueError
+            If the requested number of clonotype clusters is invalid.
         """
 
         if self.params is None:
@@ -845,13 +934,24 @@ class DextramerSimulator:
 
     @staticmethod
     def generate_nb_val(mu, alpha, size=1, rng_key=42):
-        """Generate negative binomial samples
+        """
+        Generate negative-binomial samples with NumPyro.
 
-        Args:
-            mu: the mean parameter (must be positive)
-            alpha: the inverse overdispersion parameter (must be positive)
-            size: the number of iid draws
-            rng_key: int or jax.random.PRNGKey as random seed
+        Parameters
+        ----------
+        mu : float or array-like
+            Positive distribution mean.
+        alpha : float or array-like
+            Positive inverse-overdispersion parameter.
+        size : int, default=1
+            Number of independent draws.
+        rng_key : int or jax.Array, default=42
+            Random seed or JAX random key.
+
+        Returns
+        -------
+        jax.Array
+            Generated count values.
         """
         if isinstance(rng_key, int):
             rng_key = jax.random.PRNGKey(rng_key)
@@ -860,10 +960,10 @@ class DextramerSimulator:
     @staticmethod
     def __cc_assignment(binder_assignment, nof_clones, nof_clonotype_cluster, p_nonbinding_clone_outlier, rng):
         """
-        Split clonotypes into clusters but ensure perfect separation of binding assignment.
-        Missassigns with `p_nonbinding_clone_outlier`probability nonbinding clones to binding clusters
+        Split clonotypes into clusters with binding-aware assignments.
 
-        Returns: an array with clonotype cluster assignments
+        Non-binding clones are assigned to binding clusters with probability
+        ``p_nonbinding_clone_outlier``.
         """
 
         def randomly_assign_to_clusters(assignments, indices, start_cluster, n_clusters):
@@ -918,21 +1018,26 @@ class DextramerSimulator:
     @staticmethod
     def __construct_tcr_kernel(n_clones, cc_assignment, params, rng):
         """
-            construct the TCR-similarity Kernel based on clonotype cluster assignments.
+        Construct a TCR-similarity kernel from clonotype clusters.
 
-            Returns: an n_clones x n_clones similarity matrix
+        Returns a square similarity matrix with one row and column per clone.
         """
 
         def tril_indices_from_subset(row_idx, col_idx):
             """
             Get strictly lower triangular indices for a subset of indices in an n x n matrix.
 
-            Parameters:
-                row_idx (array-like): Selected subset of row indices.
-                col_idx (array-like): Selected subset of colume indices.
+            Parameters
+            ----------
+            row_idx : array-like
+                Selected subset of row indices.
+            col_idx : array-like
+                Selected subset of column indices.
 
-            Returns:
-                tuple: (row_indices, col_indices) for strictly lower triangular elements.
+            Returns
+            -------
+            tuple
+                Row and column indices for strictly lower-triangular elements.
             """
             r_grid, c_grid = np.meshgrid(row_idx, col_idx, indexing='ij')
             mask = r_grid > c_grid

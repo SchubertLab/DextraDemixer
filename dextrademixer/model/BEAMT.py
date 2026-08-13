@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Tuple
-
 import os
 
 import numpy as np
@@ -16,17 +14,24 @@ import jax
 
 from dextrademixer.model import ApMHCDeconvolution
 
-if TYPE_CHECKING:
-    from jax._src.typing import Array
-
-
 class BEAMT(ApMHCDeconvolution):
     """
-    This class implements the BEAM-T algorithm used by 10x Genomics.
-    It requires a negative control besides the pMHC-dextramer and calculates an antigen-specificity score using
-    a Beta distribution parameterized by the UMI counts of the pMHC and negative control.
+    Assign pMHC binding with the 10x Genomics BEAM-T algorithm.
 
-    p = (1-beta.cdf(quantile, pMHC-UMI+1, neg_ctrl-UMI+3))
+    Attributes
+    ----------
+    params : dict or None
+        Beta-distribution parameters derived from target and control counts.
+    p : numpy.ndarray or None
+        Cell-level antigen-specificity probabilities after fitting.
+    data : dict or None
+        Preprocessed target and negative-control counts.
+
+    Notes
+    -----
+    BEAM-T requires a negative-control feature. It parameterizes a beta
+    distribution with target and negative-control UMI counts and calculates the
+    upper-tail probability at a selected percentile.
     """
     __name = "BEAMT"
     __version = "0.0.1"
@@ -38,7 +43,36 @@ class BEAMT(ApMHCDeconvolution):
         self.data = None
 
     def preprocess_model_data(self, mdata: md.MuData, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
-                              ir_key: str = "airr", ir_clone_key: str = None, ir_cov_key: str = None, **kwargs):
+                              ir_key: str = "airr", ir_clone_key: str = None, ir_cov_key: str = None,
+                              **kwargs) -> None:
+        """
+        Extract target and negative-control counts from a MuData object.
+
+        Parameters
+        ----------
+        mdata : mudata.MuData
+            Object containing the pMHC count modality.
+        pmhc_key : str
+            Target pMHC feature name.
+        gex_key : str, default="gex"
+            Key of the modality containing pMHC counts.
+        neg_ctrl_key : str
+            Negative-control feature name.
+        ir_key : str, default="airr"
+            Unused immune-receptor modality key retained for interface
+            compatibility.
+        ir_clone_key : str, optional
+            Unused clonotype column retained for interface compatibility.
+        ir_cov_key : str, optional
+            Unused covariance key retained for interface compatibility.
+        **kwargs : object
+            Additional unused values accepted for interface compatibility.
+
+        Raises
+        ------
+        ValueError
+            If ``neg_ctrl_key`` is missing or extracted arrays are inconsistent.
+        """
         if neg_ctrl_key is None:
             raise ValueError(f"{self.__name} requires a negative control. Please specify a `neg_ctrl_key`.")
 
@@ -54,30 +88,51 @@ class BEAMT(ApMHCDeconvolution):
 
         self.params = {"alpha": x+1, "beta": x_neg+3}
 
-    def fit(self, percentile: float = 0.925):
+    def fit(self, percentile: float = 0.925) -> None:
         """
-        Args:
-            percentile: the percentile which is used to classify pMHC dextramers as binder
+        Calculate cell-level antigen-specificity probabilities.
+
+        Parameters
+        ----------
+        percentile : float, default=0.925
+            Beta-distribution quantile at which the upper-tail probability is
+            evaluated.
+
+        Raises
+        ------
+        Exception
+            If :meth:`preprocess_model_data` has not been called.
         """
         if self.params is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
         self.p = 1 - jax.scipy.stats.beta.cdf(percentile, self.params["alpha"], self.params["beta"])
 
-    def predict_posterior_class(self, threshold: float = None, target_fdr: float = None) -> Tuple[np.array, np.array]:
+    def predict_posterior_class(self, threshold: float = None,
+                                target_fdr: float = None) -> tuple[np.ndarray, np.ndarray]:
         """
-        Returns the binder assignments based on the inferred posterior class probabilities.
-        Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
-        If neither threshold nor target_fdr is provided the max posterior class probability will be used.
+        Return binding probabilities and binary assignments.
 
-        Args:
-             threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
-                        probabilities
-            target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
-                        class probability
-        Returns:
-            A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
-            class assignment decision
+        Parameters
+        ----------
+        threshold : float, optional
+            Probability threshold in ``[0, 1]``. Defaults to 0.5 when neither
+            assignment option is specified.
+        target_fdr : float, optional
+            Target Bayesian false discovery rate in ``[0, 1]``. Mutually
+            exclusive with ``threshold``.
+
+        Returns
+        -------
+        p : numpy.ndarray
+            Cell-level antigen-specificity probabilities.
+        assignment : numpy.ndarray
+            Binary binding assignments.
+
+        Raises
+        ------
+        RuntimeError
+            If :meth:`fit` has not been called.
         """
         if self.p is None:
             raise RuntimeError("Model has not been fit yet. Please call first `fit`.")
@@ -86,7 +141,32 @@ class BEAMT(ApMHCDeconvolution):
         assignment = self._predict_posterior_class(self.p, threshold, target_fdr)
         return self.p.__array__(), assignment.__array__()
 
-    def plot_results(self, assignment, p_pred, y_true=None, seed=42, config=''):
+    def plot_results(self, assignment, p_pred, y_true=None, seed=42, config='') -> None:
+        """
+        Plot target counts and predicted and true assignments.
+
+        Parameters
+        ----------
+        assignment : array-like
+            Predicted binary assignments.
+        p_pred : array-like
+            Cell-level antigen-specificity probabilities.
+        y_true : array-like, optional
+            True labels used for comparison and F1 calculation.
+        seed : int, default=42
+            Reserved random seed retained for API compatibility.
+        config : str, default=""
+            Label used in the figure title and output filename.
+
+        Raises
+        ------
+        RuntimeError
+            If :meth:`fit` has not been called.
+
+        Notes
+        -----
+        The figure is saved under ``figs/{config}.png`` and then displayed.
+        """
 
         if self.p is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")

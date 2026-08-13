@@ -41,7 +41,7 @@ The example below fits one pMHC feature and classifies cells using a posterior-p
 ```python
 import muon as mu
 
-from dextrademixer.model import DextraDemixer
+from dextrademixer import DextraDemixer
 
 mdata = mu.read("data/example_data.h5mu")
 
@@ -90,6 +90,18 @@ See [`Tutorial.ipynb`](Tutorial.ipynb) for a complete, reproducible workflow usi
 ```bash
 jupyter lab Tutorial.ipynb
 ```
+
+## Building the API documentation
+
+Install the documentation dependencies together with the package, then build the
+Sphinx site with warnings treated as errors:
+
+```bash
+python -m pip install -e ".[docs]"
+sphinx-build -W --keep-going -b html docs docs/_build/html
+```
+
+Open `docs/_build/html/index.html` to view the generated API reference.
 
 ## Reproducing the manuscript
 

@@ -55,6 +55,13 @@ dependencies = [
   "tqdm==4.70.0",
 ]
 
+[project.optional-dependencies]
+docs = [
+  "furo",
+  "numpydoc>=1.10",
+  "sphinx>=8.2",
+]
+
 [project.urls]
 Homepage = "https://github.com/SchubertLab/DextraDemixer"
 Issues = "https://github.com/SchubertLab/DextraDemixer/issues"
@@ -67,4 +74,3 @@ include-package-data = false
 [tool.setuptools.packages.find]
 include = ["dextrademixer*"]
 exclude = ["dextrademixer.test*"]
-

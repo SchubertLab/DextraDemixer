@@ -5,7 +5,7 @@ import warnings
 import os
 import pickle
 
-from typing import TYPE_CHECKING, Union, Dict, Tuple
+from typing import Any, Self, Sequence, Union, Dict, Tuple
 
 import arviz as az
 import tqdm
@@ -32,9 +32,6 @@ from optax import exponential_decay
 from dextrademixer.model import ApMHCDeconvolution
 from dextrademixer.utils import RegisteredModel, calculate_metrics
 
-if TYPE_CHECKING:
-    from jax._src.typing import Array
-
 npy.enable_x64()
 
 FLOAT_DTYPE = "float64"
@@ -42,29 +39,38 @@ INT_DTYPE = "int32"
 
 
 class DextraDemixer(ApMHCDeconvolution):
+    r"""
+    Infer pMHC dextramer specificity with a negative-binomial mixture model.
+
+    Parameters
+    ----------
+    model_type : str, default="mixturemodelkmeans"
+        Registered model implementation to use.
+    model_config : dict, optional
+        Values that override the selected model's default configuration.
+
+    Attributes
+    ----------
+    sampler : object or None
+        NumPyro sampler used for inference, when applicable.
+    trace : arviz.InferenceData or None
+        Inference trace produced by a sampler.
+    svi_result : numpyro.infer.svi.SVIRunResult or None
+        Result of stochastic variational inference.
+    model : ADextraDemixerModel
+        Selected probabilistic model implementation.
+
+    Notes
+    -----
+    Given a read-count vector :math:`X_{ij} \in \mathbb{N}` for cells
+    :math:`i` and epitopes :math:`j`, the model assumes two
+    negative-binomial components representing binding and non-binding cells.
+    Cells belonging to the same clonotype may share probability summaries,
+    and the binding component is constrained to have higher normalized counts.
     """
-    This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
-    data with increasing usage of information
 
-    **Given**:
-
-    A read count matrix ***$X_{ij}\in \mathbb{N}$*** approximating the avidity of $i\in N$ T cell for the $j\in M$
-    epitope. The $N$ T cells can be grouped based on their T-cell receptor sequence into $C$ cluster.
-
-    **Assumption**:
-
-    1) Each read counts $X_{.j}$ of an epitope is iid.
-    2) We assume that $X_{.j}$ can be represented as a mixture of two Negative Binomial distributions. Each clonal group
-       $c \in C$ belongs to either the clone-specific **Binding** or the **Non-Binding** component. The **Non-Binding**
-       component represents unspecific epitope binding and assay noise.
-    3) It is assumed that unspecific binding T cells and non-binding T cells exhibit lower read counts compared to
-       specifically binding T cell after appropriate normalization.
-    4) T cells of a clonal group $c\in C$ are drawn from the same distribution.
-
-    """
-
-    def __init__(self, model_type: str = "mixturemodelkmeans", 
-                 model_config: Dict = None):
+    def __init__(self, model_type: str = "mixturemodelkmeans",
+                 model_config: dict[str, Any] | None = None):
         super().__init__()
 
         self.sampler = None
@@ -80,19 +86,28 @@ class DextraDemixer(ApMHCDeconvolution):
         self.model._model_config.update(self.model_config)
 
     @property
-    def version(self):
+    def version(self) -> str:
+        """
+        Return the version of the selected model implementation.
+        """
         return self.model.version
 
     @property
-    def model_type(self):
+    def model_type(self) -> str:
+        """
+        Return the registry name of the selected model implementation.
+        """
         return self.model.name
 
     @staticmethod
-    def available_methods():
+    def available_methods() -> list[str]:
         """
-        Returns a dictionary of available DextraDemixer models and their supported versions
+        Return the names of registered DextraDemixer model implementations.
 
-        :return: list(str) - list of DextraDemixer models represented as string
+        Returns
+        -------
+        list of str
+            Registry names accepted by ``model_type``.
         """
         return [k for k in ADextraDemixerModel.registry.keys()]
 
@@ -103,21 +118,40 @@ class DextraDemixer(ApMHCDeconvolution):
                               neg_ctrl_key: str = None,
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
-                              use_size_factor: bool = None,
+                              use_size_factor: bool | Sequence[str] | None = None,
                               outlier_threshold: float = None,
-                              **kwargs):
+                              **kwargs) -> None:
         """
-        Preprocesses the data and initializes the model
+        Preprocess input counts and initialize the selected model.
 
-        Args:
-            mdata: A Mudata containing only dextramer counts and clonotype information
-            pmhc_key: a string specifying the pMHC column in `gex_key` modality`s `X` which should be deconvolved
-            gex_key: the MuData transcriptome module key
-            neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
-            ir_key: the MuData AIRR module key
-            ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
-            use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, is use all
-            kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
+        Parameters
+        ----------
+        mdata : mudata.MuData
+            Cell-aligned pMHC count and immune-receptor modalities.
+        pmhc_key : str
+            Feature in ``mdata.mod[gex_key]`` to deconvolve.
+        gex_key : str, default="gex"
+            Key of the modality containing pMHC counts.
+        neg_ctrl_key : str, optional
+            Feature containing negative-control counts.
+        ir_key : str, default="airr"
+            Key of the immune-receptor modality.
+        ir_clone_key : str, optional
+            Column in ``mdata.mod[ir_key].obs`` containing clonotype IDs.
+        use_size_factor : bool or sequence of str, optional
+            If truthy, calculate DESeq2-style size factors. A sequence selects
+            the pMHC features used; ``True`` uses every feature in ``gex_key``.
+        outlier_threshold : float, optional
+            Outlier threshold forwarded to the selected model implementation.
+        **kwargs : Any
+            Additional model-specific preprocessing and prior values.
+
+        Raises
+        ------
+        KeyError
+            If a requested modality, feature, or observation column is absent.
+        ValueError
+            If the extracted count and clonotype arrays are inconsistent.
         """
         gex = mdata.mod[gex_key]
         air = mdata.mod[ir_key]
@@ -141,9 +175,21 @@ class DextraDemixer(ApMHCDeconvolution):
         self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, outlier_threshold=outlier_threshold, **kwargs)
 
     @staticmethod
-    def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
+    def calculate_size_factors(counts: jax.Array) -> jax.Array:
         """
-        DESeq2 size factor calculation
+        Calculate DESeq2-style median-ratio size factors.
+
+        Parameters
+        ----------
+        counts : jax.Array
+            Two-dimensional count matrix with cells in rows and features in
+            columns.
+
+        Returns
+        -------
+        jax.Array
+            One size factor per cell. Cells without a finite median ratio
+            receive a factor of one.
         """
 
         log_counts = jnp.log(counts)
@@ -159,7 +205,15 @@ class DextraDemixer(ApMHCDeconvolution):
         return size_factors
 
     @staticmethod
-    def get_default_sampler_config():
+    def get_default_sampler_config() -> dict[str, Any]:
+        """
+        Return the default stochastic variational inference configuration.
+
+        Returns
+        -------
+        dict
+            Nested configuration for optimization, tracing, and iteration.
+        """
 
         sampler_config = {
             "svi": {
@@ -179,19 +233,37 @@ class DextraDemixer(ApMHCDeconvolution):
 
         return sampler_config
 
-    def fit_svi(self, guide='normal', svi_config: Dict[str, Union[int, float]] = None,
+    def fit_svi(self, guide='normal', svi_config: dict[str, Any] | None = None,
                 nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777) \
                 -> az.InferenceData:
         """
-        Implements stochastic variational inference
+        Fit the model with stochastic variational inference.
 
-        guide: The guide to use for variational inference.
-               If None, self.model object will be checked for a guide function,
-               elif 'normal', AutoNormal guide will be used, elif 'mvnormal', AutoMultivariateNormal guide will be used
-        svi_config: configuration for optimizer (Adam) and posterior samples
-        nof_inits: number of initializations tried with different seeds to find gut init values
-        use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
-        rng_key: integer seed to initialize numpyros RNG-Key store
+        Parameters
+        ----------
+        guide : {"normal", "mvnormal", "multivariatenormal"} or callable
+            NumPyro autoguide name or guide constructor. A custom guide defined
+            by the selected model takes precedence.
+        svi_config : dict, optional
+            Overrides for the optimizer, ELBO tracer, progress display, and
+            maximum number of iterations.
+        nof_inits : int, default=100
+            Number of random initializations evaluated before optimization.
+        use_minimal_loss : bool, default=True
+            Use parameters from the iteration with the smallest loss instead
+            of the final iteration.
+        rng_key : int, default=998777
+            Seed used to initialize JAX random keys.
+
+        Returns
+        -------
+        arviz.InferenceData
+            Posterior samples represented as ArviZ inference data.
+
+        Raises
+        ------
+        Exception
+            If :meth:`preprocess_model_data` has not been called.
         """
 
         if self.model.data is None:
@@ -276,30 +348,49 @@ class DextraDemixer(ApMHCDeconvolution):
         return inference_data
 
     def predict_posterior_class(self,
-                                data: Dict = None,
+                                data: dict[str, Any] | None = None,
                                 threshold: float = None,
                                 target_fdr: float = None,
                                 cred_intvl: float = None,
                                 clonotype_median_p: bool = False,
-                                clone_id: Array = None,
-                                ) -> Tuple[Array, Array]:
+                                clone_id: jax.Array | None = None,
+                                ) -> tuple[jax.Array, jax.Array]:
         """
-        Returns the binder assignments based on the inferred posterior class probabilities.
-        Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
-        If neither threshold nor target_fdr is provided the max posterior class probability will be used.
+        Predict posterior binding probabilities and binary assignments.
 
-        Args:
-            threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
-                        probabilities
-            target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
-                        class probability
-            cred_intvl: (Optional) instead of using the summarized class probability we estimate a distribution
-                        over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
-            clonotype_median_p: (Optional) after initial probability, use median within each clonotype for each cell
-            clone_id: (Optional) map each cell id to clone id, shape=(n_cells)
-        Returns:
-            A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
-            class assignment decision
+        Parameters
+        ----------
+        data : dict, optional
+            Preprocessed model data. The full stored data are used by default.
+        threshold : float, optional
+            Probability threshold in ``[0, 1]``. If neither threshold nor FDR
+            control is requested, the default threshold is 0.5.
+        target_fdr : float, optional
+            Target Bayesian false discovery rate in ``[0, 1]``. Mutually
+            exclusive with ``threshold``.
+        cred_intvl : float, optional
+            Required posterior probability that the FDR does not exceed
+            ``target_fdr``.
+        clonotype_median_p : bool, default=False
+            Replace cell-level probabilities with the median probability of
+            each clonotype.
+        clone_id : jax.Array, optional
+            Cell-aligned clonotype identifiers. Stored identifiers are used if
+            available.
+
+        Returns
+        -------
+        p : jax.Array
+            Posterior binding probability for each cell.
+        assignment : jax.Array
+            Binary binding assignment for each cell.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been fit.
+        ValueError
+            If incompatible threshold options or clonotype arguments are used.
         """
         def __return_p_summary(p_sample):
             if cred_intvl:
@@ -343,7 +434,20 @@ class DextraDemixer(ApMHCDeconvolution):
 
         return p, assignment
 
-    def summary(self):
+    def summary(self) -> pd.DataFrame:
+        """
+        Summarize fitted model parameters other than class probabilities.
+
+        Returns
+        -------
+        pandas.DataFrame
+            ArviZ posterior summary statistics.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been fit.
+        """
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
 
@@ -361,7 +465,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
     @staticmethod
     def _predict_posterior_class_dist(p_samples, target_fdr, cred_intvl, nof_thresh=100):
-        """
+        r"""
         Posterior BFDR thresholding (Newton et al. 2004, extended with posterior uncertainty).
 
         Given posterior draws of signal probabilities \(p_i^{(s)}\), this method computes
@@ -379,18 +483,25 @@ class DextraDemixer(ApMHCDeconvolution):
         This provides a conservative extension of the DPP rule that accounts for
         posterior uncertainty in posterior class probabilities.
 
-        Args:
-            p_samples (Array): Posterior samples of signal probabilities,
-                shape (n_draws, n_samples).
-            target_fdr (float): Target false discovery rate \(\alpha \in [0,1]\).
-            cred_intvl (float, optional): Credibility requirement for
-                FDR control, \(cred_intvl \in [0.5,1)\)
+        Parameters
+        ----------
+        p_samples : jax.Array
+            Posterior samples with shape ``(n_draws, n_samples, 2)``.
+        target_fdr : float
+            Target false discovery rate :math:`\alpha \in [0, 1]`.
+        cred_intvl : float
+            Required posterior probability of FDR control.
+        nof_thresh : int, default=100
+            Number of candidate thresholds.
 
-        returns:
-            Tuple[Array, Array, float]:
-                - Posterior mean posterior class probabilities (\( \hat{p}_i \)), shape (n_samples,)
-                - Hard assignments (0/1), shape (n_samples,)
-                - Selected threshold \(\tau\)
+        Returns
+        -------
+        p_mean : jax.Array
+            Mean posterior binding probabilities.
+        assignment : jax.Array
+            Binary binding assignments.
+        threshold : float
+            Selected probability threshold :math:`\tau`.
         """
         p_samples = p_samples[:, :, 1]
         p_mean = jnp.mean(p_samples, axis=0)
@@ -414,16 +525,28 @@ class DextraDemixer(ApMHCDeconvolution):
         assignment = (p_mean >= threshold).astype(jnp.int32)
         return p_mean, assignment, threshold
 
-    def get_posterior_samples(self, num_samples: int = 1000, seed: int = 42) -> Dict:
+    def get_posterior_samples(self, num_samples: int = 1000, seed: int = 42) -> dict[str, jax.Array]:
         """
-        Returns posterior samples of model parameters after fitting the model
+        Return posterior means and derived negative-binomial parameters.
 
-        Args:
-            num_samples: number of posterior samples to draw
-            seed: random seed to initialize numpyros RNG-Key store
+        Parameters
+        ----------
+        num_samples : int, default=1000
+            Number of posterior draws used to calculate the summaries.
+        seed : int, default=42
+            Seed used to initialize the NumPyro random key.
 
-        Returns:
-            A dictionary with posterior samples of model parameters
+        Returns
+        -------
+        dict of str to jax.Array
+            Posterior means and derived quantities such as ``q``, ``w``,
+            ``alpha``, and ``overdispersion``. Negative-control quantities are
+            included when that model component is present.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been fit.
         """
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
@@ -470,7 +593,33 @@ class DextraDemixer(ApMHCDeconvolution):
             posterior_samples_mean['overdispersion_neg'] = overdispersion_neg
         return posterior_samples_mean
 
-    def plot_results(self, assignment, p_pred, y_true=None, seed=42, show=False, return_plt=False, data=None):
+    def plot_results(self, assignment, p_pred, y_true=None, seed=42, show=False, return_plt=False, data=None) -> None:
+        """
+        Plot assignments, probabilities, and fitted mixture components.
+
+        Parameters
+        ----------
+        assignment : array-like
+            Predicted binary assignments.
+        p_pred : array-like
+            Posterior binding probabilities.
+        y_true : array-like, optional
+            True assignments. Zeros are used when labels are unavailable.
+        seed : int, default=42
+            Seed used when drawing posterior parameter summaries.
+        show : bool, default=False
+            Display the figure with :func:`matplotlib.pyplot.show`.
+        return_plt : bool, default=False
+            Leave the current Matplotlib figure open instead of closing it.
+        data : dict, optional
+            Preprocessed model data to plot. Stored full data are used by
+            default.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been fit.
+        """
 
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
@@ -597,21 +746,35 @@ class DextraDemixer(ApMHCDeconvolution):
             return
         plt.close()
 
-    def save_model(self, filepath):
+    def save_model(self, filepath: str | os.PathLike) -> None:
         """
-        Save the fitted model to a file using pickle.
-        Args:
-            filepath (str): The path to the file where the model should be saved.
+        Save model state to a pickle file.
+
+        Parameters
+        ----------
+        filepath : str or os.PathLike
+            Destination checkpoint path.
         """
         with open(filepath, 'wb') as f:
             pickle.dump(vars(self), f)
 
-    def load_model(self, filepath):
+    def load_model(self, filepath: str | os.PathLike) -> Self:
         """
-        Load model state into this instance.
-        Usage: model = DextraDemixer(); model.load_model(filepath)
-        Args:
-            filepath (str): The path to ckpt file.
+        Load checkpoint state into this instance.
+
+        Parameters
+        ----------
+        filepath : str or os.PathLike
+            Pickle checkpoint path.
+
+        Returns
+        -------
+        DextraDemixer
+            This instance after its state has been replaced.
+
+        Notes
+        -----
+        Pickle files can execute arbitrary code. Only load trusted checkpoints.
         """
         with open(filepath, 'rb') as f:
             ckpt = pickle.load(f)
@@ -619,12 +782,23 @@ class DextraDemixer(ApMHCDeconvolution):
         return self
 
     @classmethod
-    def from_ckpt(cls, filepath):
+    def from_ckpt(cls, filepath: str | os.PathLike) -> Self:
         """
-        Create a new instance directly from ckpt file (no __init__ call).
-        Usage: model = DextraDemixer.from_file(filepath)
-        Args:
-            filepath (str): The path to ckpt file.
+        Construct an instance directly from a checkpoint.
+
+        Parameters
+        ----------
+        filepath : str or os.PathLike
+            Pickle checkpoint path.
+
+        Returns
+        -------
+        DextraDemixer
+            New instance populated without calling ``__init__``.
+
+        Notes
+        -----
+        Pickle files can execute arbitrary code. Only load trusted checkpoints.
         """
         with open(filepath, 'rb') as f:
             ckpt = pickle.load(f)
@@ -635,7 +809,16 @@ class DextraDemixer(ApMHCDeconvolution):
 
 class ADextraDemixerModel(metaclass=RegisteredModel):
     """
-    Abstract model class of DextraDemixer
+    Define the extension contract for registered DextraDemixer models.
+
+    Attributes
+    ----------
+    data : dict or None
+        Preprocessed data used for model fitting.
+    name : str
+        Registry name of the model implementation.
+    version : str
+        Version of the model implementation.
     """
 
     def __init__(self):
@@ -645,12 +828,26 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         self._kmeans_dict = None
 
     def preprocess_model_data(self,
-                              x: Union[pd.Series, np.ndarray, Array],
-                              s: Union[pd.Series, np.ndarray, Array] = None,
-                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
-                              c: Union[pd.Series, np.ndarray, Array] = None,
-                              **kwargs):
+                              x: Union[pd.Series, np.ndarray, jax.Array],
+                              s: Union[pd.Series, np.ndarray, jax.Array] = None,
+                              neg_cont: Union[pd.Series, np.ndarray, jax.Array] = None,
+                              c: Union[pd.Series, np.ndarray, jax.Array] = None,
+                              **kwargs) -> None:
         """
+        Convert input arrays to the representation used by NumPyro models.
+
+        Parameters
+        ----------
+        x : pandas.Series, numpy.ndarray, or jax.Array
+            Target pMHC counts.
+        s : pandas.Series, numpy.ndarray, or jax.Array, optional
+            Cell-level size factors.
+        neg_cont : pandas.Series, numpy.ndarray, or jax.Array, optional
+            Negative-control counts.
+        c : pandas.Series, numpy.ndarray, or jax.Array, optional
+            Cell-level clonotype identifiers.
+        **kwargs : Any
+            Model-specific preprocessing values.
         """
         clone = None if c is None else jnp.array(c, dtype=INT_DTYPE)
         zscore = jnp.abs((x - jnp.mean(x)) / jnp.std(x))
@@ -673,15 +870,20 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
 
     def _init_kmeans(self, scale_factor=1.0, outlier_threshold=None) -> Dict:
         """
-        Initialize KMeans with 2 clusters and compute all necessary prior parameters
-        for mu_q, sigma_q, alpha, and tau priors.
+        Initialize two K-means clusters and estimate prior parameters.
 
-        This method calculates the following priors:
-        - cluster_means: Mean of each cluster (KMeans cluster centers)
-        - cluster_variances: Variance of each cluster (spread of the cluster points)
-        - tau_concentration_prior: Proportion of each cluster in the dataset
+        Parameters
+        ----------
+        scale_factor : float, default=1.0
+            Reserved scaling value for model-specific initialization.
+        outlier_threshold : float, optional
+            Reserved outlier threshold for model-specific initialization.
 
-        returns: Dict with params estimates and  k-mean labels,
+        Returns
+        -------
+        dict
+            Cluster labels, means, variances, proportions, and Dirichlet
+            concentration parameters.
         """
         x = self.data["x"].copy()
         x_no_outliers = x
@@ -738,24 +940,49 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
 
     @abc.abstractmethod
     def model(self, **kwargs):
+        """
+        Define the NumPyro probabilistic model.
+
+        Parameters
+        ----------
+        **kwargs : Any
+            Model-specific data and configuration overrides.
+        """
         raise NotImplementedError
 
     @abc.abstractmethod
     def get_default_model_config(self) -> Dict:
+        """
+        Return the model's default configuration.
+
+        Returns
+        -------
+        dict
+            Model prior and initialization values.
+        """
         return {}
 
     @property
     @abc.abstractmethod
     def name(self) -> str:
+        """
+        Return the model's registry name.
+        """
         return self._name
 
     @property
     @abc.abstractmethod
     def version(self) -> str:
+        """
+        Return the model implementation version.
+        """
         return self._version
 
     @property
     def data(self) -> Dict:
+        """
+        Return the preprocessed fitting data.
+        """
         return self._data
 
     @data.setter
@@ -765,8 +992,12 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
 
 class DextraDemixerKmeansModel(ADextraDemixerModel):
     """
-    Dextramixer version who is initialized and prior parametrized by K-means++ results
-    Thus model does not rely on hyperpriors and is a bit simpler
+    Parameterize mixture-model priors with a two-cluster K-means fit.
+
+    Notes
+    -----
+    This implementation estimates fixed prior parameters from the observed
+    clusters instead of learning them from hyperpriors.
     """
 
     def __init__(self):
@@ -787,20 +1018,46 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
     @property
     def name(self) -> str:
+        """
+        Return the model's registry name.
+        """
         return self._name
 
     @property
     def version(self) -> str:
+        """
+        Return the model implementation version.
+        """
         return self._version
 
     def preprocess_model_data(self,
-                              x: Union[pd.Series, np.ndarray, Array],
-                              s: Union[pd.Series, np.ndarray, Array] = None,
-                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
-                              c: Union[pd.Series, np.ndarray, Array] = None,
+                              x: Union[pd.Series, np.ndarray, jax.Array],
+                              s: Union[pd.Series, np.ndarray, jax.Array] = None,
+                              neg_cont: Union[pd.Series, np.ndarray, jax.Array] = None,
+                              c: Union[pd.Series, np.ndarray, jax.Array] = None,
                               scale_factor: float = 1.0,
                               outlier_threshold: float = None,
-                              **kwargs):
+                              **kwargs) -> None:
+        """
+        Preprocess counts and estimate K-means initialization values.
+
+        Parameters
+        ----------
+        x : pandas.Series, numpy.ndarray, or jax.Array
+            Target pMHC counts.
+        s : pandas.Series, numpy.ndarray, or jax.Array, optional
+            Cell-level size factors.
+        neg_cont : pandas.Series, numpy.ndarray, or jax.Array, optional
+            Negative-control counts.
+        c : pandas.Series, numpy.ndarray, or jax.Array, optional
+            Cell-level clonotype identifiers.
+        scale_factor : float, default=1.0
+            Scaling value used during prior initialization.
+        outlier_threshold : float, optional
+            Threshold used during K-means initialization.
+        **kwargs : Any
+            Additional model-specific preprocessing values.
+        """
 
         super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c, **kwargs)
         self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor,
@@ -808,11 +1065,31 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         self._model_config.update(self._kmeans_dict)
 
     def get_default_model_config(self) -> Dict:
+        """
+        Return default and data-derived model configuration values.
+
+        Returns
+        -------
+        dict
+            Prior parameters and K-means initialization results.
+        """
         return self._model_config
 
     def model(self, data=None, **kwargs):
         """
         Define the probabilistic model based on the preprocessed data and KMeans initialization.
+
+        Parameters
+        ----------
+        data : dict, optional
+            Preprocessed data. Stored fitting data are used by default.
+        **kwargs : Any
+            Model configuration overrides.
+
+        Raises
+        ------
+        RuntimeError
+            If no preprocessed data are available.
         """
 
         model_config = {**self.get_default_model_config(), **kwargs.get("model_config", {})}

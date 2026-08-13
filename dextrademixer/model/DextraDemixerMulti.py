@@ -29,30 +29,23 @@ FLOAT_DTYPE = "float64"
 INT_DTYPE = "int32"
 
 class DextraDemixerMulti(DextraDemixer):
-    """
-    This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
-    data with increasing usage of information for multi pMHC inputs. It treats each pMHC indipendently while size factor
-    normalizing cells
+    r"""
+    Fit DextraDemixer independently to multiple pMHC features.
 
+    Parameters
+    ----------
+    model_type : str, default="mixturemodel"
+        Registered probabilistic model implementation.
+    mode : {"I"}, default="I"
+        Multi-pMHC fitting mode. Only independent fitting is supported.
+    alpha_model : str, default="overdispersion"
+        Parameterization used for negative-binomial dispersion.
 
-    This class tries to reuse the compiled sampler, guide, and model with the different pMHC as new input. This should
-    work as the input dimensions do not change.
-
-    **Given**:
-
-    A read count matrix ***$X_{ij}\in \mathbb{N}$*** approximating the avidity of $i\in N$ T cell for the $j\in M$
-    epitope. The $N$ T cells can be grouped based on their T-cell receptor sequence into $C$ cluster.
-
-    **Assumption**:
-
-    1) Each read counts $X_{.j}$ of an epitope is iid.
-    2) We assume that $X_{.j}$ can be represented as a mixture of two Negative Binomial distributions. Each clonal group
-       $c \in C$ belongs to either the clone-specific **Binding** or the **Non-Binding** component. The **Non-Binding**
-       component represents unspecific epitope binding and assay noise.
-    3) It is assumed that unspecific binding T cells and non-binding T cells exhibit lower read counts compared to
-       specifically binding T cell after appropriate normalization.
-    4) T cells of a clonal group $c\in C$ are drawn from the same distribution.
-
+    Notes
+    -----
+    This experimental implementation attempts to reuse compiled inference
+    machinery across pMHCs with equal input dimensions. It is not part of the
+    supported package API.
     """
 
     def __init__(self, model_type: str = "mixturemodel", mode: str = "I", alpha_model="overdispersion"):
@@ -99,20 +92,28 @@ class DextraDemixerMulti(DextraDemixer):
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
                               ir_cov_key: str = None,
-                              **kwargs):
+                              **kwargs) -> None:
         """
-        Preprocesses the data and initializes the model
+        Preprocess multiple pMHC features and initialize model state.
 
-        Args:
-            mdata: A Mudata containing only dextramer counts and clonotype information
-            pmhc_keys: a list of strings specifying the pMHC columns in `gex_key` modality`s `X` which should be deconvolved
-            gex_key: the MuData transcriptome module key
-            neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
-            ir_key: the MuData AIRR module key
-            ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
-            ir_cov_key: (Optional) the key in AIRR module's `.uns` that contains a full, symmetric and square distance matrix
-                         for all clonotype cluster
-            kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
+        Parameters
+        ----------
+        mdata : mudata.MuData
+            Cell-aligned count and immune-receptor modalities.
+        pmhc_keys : list of str
+            Target pMHC features.
+        gex_key : str, default="gex"
+            Count-modality key.
+        neg_ctrl_key : str, optional
+            Negative-control feature.
+        ir_key : str, default="airr"
+            Immune-receptor modality key.
+        ir_clone_key : str, optional
+            Observation column containing clonotype IDs.
+        ir_cov_key : str, optional
+            Key containing a clonotype covariance matrix.
+        **kwargs : object
+            Additional model-specific values.
         """
         gex = mdata.mod[gex_key]
         air = mdata.mod[ir_key]
@@ -167,9 +168,20 @@ class DextraDemixerMulti(DextraDemixer):
 
         return jnp.exp(log_medians)
 
-    def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng_key: int = 3) -> List[az.InferenceData]:
+    def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng_key: int = 3) -> None:
         """
-        fits the mixture model with MCMC and returns the trace
+        Fit every pMHC model with Markov chain Monte Carlo.
+
+        Parameters
+        ----------
+        sampler_config : dict, optional
+            MCMC and NUTS configuration overrides.
+        rng_key : int, default=3
+            Random seed.
+
+        Notes
+        -----
+        Fitted traces are stored in :attr:`traces`.
         """
         if self.x is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
@@ -213,6 +225,29 @@ class DextraDemixerMulti(DextraDemixer):
     def fit_svi(self, guide=npy.infer.autoguide.AutoMultivariateNormal, svi_config: Dict[str, Union[int, float]] = None,
                 nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
                 return_loss: bool = False) -> List[az.InferenceData]:
+        """
+        Fit every pMHC model with stochastic variational inference.
+
+        Parameters
+        ----------
+        guide : type
+            NumPyro autoguide constructor.
+        svi_config : dict, optional
+            Optimizer and SVI configuration overrides.
+        nof_inits : int, default=100
+            Number of random initializations.
+        use_minimal_loss : bool, default=True
+            Retain parameters from the lowest-loss iteration.
+        rng_key : int, default=998777
+            Random seed.
+        return_loss : bool, default=False
+            Reserved compatibility option.
+
+        Returns
+        -------
+        list of arviz.InferenceData
+            One inference trace per pMHC.
+        """
 
         if self.x is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
@@ -246,13 +281,24 @@ class DextraDemixerMulti(DextraDemixer):
                   nof_inits: int, use_minimal_loss: bool,
                   rng_key: int) -> None:
         """
-        Implements stochastic variational inference
+        Fit one pMHC with stochastic variational inference.
 
-        j: index of pmhc
-        guide: The guide to use for variational inference. If None, self.model object will be checked for a guide function
-        svi_config: configuration for optimizer (Adam) and posterior samples
-        nof_inits: number of initializations tried with different seeds to find gut init values
-        use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
+        Parameters
+        ----------
+        j : int
+            pMHC index.
+        guide : type
+            NumPyro autoguide constructor.
+        tracer_config : dict
+            ELBO tracer configuration.
+        svi_config : dict
+            Optimizer and iteration configuration.
+        nof_inits : int
+            Number of random initializations.
+        use_minimal_loss : bool
+            Retain parameters from the lowest-loss iteration.
+        rng_key : int
+            Random seed.
         """
 
         # find good random initialization
@@ -329,9 +375,7 @@ class DextraDemixerMulti(DextraDemixer):
                                 clonotype_adherence: Union[List[bool], bool] = False
                                 ) -> Tuple[np.array, np.array]:
         """
-        Returns the binder assignments based on the inferred posterior class probabilities.
-        Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
-        If neither threshold nor target_fdr is provided the max posterior class probability will be used.
+        Predict binding probabilities and assignments for every pMHC.
 
         On a global level two summarization strategies can be combined to generate unique assignments per cell.
         1) max posterior class probability across all pMHCs combined with threshold or target_fdr assignment and
@@ -339,24 +383,29 @@ class DextraDemixerMulti(DextraDemixer):
         Both approaches can be combined, applying first max posterior class assignment then majority pMHC class
         assignment. Ties will not be resolved.
 
-        Args:
-             max_pmhc: whether to report the pMHC with highest posterior probability across all pMHCs as sole assignment
-                       in case of ties all possible pMHCs will be assigned
-             clone_majority: whether to report the majority pMHC as sole assignment for cells of a clonotype
-                           (can be used in combinatio with max_pmhc)
-             threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
-                        probabilities
-            target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
-                        class probability
-            quantile: (Optional) whether and what lower quantile should be used instead of the population mean as conservative
-                      measure of p. quantile should be in (0, 0.5]
-            cred_intvl: (Optional) instead of using the summarized class probability we estimate a distribution
-                        over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
-            clonotype_adherence: instead of using posterior class assignment per cell use clonotype probability vector
-                                if available.
-        Returns:
-            A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
-            class assignment decision
+        Parameters
+        ----------
+        max_pmhc : bool, default=False
+            Retain only the pMHC with the highest probability per cell.
+        clone_majority : bool, default=False
+            Retain the majority pMHC assignment within each clonotype.
+        threshold : float or list of float, optional
+            Fixed probability threshold for each pMHC.
+        target_fdr : float or list of float, optional
+            Target Bayesian false discovery rate for each pMHC.
+        quantile : float or list of float, optional
+            Lower posterior quantile used instead of the mean.
+        cred_intvl : float or list of float, optional
+            Required posterior probability of FDR control.
+        clonotype_adherence : bool or list of bool, default=False
+            Use clonotype probability vectors when available.
+
+        Returns
+        -------
+        p : numpy.ndarray
+            Cell-by-pMHC binding probabilities.
+        assignment : numpy.ndarray
+            Cell-by-pMHC binary assignments.
         """
 
         def __check_input(input, er_msg):
@@ -454,6 +503,14 @@ class DextraDemixerMulti(DextraDemixer):
         return ps, assignments
 
     def summary(self):
+        """
+        Summarize posterior parameters for every fitted pMHC.
+
+        Returns
+        -------
+        pandas.DataFrame
+            ArviZ summaries indexed by pMHC.
+        """
         summaries = []
         keys = []
         for j in range(self.M):
