@@ -1,6 +1,5 @@
-# Minimal environment for DextraDemixer with fixed package versions to ensure reproducibility and avoid dependency conflicts. 
-# This environment is used for testing and benchmarking purposes, and may not include all the packages required for full functionality of DextraDemixer. 
-# For a complete environment, please refer to environment.yaml.
+# Reproducible development and analysis environment for DextraDemixer.
+# Runtime dependency versions are kept in sync with pyproject.toml.
 
 name: dextrademixer
 channels:
@@ -12,6 +11,7 @@ dependencies:
   - snakemake
   - jupyterlab
   - pip:
+      - anndata==0.13.2
       - arviz==0.22.0
       - jax==0.8.1
       - jaxlib==0.8.1
@@ -28,6 +28,7 @@ dependencies:
       - scikit-learn==1.7.2
       - scipy==1.16.3
       - scirpy==0.22.3
+      - seaborn==0.13.2
       - statsmodels==0.14.5
       - tcrdist3==0.3
-      
+      - tqdm==4.70.0
