@@ -5,6 +5,30 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dextrademixer"
 version = "0.0.1"
+description = "Probabilistic identification of antigen-specific T cells from single-cell pMHC multimer data"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "BSD-3-Clause"
+authors = [
+  { name = "Yang an", email = "yang.an@helmholtz-muenchen.de" },
+  { name = "Benjamin Schubert", email = "benjamin.schubert@helmholtz-muenchen.de" }
+]
+maintainers = [
+  {name = "Yang an", email = "yang.an@helmholtz-muenchen.de" },
+  { name = "Benjamin Schubert", email = "benjamin.schubert@helmholtz-muenchen.de" },
+]
+keywords = [
+  "antigen specificity",
+  "pMHC multimer",
+  "single-cell",
+  "T cell",
+]
+classifiers = [
+    "Development Status :: 3 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3 :: Only",
+]
 dependencies = [
     "anndata>=0.12.0",
     "arviz>=0.22.0,<1.0",
@@ -25,28 +49,19 @@ dependencies = [
     "statsmodels>=0.14.1",
     "tqdm>=4.68.3",
 ]
-requires-python = ">=3.11"
-description = "Bayesian model for antigen-specificity assignment of single-cell pMHC multimer data"
-readme = "README.md"
-license = "BSD-3-Clause"
-authors = [{name = "Benjamin Schubert", email = "benjamin.schubert@helmholtz-munich.de"}, {name = "Yang An"}, {name = "Felix Drost"}, {name = "Irene Bonafonte-Pardàs"}]
-maintainers = [{name = "Benjamin Schubert", email = "benjamin.schubert@helmholtz-munich.de"}]
-keywords = ["single-cell", "pMHC", "binder", "assignment"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Science/Research",
-    "Topic :: Scientific/Engineering :: Medical Science Apps.",
-    "Programming Language :: Python :: 3 :: Only",
-]
 
 [project.urls]
 Homepage = "https://github.com/SchubertLab/DextraDemixer"
+Issues = "https://github.com/SchubertLab/DextraDemixer/issues"
+Publication = "https://doi.org/10.64898/2026.06.23.733339"
+Repository = "https://github.com/SchubertLab/DextraDemixer.git"
 
 [tool.pytest.ini_options]
 addopts = ["--strict-markers"]
 markers = ["slow: end-to-end SVI fits (minutes); deselect with -m 'not slow'"]
 
 [tool.setuptools.packages.find]
+include-package-data = false
 where = ["."]
 include = ["dextrademixer*"]
 exclude = ["dextrademixer.test", "dextrademixer.test.*"]
