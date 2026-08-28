@@ -64,9 +64,11 @@ class DextraDemixer(ApMHCDeconvolution):
     """
 
     def __init__(self, model_type: str = "mixturemodelkmeans",
-                 overdispersion_scale_prior: float = 1e-2, alpha_offset: float = 0.0,
-                 neg_ctrl_mean_ratio_prior: Tuple[float, float] = None,
-                 neg_ctrl_overdispersion_ratio_prior: Tuple[float, float] = None):
+                 overdispersion_scale_prior: float = 1.0, alpha_offset: float = 5.0,
+                 neg_ctrl_mean_ratio_prior: Tuple[float, float] = (3.213505719551598,
+                                                                   5.019558265302254),
+                 neg_ctrl_overdispersion_ratio_prior: Tuple[float, float] = (1.3416693520247707,
+                                                                            0.3839547350079813)):
         """
         Args:
             model_type: which model of `available_methods()` to use
@@ -76,12 +78,11 @@ class DextraDemixer(ApMHCDeconvolution):
                           antigen-specific component gets too narrow
             neg_ctrl_mean_ratio_prior: (mean, variance) of the LogNormal prior on the ratio between
                           the non-binding component mean and the negative control mean; converted
-                          to the LogNormal`s log-space parameters internally. `None` keeps the
-                          defaults, which were fit on a real dataset. Only used when a
-                          `neg_ctrl_key` is given
+                          to the LogNormal`s log-space parameters internally. The defaults were fit
+                          on a real dataset. Only used when a `neg_ctrl_key` is given
             neg_ctrl_overdispersion_ratio_prior: (mean, variance) of the LogNormal prior on the same
-                          ratio for the overdispersion. `None` keeps the defaults, only used when a
-                          `neg_ctrl_key` is given
+                          ratio for the overdispersion. Defaults fit on a real dataset, only used
+                          when a `neg_ctrl_key` is given
         """
         super().__init__()
 
@@ -95,12 +96,12 @@ class DextraDemixer(ApMHCDeconvolution):
             raise ValueError(f"`model_type` {model_type!r} not supported, "
                              f"available: {sorted(ADextraDemixerModel.registry.keys())}")
         self.model = ADextraDemixerModel.registry[model_type]()
-        self.model._model_config.update(overdispersion_scale_prior=overdispersion_scale_prior,
-                                        alpha_offset=alpha_offset)
-        for key, moments in (("neg_ctrl_mean_ratio_prior", neg_ctrl_mean_ratio_prior),
-                             ("neg_ctrl_overdispersion_ratio_prior", neg_ctrl_overdispersion_ratio_prior)):
-            if moments is not None:
-                self.model._model_config[key] = self.lognormal_from_moments(*moments)
+        self.model._model_config.update(
+            overdispersion_scale_prior=overdispersion_scale_prior,
+            alpha_offset=alpha_offset,
+            neg_ctrl_mean_ratio_prior=self.lognormal_from_moments(*neg_ctrl_mean_ratio_prior),
+            neg_ctrl_overdispersion_ratio_prior=self.lognormal_from_moments(
+                *neg_ctrl_overdispersion_ratio_prior))
 
     @staticmethod
     def lognormal_from_moments(mean: float, var: float) -> Tuple[float, float]:
@@ -708,8 +709,8 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                               s: Union[pd.Series, np.ndarray, Array] = None,
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
-                              outlier_threshold: float = 100,
-                              **kwargs):
+                              outlier_threshold: float = None,
+                              **kwargs): 
         """
         Args:
             outlier_threshold: cells whose count is more than this many standard deviations from
@@ -772,12 +773,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         self._name = "mixturemodelkmeans"
         self._version = "0.0.1"
         self._kmeans_dict = None
-        self._model_config = {
-            "overdispersion_scale_prior": 1.0,
-            "alpha_offset": 5.0,
-            "neg_ctrl_mean_ratio_prior": (0.9692917285815055, 0.6293977074906485),
-            "neg_ctrl_overdispersion_ratio_prior": (0.19724303327974974, 0.43970806321879075),
-        }
+        self._model_config = {}
 
     @property
     def name(self) -> str:
@@ -792,7 +788,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                               s: Union[pd.Series, np.ndarray, Array] = None,
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
-                              outlier_threshold: float = 100,
+                              outlier_threshold: float = None, 
                               **kwargs):
 
         super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c,
