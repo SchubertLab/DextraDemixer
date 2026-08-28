@@ -35,7 +35,7 @@ _MODEL_KWARGS = {
 }
 
 # Known SVI numeric drift across the supported dependency version range (jax/numpyro/optax
-# and related numeric libs). nof_inits=10 picks the best of several random-restart SVI fits,
+# and related numeric libs). n_inits=10 picks the best of several random-restart SVI fits,
 # so small differences in a library's RNG/optimizer internals across versions can shift which
 # restart "wins" and cascade into a materially different final fit for some (model, experiment)
 # combinations, even though other combinations reproduce exactly across the same version range.
@@ -71,7 +71,7 @@ def _run_model(model_variant, experiment, expected_results, threshold=None, targ
     model.preprocess_model_data(mdata, pmhc_key="pmhc1", gex_key="gex", neg_ctrl_key=kwargs["neg_ctrl_key"])
 
     model.fit_svi(maxiter=1000, lr_init_value=3e-1, lr_end_value=3e-3, lr_decay_rate=0.995,
-                  lr_transition_steps=1, nof_inits=10, rng_key=42)
+                  lr_transition_steps=1, n_inits=10, rng_key=42)
 
     p_pred, assignment = model.predict_posterior_class(
         target_fdr=target_fdr,
@@ -127,7 +127,7 @@ def test_input_formats_agree():
     df = gex.to_df()
     df["clone"] = adata.obs["clone"].values
     svi = dict(pmhc_key="pmhc1", neg_ctrl_key="neg_control", ir_clone_key="clone", maxiter=50,
-               nof_inits=2, progress_bar=False, rng_key=42)
+               n_inits=2, progress_bar=False, rng_key=42)
 
     out = {}
     for name, data in {"MuData": mdata, "AnnData": adata, "DataFrame": df}.items():
@@ -161,7 +161,7 @@ def test_fit_wrapper_matches_two_step():
         warnings.simplefilter("ignore")
         mdata = mu.read(os.path.join(DATA_DIR, f"{EXPERIMENTS[0]}.h5mu"))
     kwargs = dict(pmhc_key="pmhc1", gex_key="gex", neg_ctrl_key="neg_control")
-    svi = dict(maxiter=100, nof_inits=2, progress_bar=False, rng_key=42)
+    svi = dict(maxiter=100, n_inits=2, progress_bar=False, rng_key=42)
 
     two_step = DextraDemixer(overdispersion_scale_prior=1.0, alpha_offset=5.0)
     two_step.preprocess_model_data(mdata, **kwargs)

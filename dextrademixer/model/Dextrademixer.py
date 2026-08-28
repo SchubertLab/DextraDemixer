@@ -172,10 +172,10 @@ class DextraDemixer(ApMHCDeconvolution):
         x = counts[pmhc_key].to_numpy().reshape((N,))
         x_neg = counts[neg_ctrl_key].to_numpy().reshape((N,)) if neg_ctrl_key else None
 
-        c = obs[ir_clone_key].to_numpy() if ir_clone_key is not None else None
-        if c is not None and not np.issubdtype(c.dtype, np.number):
-            c = pd.factorize(c)[0]  # string clonotype ids, e.g. scirpy's "clonotype_7"
-        c = None if c is None else c.astype("int32")
+        clone_id = obs[ir_clone_key].to_numpy() if ir_clone_key is not None else None
+        if clone_id is not None and not np.issubdtype(clone_id.dtype, np.number):
+            clone_id = pd.factorize(clone_id)[0]  # string ids, e.g. scirpy's "clonotype_7"
+        clone_id = None if clone_id is None else clone_id.astype("int32")
 
         if use_size_factor:
             pmhc_list = use_size_factor if isinstance(use_size_factor, list) else list(counts.columns)
@@ -186,8 +186,9 @@ class DextraDemixer(ApMHCDeconvolution):
         else:
             s = jnp.ones(N, dtype=FLOAT_DTYPE)
 
-        self._check_parameters(x, x_neg, c)
-        self.model.init_from_counts(x=x, s=s, neg_cont=x_neg, c=c, outlier_threshold=outlier_threshold)
+        self._check_parameters(x, x_neg, clone_id)
+        self.model.init_from_counts(x=x, s=s, x_neg=x_neg, clone_id=clone_id,
+                                    outlier_threshold=outlier_threshold)
 
     @staticmethod
     def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
@@ -219,10 +220,10 @@ class DextraDemixer(ApMHCDeconvolution):
     def fit(self, data: Data, *, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
             ir_key: str = "airr", ir_clone_key: str = None, use_size_factor: bool = None,
             outlier_threshold: float = 100,
-            guide='normal', maxiter: int = 1000, num_particles: int = 10, progress_bar: bool = True,
+            guide='normal', maxiter: int = 1000, n_particles: int = 10, progress_bar: bool = True,
             lr_init_value: float = 3e-1, lr_end_value: float = 3e-3,
             lr_decay_rate: float = 0.995, lr_transition_steps: int = 1,
-            nof_inits: int = 10, use_minimal_loss: bool = True,
+            n_inits: int = 10, use_minimal_loss: bool = True,
             rng_key: int = 998777) -> "DextraDemixer":
         """
         Extracts the model data from `data` and fits it, i.e. `preprocess_model_data` followed by
@@ -246,14 +247,14 @@ class DextraDemixer(ApMHCDeconvolution):
                    If None, self.model object will be checked for a guide function,
                    elif 'normal', AutoNormal guide will be used, elif 'mvnormal', AutoMultivariateNormal guide will be used
             maxiter: number of SVI steps
-            num_particles: Monte-Carlo samples used per step to estimate the ELBO gradient. Higher is
+            n_particles: Monte-Carlo samples used per step to estimate the ELBO gradient. Higher is
                            less noisy and proportionally slower
             progress_bar: whether to show a progress bar over the SVI steps
             lr_init_value: initial learning rate of the exponentially decaying Adam schedule
             lr_end_value: final learning rate the schedule decays to
             lr_decay_rate: decay rate of the schedule
             lr_transition_steps: number of steps between applications of the decay
-            nof_inits: number of initializations tried with different seeds to find gut init values
+            n_inits: number of initializations tried with different seeds to find gut init values
             use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
             rng_key: integer seed to initialize numpyros RNG-Key store
 
@@ -263,35 +264,35 @@ class DextraDemixer(ApMHCDeconvolution):
         self.preprocess_model_data(data, pmhc_key=pmhc_key, gex_key=gex_key, neg_ctrl_key=neg_ctrl_key,
                                    ir_key=ir_key, ir_clone_key=ir_clone_key,
                                    use_size_factor=use_size_factor, outlier_threshold=outlier_threshold)
-        self.fit_svi(guide=guide, maxiter=maxiter, num_particles=num_particles,
+        self.fit_svi(guide=guide, maxiter=maxiter, n_particles=n_particles,
                      progress_bar=progress_bar, lr_init_value=lr_init_value, lr_end_value=lr_end_value,
                      lr_decay_rate=lr_decay_rate, lr_transition_steps=lr_transition_steps,
-                     nof_inits=nof_inits, use_minimal_loss=use_minimal_loss, rng_key=rng_key)
+                     n_inits=n_inits, use_minimal_loss=use_minimal_loss, rng_key=rng_key)
         return self
 
-    def fit_svi(self, guide='normal', maxiter: int = 1000, num_particles: int = 10,
+    def fit_svi(self, guide='normal', maxiter: int = 1000, n_particles: int = 10,
                 progress_bar: bool = True, lr_init_value: float = 3e-1, lr_end_value: float = 3e-3,
                 lr_decay_rate: float = 0.995, lr_transition_steps: int = 1,
-                nof_inits: int = 10, use_minimal_loss: bool = True, rng_key: int = 998777) -> None:
+                n_inits: int = 10, use_minimal_loss: bool = True, rng_key: int = 998777) -> None:
         """
         Implements stochastic variational inference on data prepared by `preprocess_model_data`.
         Low-level path: `fit` does both steps in one call.
 
-        Runs `nof_inits` random restarts, keeps the one with the lowest initial ELBO, and optimizes
+        Runs `n_inits` random restarts, keeps the one with the lowest initial ELBO, and optimizes
         it for `maxiter` steps. The result is stored in `self.svi_result`.
 
         Args:
             guide: the guide to use for variational inference. If None, `self.model` is checked for
                    a guide function, 'normal' uses AutoNormal, 'mvnormal' AutoMultivariateNormal
             maxiter: number of SVI steps
-            num_particles: Monte-Carlo samples used per step to estimate the ELBO gradient. Higher
+            n_particles: Monte-Carlo samples used per step to estimate the ELBO gradient. Higher
                            is less noisy and proportionally slower
             progress_bar: whether to show a progress bar over the SVI steps
             lr_init_value: initial learning rate of the exponentially decaying Adam schedule
             lr_end_value: final learning rate the schedule decays to
             lr_decay_rate: decay rate of the schedule
             lr_transition_steps: number of steps between applications of the decay
-            nof_inits: number of initializations tried with different seeds to find good init values
+            n_inits: number of initializations tried with different seeds to find good init values
             use_minimal_loss: whether to report the parameters of the step with the lowest loss
                               instead of the last step
             rng_key: integer seed to initialize numpyros RNG-Key store
@@ -315,13 +316,13 @@ class DextraDemixer(ApMHCDeconvolution):
             guide = npy.infer.autoguide.AutoMultivariateNormal
         # find good random initialization
         random_init = []
-        for i, key in enumerate(random.split(random.PRNGKey(rng_key), nof_inits)):
+        for i, key in enumerate(random.split(random.PRNGKey(rng_key), n_inits)):
             if callable(getattr(self.model, "guide", None)):
                 self.guide = self.model.guide
             else:
                 self.guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
             svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
-                                loss=npy.infer.TraceGraph_ELBO(num_particles=num_particles))
+                                loss=npy.infer.TraceGraph_ELBO(num_particles=n_particles))
             init_state = svi.init(key)
             loss = svi.evaluate(init_state)
 
@@ -334,7 +335,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         self.guide = best_guide
         svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
-                            loss=npy.infer.TraceGraph_ELBO(num_particles=num_particles))
+                            loss=npy.infer.TraceGraph_ELBO(num_particles=n_particles))
 
         def body_fn(svi_state, step):
             svi_state, loss = svi.stable_update(svi_state, step=step)
@@ -416,7 +417,7 @@ class DextraDemixer(ApMHCDeconvolution):
                 unique_ids = np.unique(clone_id)
 
                 if cred_intvl:
-                    # mean for each clone while keeping posterior samples, shape (num_clones, num_samples, 2)
+                    # mean for each clone while keeping posterior samples, shape (num_clones, n_samples, 2)
                     mean_p = np.stack([jnp.quantile(p[:, clone_id == cid], q=0.5, axis=1, method='higher') for cid in unique_ids])
                     p = mean_p[clone_id].transpose(1, 0, 2)  # shape (num_posterior_samples, num_cells, 2)
 
@@ -471,7 +472,7 @@ class DextraDemixer(ApMHCDeconvolution):
         return az.summary(inference_data, var_names=["~log_p"])
 
     @staticmethod
-    def _predict_posterior_class_dist(p_samples, target_fdr, cred_intvl, nof_thresh=100):
+    def _predict_posterior_class_dist(p_samples, target_fdr, cred_intvl, n_thresh=100):
         r"""
         Posterior BFDR thresholding (Newton et al. 2004, extended with posterior uncertainty).
 
@@ -491,21 +492,21 @@ class DextraDemixer(ApMHCDeconvolution):
         posterior uncertainty in posterior class probabilities.
 
         Args:
-            p_samples: posterior samples of signal probabilities, shape (n_draws, n_samples).
+            p_samples: posterior samples of signal probabilities, shape (n_draws, n_cells).
             target_fdr: target false discovery rate \(\alpha \in [0,1]\).
             cred_intvl: (Optional) credibility requirement for FDR control,
                         \(cred\_intvl \in [0.5,1)\).
-            nof_thresh: number of candidate thresholds scanned in [0,1].
+            n_thresh: number of candidate thresholds scanned in [0,1].
 
         Returns:
             A tuple (p_mean, assignment, threshold) with the posterior mean class probabilities
-            \(\hat{p}_i\) of shape (n_samples,), the hard 0/1 assignments of the same shape, and
+            \(\hat{p}_i\) of shape (n_cells,), the hard 0/1 assignments of the same shape, and
             the selected threshold \(\tau\).
         """
         p_samples = p_samples[:, :, 1]
         p_mean = jnp.mean(p_samples, axis=0)
         lfdr = 1.0 - p_samples
-        candidate_thresh = jnp.linspace(0.0, 1.0, nof_thresh + 2)[1:-1]
+        candidate_thresh = jnp.linspace(0.0, 1.0, n_thresh + 2)[1:-1]
 
         def eval_threshold(_, tau):
             disc = p_samples >= tau
@@ -524,12 +525,12 @@ class DextraDemixer(ApMHCDeconvolution):
         assignment = (p_mean >= threshold).astype(jnp.int32)
         return p_mean, assignment, threshold
 
-    def get_posterior_samples(self, num_samples: int = 1000, seed: int = 42) -> Dict:
+    def get_posterior_samples(self, n_samples: int = 1000, seed: int = 42) -> Dict:
         """
         Returns posterior samples of model parameters after fitting the model
 
         Args:
-            num_samples: number of posterior samples to draw
+            n_samples: number of posterior samples to draw
             seed: random seed to initialize numpyros RNG-Key store
 
         Returns:
@@ -541,7 +542,7 @@ class DextraDemixer(ApMHCDeconvolution):
         if self.trace is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
 
-        predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=num_samples)
+        predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=n_samples)
         posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
 
         # Extract mean from posterior samples
@@ -684,7 +685,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         # THIRD COLUMN - POSTERIOR DISTRIBUTION OF NEGATIVE BINOMIAL
         # Plot posterior distribution of Negative Binomial
-        posterior_samples = self.get_posterior_samples(num_samples=1000, seed=seed)
+        posterior_samples = self.get_posterior_samples(n_samples=1000, seed=seed)
         q = posterior_samples["q"]
         w = posterior_samples["w"]
         alpha = posterior_samples["alpha"]
@@ -799,8 +800,8 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
     def init_from_counts(self,
                          x: Union[pd.Series, np.ndarray, Array],
                          s: Union[pd.Series, np.ndarray, Array] = None,
-                         neg_cont: Union[pd.Series, np.ndarray, Array] = None,
-                         c: Union[pd.Series, np.ndarray, Array] = None,
+                         x_neg: Union[pd.Series, np.ndarray, Array] = None,
+                         clone_id: Union[pd.Series, np.ndarray, Array] = None,
                          outlier_threshold: float = None,
                          ):
         """
@@ -809,19 +810,19 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         Args:
             x: pMHC UMI counts, shape (n_cells,).
             s: (Optional) per-cell size factors, shape (n_cells,).
-            neg_cont: (Optional) negative control counts, shape (n_cells,).
-            c: (Optional) integer clonotype id per cell, shape (n_cells,).
+            x_neg: (Optional) negative control counts, shape (n_cells,).
+            clone_id: (Optional) integer clonotype id per cell, shape (n_cells,).
             outlier_threshold: cells whose count is more than this many standard deviations from
                                the mean are held out of the fit (`self.data`) but still scored
                                (`self.data_full`). None disables the filtering.
         """
-        clone = None if c is None else jnp.array(c, dtype=INT_DTYPE)
+        clone = None if clone_id is None else jnp.array(clone_id, dtype=INT_DTYPE)
         zscore = jnp.abs((x - jnp.mean(x)) / jnp.std(x))
         keep = jnp.where(zscore < (jnp.inf if outlier_threshold is None else outlier_threshold))
         # With outliers
         self.data_full = {"x": jnp.array(x, dtype=INT_DTYPE),
                           "s": None if s is None else jnp.array(s, dtype=FLOAT_DTYPE),
-                          "x_neg": None if neg_cont is None else jnp.array(neg_cont, dtype=FLOAT_DTYPE),
+                          "x_neg": None if x_neg is None else jnp.array(x_neg, dtype=FLOAT_DTYPE),
                           "clone": clone,
                           # If clone is not contiuous, then there will be problems with indexing
                           "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
@@ -829,7 +830,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         # Without outliers
         self.data = {"x": jnp.array(x[keep], dtype=INT_DTYPE),
                      "s": jnp.array(s[keep], dtype=FLOAT_DTYPE) if s is not None else None,
-                     "x_neg": jnp.array(neg_cont[keep], dtype=FLOAT_DTYPE) if neg_cont is not None else None,
+                     "x_neg": jnp.array(x_neg[keep], dtype=FLOAT_DTYPE) if x_neg is not None else None,
                      "clone": jnp.array(clone[keep], dtype=INT_DTYPE) if clone is not None else None,
                      "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone[keep]),
                      }
@@ -884,12 +885,12 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
     def init_from_counts(self,
                          x: Union[pd.Series, np.ndarray, Array],
                          s: Union[pd.Series, np.ndarray, Array] = None,
-                         neg_cont: Union[pd.Series, np.ndarray, Array] = None,
-                         c: Union[pd.Series, np.ndarray, Array] = None,
+                         x_neg: Union[pd.Series, np.ndarray, Array] = None,
+                         clone_id: Union[pd.Series, np.ndarray, Array] = None,
                          outlier_threshold: float = None,
                          **kwargs):
 
-        super().init_from_counts(x=x, s=s, neg_cont=neg_cont, c=c,
+        super().init_from_counts(x=x, s=s, x_neg=x_neg, clone_id=clone_id,
                                  outlier_threshold=outlier_threshold, **kwargs)
         self._kmeans_dict = self._init_kmeans()
         self.model_config.update(self._kmeans_dict)

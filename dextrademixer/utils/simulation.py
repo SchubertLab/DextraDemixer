@@ -432,7 +432,7 @@ class DextramerSimulator:
 
     def simulate_pmhc_data_from_distribution(self,
                                              total_cells: int = 5000,
-                                             nof_clones: int = 150,
+                                             n_clones: int = 150,
                                              binding_ratio: float = 0.05,
                                              mean_non_binder: float = None,
                                              concentration_non_binder: float = None,
@@ -442,7 +442,7 @@ class DextramerSimulator:
                                              var_inc: float = None,
                                              p_nonbinding_clone_outlier=0.0,
                                              p_binding_outlier=0.0,
-                                             nof_clonotype_cluster=None,
+                                             n_clonotype_cluster=None,
                                              use_clonotype_cov: bool = False,
                                              simulate_neg_control: bool = False,
                                              plot_data: bool = False,
@@ -455,7 +455,7 @@ class DextramerSimulator:
 
         Args:
             total_cells: number of total cell to generate
-            nof_clones: number of clones measured in experiments.
+            n_clones: number of clones measured in experiments.
             binding_ratio: ratio of binder vs non-binder
             mean_non_binder: mean of non-binder, if specified use this value, else sampled from fitted distribution
             concentration_non_binder: concentration parameter of non-binder, if specified use this value,
@@ -483,13 +483,13 @@ class DextramerSimulator:
         else:
             params = DextramerSimulator.default_params()
 
-        if nof_clonotype_cluster is not None:
-            if nof_clonotype_cluster > nof_clones:
-                raise ValueError("`nof_clonotype_cluster` must be smaller than `nof_clones`")
-            if nof_clonotype_cluster < 2:
-                raise ValueError("`nof_clonotype_cluster` must be at least 2")
+        if n_clonotype_cluster is not None:
+            if n_clonotype_cluster > n_clones:
+                raise ValueError("`n_clonotype_cluster` must be smaller than `n_clones`")
+            if n_clonotype_cluster < 2:
+                raise ValueError("`n_clonotype_cluster` must be at least 2")
         else:
-            nof_clonotype_cluster = rng.randint(2, nof_clones)
+            n_clonotype_cluster = rng.randint(2, n_clones)
 
         # params
         cells_per_clonotype = params["cells_per_clonotype"]
@@ -518,13 +518,13 @@ class DextramerSimulator:
         max_trials = 20
         best_err = 10000
         for _ in range(max_trials):
-            total_le = total_cells - nof_clones
-            raw_cells_per_clone = stats.boltzmann.rvs(*cells_per_clonotype, size=nof_clones, random_state=rng)
+            total_le = total_cells - n_clones
+            raw_cells_per_clone = stats.boltzmann.rvs(*cells_per_clonotype, size=n_clones, random_state=rng)
             cells_per_clone_p = raw_cells_per_clone / raw_cells_per_clone.sum()
-            cells_per_clone_trial = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
+            cells_per_clone_trial = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(n_clones)).astype("int32")
 
             # Sample multiple binder assignments and pick the one that gives empirical binding ratio closest to target
-            binder_assignment_trial = rng.binomial(1, binding_ratio, size=(10000, nof_clones))
+            binder_assignment_trial = rng.binomial(1, binding_ratio, size=(10000, n_clones))
             empirical_binding_ratio = ((cells_per_clone_trial * binder_assignment_trial).sum(1) / total_cells)
             # mean of error from empirical cell and clone level binder ratio
             err = ((np.abs(empirical_binding_ratio - binding_ratio) +
@@ -545,11 +545,11 @@ class DextramerSimulator:
         # simulate TCR similarity clusters
         if use_clonotype_cov:
             cc_assignment = self.__cc_assignment(binder_assignment,
-                                                       nof_clones,
-                                                       nof_clonotype_cluster,
+                                                       n_clones,
+                                                       n_clonotype_cluster,
                                                        p_nonbinding_clone_outlier, rng)
 
-            K = self.__construct_tcr_kernel(nof_clones, cc_assignment, params, rng)
+            K = self.__construct_tcr_kernel(n_clones, cc_assignment, params, rng)
 
 
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
@@ -560,7 +560,7 @@ class DextramerSimulator:
             d["x_neg"] = []
 
         key = jax.random.PRNGKey(rng_key)  # set starting rng_key
-        for i in range(nof_clones):
+        for i in range(n_clones):
             # Propagate the key to create new subkeys for each clone, else the same distribution will always be sampled
             key, subkey = jax.random.split(key)
 
@@ -632,7 +632,7 @@ class DextramerSimulator:
             'var_pos': var_pos,
             'concentration_pos': concentration_pos,
             'total_cells': total_cells,
-            'nof_clones': nof_clones,
+            'n_clones': n_clones,
             'binding_ratio': binding_ratio,
             'p_binding_outlier': p_binding_outlier,
             'use_clonotype_cov': use_clonotype_cov,
@@ -651,11 +651,11 @@ class DextramerSimulator:
 
     def simulate_pmhc_data_from_sample(self,
                                        total_cells: int = 5000,
-                                       nof_clones: int = 150,
+                                       n_clones: int = 150,
                                        binding_ratio: float = 0.05,
                                        binding_fold_increase_range: list[float] = None,
                                        use_clonotype_cov: bool = False,
-                                       nof_clonotype_cluster = None,
+                                       n_clonotype_cluster = None,
                                        p_nonbinding_clone_outlier = 0.0,
                                        simulate_neg_control: bool = False,
                                        plot_data: bool = False,
@@ -667,7 +667,7 @@ class DextramerSimulator:
 
         Args:
             total_cells: number of total cell to generate
-            nof_clones: number of clones measured in experiments.
+            n_clones: number of clones measured in experiments.
             binding_ratio: ratio of binder vs non-binder
             binding_fold_increase_range: list of fold increase for pMHC binding cells
             use_clonotype_cov: whether to use clonotype covariance to assign binding or randomly (default: False)
@@ -691,39 +691,39 @@ class DextramerSimulator:
         if binding_fold_increase_range is None:
             binding_fold_increase_range = [2, 5, 10, 50, 100, 150, 200, 500]
 
-        if nof_clonotype_cluster is not None:
-            if nof_clonotype_cluster > nof_clones:
-                raise ValueError("`nof_clonotype_cluster` must be smaller than `nof_clones`")
-            if nof_clonotype_cluster < 2:
-                raise ValueError("`nof_clonotype_cluster` must be at least 2")
+        if n_clonotype_cluster is not None:
+            if n_clonotype_cluster > n_clones:
+                raise ValueError("`n_clonotype_cluster` must be smaller than `n_clones`")
+            if n_clonotype_cluster < 2:
+                raise ValueError("`n_clonotype_cluster` must be at least 2")
         else:
-            nof_clonotype_cluster = rng.randint(2, nof_clones)
+            n_clonotype_cluster = rng.randint(2, n_clones)
 
         d = {"x": [], "binder": [], "clone": [], "fold_increase": []}
         if simulate_neg_control:
             d["x_neg"] = []
 
-        binder_assignment = rng.binomial(1, binding_ratio, size=nof_clones)
+        binder_assignment = rng.binomial(1, binding_ratio, size=n_clones)
         K = None
         cc_assignment = None
 
         # simulate TCR similarity clusters
         if use_clonotype_cov:
             cc_assignment = self.__cc_assignment(binder_assignment,
-                                                 nof_clones,
-                                                 nof_clonotype_cluster,
+                                                 n_clones,
+                                                 n_clonotype_cluster,
                                                  p_nonbinding_clone_outlier, rng)
 
-            K = self.__construct_tcr_kernel(nof_clones, cc_assignment, self.dist_params, rng)
+            K = self.__construct_tcr_kernel(n_clones, cc_assignment, self.dist_params, rng)
 
         # generate cell per clonotype following a discrete exponentially decreasing distribution normalized to
         # specified total cell count
-        total_le = total_cells - nof_clones
-        raw_cells_per_clone = rng.choice(cells_per_clonotype, size=nof_clones)
+        total_le = total_cells - n_clones
+        raw_cells_per_clone = rng.choice(cells_per_clonotype, size=n_clones)
         cells_per_clone_p = stats.dirichlet.rvs(raw_cells_per_clone, random_state=rng)[0]
-        cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(nof_clones)).astype("int32")
+        cells_per_clone = (rng.multinomial(total_le, cells_per_clone_p) + np.ones(n_clones)).astype("int32")
 
-        for i in range(nof_clones):
+        for i in range(n_clones):
             is_binder = binder_assignment[i]
             n_cells = cells_per_clone[i]
             fold_change = rng.choice(binding_fold_increase_range)
@@ -858,7 +858,7 @@ class DextramerSimulator:
         return npd.NegativeBinomial2(mu, alpha).sample(rng_key, sample_shape=(size,))
 
     @staticmethod
-    def __cc_assignment(binder_assignment, nof_clones, nof_clonotype_cluster, p_nonbinding_clone_outlier, rng):
+    def __cc_assignment(binder_assignment, n_clones, n_clonotype_cluster, p_nonbinding_clone_outlier, rng):
         """
         Split clonotypes into clusters but ensure perfect separation of binding assignment.
         Missassigns with `p_nonbinding_clone_outlier`probability nonbinding clones to binding clusters
@@ -904,11 +904,11 @@ class DextramerSimulator:
         binder_indices = np.where(binder_assignment == 1)[0]
 
         # Randomly assign number of clusters to each class
-        n_clusters_nonbinder = rng.randint(1, nof_clonotype_cluster)
-        n_clusters_binder = nof_clonotype_cluster - n_clusters_nonbinder
+        n_clusters_nonbinder = rng.randint(1, n_clonotype_cluster)
+        n_clusters_binder = n_clonotype_cluster - n_clusters_nonbinder
 
         # Initialize cluster assignments
-        cluster_assignments = randomly_assign_to_clusters(np.zeros(nof_clones, dtype=int), nonbinder_indices, 0,
+        cluster_assignments = randomly_assign_to_clusters(np.zeros(n_clones, dtype=int), nonbinder_indices, 0,
                                                           n_clusters_nonbinder)
         cluster_assignments = randomly_assign_to_clusters(cluster_assignments, binder_indices, n_clusters_nonbinder,
                                                           n_clusters_binder)

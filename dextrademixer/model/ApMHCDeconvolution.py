@@ -172,29 +172,30 @@ class ApMHCDeconvolution:
                         f"AnnData or a cells x features DataFrame")
 
     @staticmethod
-    def _check_parameters(x, neg_x, c):
+    def _check_parameters(x, x_neg, clone_id):
         """
         Checks consistency of the input data before initializing the model.
 
         Args:
             x: pMHC UMI counts, shape (n_cells,).
-            neg_x: (Optional) negative control counts, expected shape (n_cells,).
-            c: (Optional) clonotype ids, expected shape (n_cells,).
+            x_neg: (Optional) negative control counts, expected shape (n_cells,).
+            clone_id: (Optional) clonotype ids, expected shape (n_cells,).
 
         Raises:
-            ValueError: if `x` contains NaNs or if `neg_x`/`c` do not match its length.
+            ValueError: if `x` contains NaNs or if `x_neg`/`clone_id` do not match its length.
         """
         N = x.shape[0]
 
         if jnp.isnan(x).any():
             raise ValueError("Input data `x` contains NaN values. Please remove them before fitting the model.")
 
-        if c is not None:
-            if c.shape[0] != N:
-                raise ValueError(f"`c` and count data `x` require the same size but got {c.shape[0]} and {N}")
+        if clone_id is not None:
+            if clone_id.shape[0] != N:
+                raise ValueError(f"`clone_id` and count data `x` require the same size but got "
+                                 f"{clone_id.shape[0]} and {N}")
 
-        if neg_x is not None:
-            N_neg = neg_x.shape[0]
+        if x_neg is not None:
+            N_neg = x_neg.shape[0]
 
             if N_neg != N:
                 raise ValueError(f"x_neg must have the same size than x but got {N_neg} vs {N}.")
