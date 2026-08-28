@@ -1,3 +1,12 @@
+"""
+The interface shared by all pMHC deconvolution methods.
+
+`ApMHCDeconvolution` fixes the call order every method follows and holds the parts that do not
+depend on the model: resolving the supported input containers into counts and annotation
+(`as_counts`), validating them (`_check_parameters`), and turning posterior probabilities into class
+assignments by threshold or local-FDR control (`_predict_posterior_class`). DextraDemixer and the
+comparison baselines BEAM, ICON and ITRAP all build on it.
+"""
 from __future__ import annotations
 
 import abc
@@ -18,6 +27,11 @@ Data = Union[md.MuData, ad.AnnData, pd.DataFrame]
 
 
 class ApMHCDeconvolution:
+    """
+    Common interface of the pMHC deconvolution methods, i.e. DextraDemixer and the comparison
+    baselines. It fixes the call order `preprocess_model_data` -> `fit` -> `predict_posterior_class`
+    and provides the model-agnostic parts of it.
+    """
 
     @abc.abstractmethod
     def preprocess_model_data(self,
@@ -27,27 +41,67 @@ class ApMHCDeconvolution:
                               neg_ctrl_key: str = None,
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
-                              ir_cov_key: str = None,
                               **kwargs):
-        pass
+        """
+        Extracts the counts and the annotation a method needs from `data`, see `as_counts`.
+
+        Args:
+            data: the pMHC counts, as a MuData, an AnnData or a cells x features DataFrame.
+            pmhc_key: the pMHC count column to deconvolve.
+            gex_key: the MuData modality holding the counts.
+            neg_ctrl_key: (Optional) the negative control count column.
+            ir_key: the MuData AIRR module key.
+            ir_clone_key: (Optional) the `obs` column holding clonotype ids.
+            kwargs: method-specific extras.
+        """
 
     @abc.abstractmethod
     def fit(self, *args, **kwargs):
-        pass
+        """
+        Fits the method on the data prepared by `preprocess_model_data`.
+
+        Returns:
+            self, so that `predict_posterior_class` can be chained onto the call.
+        """
 
     @abc.abstractmethod
     def predict_posterior_class(self,
                                 threshold: float = None,
                                 target_fdr: float = None
                                 ) -> Tuple[Array, Array]:
-        pass
+        """
+        Assigns each cell to the binding or non-binding class.
+
+        Args:
+            threshold: (Optional) probability in [0,1] above which a cell is called a binder.
+            target_fdr: (Optional) FDR to control instead of using a fixed threshold. Mutually
+                        exclusive with `threshold`.
+
+        Returns:
+            A tuple (p, assignment) of per-cell binding probabilities and 0/1 assignments.
+        """
 
     @staticmethod
     def _predict_posterior_class(p: Array,
                                  threshold: float = None,
                                  target_fdr: float = None
                                  ) -> Array:
+        """
+        Turns per-cell binding probabilities into 0/1 assignments, either at a fixed threshold or
+        at the largest threshold whose estimated FDR stays below `target_fdr`.
 
+        Args:
+            p: per-cell posterior probability of binding, shape (n_cells,).
+            threshold: (Optional) probability in [0,1] above which a cell is called a binder.
+            target_fdr: (Optional) FDR to control instead. Mutually exclusive with `threshold`;
+                        if neither is given, a threshold of 0.5 is used.
+
+        Returns:
+            The 0/1 class assignment, shape (n_cells,).
+
+        Raises:
+            ValueError: if both `threshold` and `target_fdr` are given, or either is outside [0,1].
+        """
         if threshold is not None and target_fdr is not None:
             raise ValueError("Please specify either a manual `threshold` or a `target_fdr` but not both.")
 
@@ -96,6 +150,16 @@ class ApMHCDeconvolution:
         - AnnData: counts from `X`, obs from `obs`
         - DataFrame (cells x features): obs is the frame itself, so clonotypes can be a column
 
+        Args:
+            data: a MuData, an AnnData or a cells x features DataFrame.
+            gex_key: the MuData modality holding the counts, unused for the other types.
+            ir_key: the MuData modality holding the annotation, unused for the other types.
+
+        Returns:
+            A tuple (counts, obs) of DataFrames sharing the cell order of `data`.
+
+        Raises:
+            TypeError: if `data` is of an unsupported type.
         """
         if isinstance(data, md.MuData):
             counts, _ = ApMHCDeconvolution.as_counts(data.mod[gex_key])
@@ -110,7 +174,15 @@ class ApMHCDeconvolution:
     @staticmethod
     def _check_parameters(x, neg_x, c):
         """
-        checks consistency of input data before initializing the model
+        Checks consistency of the input data before initializing the model.
+
+        Args:
+            x: pMHC UMI counts, shape (n_cells,).
+            neg_x: (Optional) negative control counts, expected shape (n_cells,).
+            c: (Optional) clonotype ids, expected shape (n_cells,).
+
+        Raises:
+            ValueError: if `x` contains NaNs or if `neg_x`/`c` do not match its length.
         """
         N = x.shape[0]
 
