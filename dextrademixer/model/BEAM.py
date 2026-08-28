@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from jax._src.typing import Array
 
 
-class BEAMT(ApMHCDeconvolution):
+class BEAM(ApMHCDeconvolution):
     """
     This class implements the BEAM-T algorithm used by 10x Genomics.
     It requires a negative control besides the pMHC-dextramer and calculates an antigen-specificity score using
@@ -28,7 +28,7 @@ class BEAMT(ApMHCDeconvolution):
 
     p = (1-beta.cdf(quantile, pMHC-UMI+1, neg_ctrl-UMI+3))
     """
-    __name = "BEAMT"
+    __name = "BEAM"
     __version = "0.0.1"
 
     def __init__(self):
