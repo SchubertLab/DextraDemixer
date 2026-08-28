@@ -18,7 +18,7 @@ The method is described in [*DextraDemixer enables accurate identification of an
 - Supports optional negative-control multimers.
 - Incorporates clonotype information through clone-level probability aggregation.
 - Provides fixed-threshold and Bayesian false discovery rate (FDR) assignments.
-- Works directly with [`MuData`](https://mudata.readthedocs.io/) objects and uses [JAX](https://jax.readthedocs.io/) and [NumPyro](https://num.pyro.ai/) for inference.
+- Works directly with [`MuData`](https://mudata.readthedocs.io/), [`AnnData`](https://anndata.readthedocs.io/), and [`Pandas DataFrames`](https://pandas.pydata.org/) objects and uses [JAX](https://jax.readthedocs.io/) and [NumPyro](https://num.pyro.ai/) for inference.
 
 ## Installation
 
@@ -32,7 +32,7 @@ conda activate dextrademixer
 python -m pip install -e .
 ```
 
-The final command installs the local package in editable mode. Runtime dependency versions are aligned between `pyproject.toml` and `environment.yaml`.
+The final command installs the local package in editable mode. Runtime dependency constraints are aligned between `pyproject.toml` and `environment.yaml`. To reproduce the numbers from the manuscript, use `environment_reproducible.yaml` instead: it pins the exact versions, and results can shift slightly with other JAX/NumPyro releases.
 
 ## Quick start
 
@@ -45,45 +45,38 @@ from dextrademixer.model import DextraDemixer
 
 mdata = mu.read("data/example_data.h5mu")
 
-model = DextraDemixer()
-model.preprocess_model_data(
-    mdata,
-    pmhc_key="pmhc1",
-    gex_key="gex",
-)
-model.fit_svi(nof_inits=10, rng_key=42)
-
+model = DextraDemixer().fit(mdata, pmhc_key="pmhc1", gex_key="gex")
 p_binder, is_binder = model.predict_posterior_class(threshold=0.5)
+
 mdata.mod["gex"].obs["dextrademixer_probability"] = p_binder
 mdata.mod["gex"].obs["dextrademixer_assignment"] = is_binder
 ```
 
-To include a negative-control multimer, pass `neg_ctrl_key` to `preprocess_model_data`. To aggregate probabilities within clonotypes, pass `clonotype_median_p=True` and a cell-aligned `clone_id` array to `predict_posterior_class`. For example:
+To include a negative-control multimer, pass `neg_ctrl_key`. To aggregate probabilities within clonotypes, pass the clonotype column as `ir_clone_key` and set `clonotype_median_p=True` when predicting:
 
 ```python
-model.preprocess_model_data(
+model = DextraDemixer().fit(
     mdata,
     pmhc_key="pmhc1",
     gex_key="gex",
     neg_ctrl_key="neg_control",
+    ir_clone_key="clone_id",
 )
-model.fit_svi(nof_inits=10, rng_key=42)
 
-p_binder, is_binder = model.predict_posterior_class(
-    threshold=0.5,
-    clonotype_median_p=True,
-    clone_id=mdata.mod["airr"].obs["clone_id"].to_numpy(),
-)
+p_binder, is_binder = model.predict_posterior_class(threshold=0.5, clonotype_median_p=True)
 ```
 
 Use either `threshold` for a fixed decision boundary or `target_fdr` for FDR-controlled assignments; do not specify both.
 
 ## Input data
 
-DextraDemixer expects a `MuData` object with cell-aligned modalities:
+DextraDemixer needs the pMHC UMI counts and, optionally, a cell-level clonotype identifier. It reads them from any of:
 
-- A feature-count modality (called `gex` by default) containing the pMHC UMI counts in `.X`; `pmhc_key` and the optional `neg_ctrl_key` refer to its feature names.
-- An AIRR modality (called `airr` by default). Its `.obs` can provide a cell-level clonotype identifier for clone-aware prediction.
+- A [`MuData`](https://mudata.readthedocs.io/) object: counts in the `.X` of the feature modality (`gex_key`, `gex` by default), clonotypes in the `.obs` of the AIRR modality (`ir_key`, `airr` by default).
+- An [`AnnData`](https://anndata.readthedocs.io/) object: counts in `.X`, clonotypes in `.obs`; `gex_key` and `ir_key` are then unused.
+- A cells x features [`DataFrame`](https://pandas.pydata.org/): counts and annotation in the same table, so every key is a column name.
+
+`pmhc_key` and the optional `neg_ctrl_key` name the count columns, `ir_clone_key` the clonotype column, whose ids may be integers or strings. The bundled example dataset ships in all three formats: `data/example_data.h5mu`, `.h5ad` and `.csv`.
 
 See [`Tutorial.ipynb`](Tutorial.ipynb) for a complete, reproducible workflow using the bundled example dataset, including configuration, model fitting, evaluation, and visualization:
 
