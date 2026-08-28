@@ -93,7 +93,7 @@ class ITRAP:
         # Adjust data access for mudata and anndata
         if isinstance(adata, md.MuData):
             dex = adata.mod[dex_key]
-            dex = pd.DataFrame(dex.X.toarray(), index=dex.obs_names, columns=dex.var_names)
+            dex = dex.to_df()  # works for sparse and dense X
             ir_clone_key = f'{ir_key}:{ir_clone_key}' if not ir_clone_key in adata.obs.columns else ir_clone_key
             chain_pairing_key = f'{ir_key}:{chain_pairing_key}' if not chain_pairing_key in adata.obs.columns else chain_pairing_key
             umi_cols_TRA = [f'{ir_key}:{col}' if not col in adata.obs.columns else col for col in umi_cols_TRA] if umi_cols_TRA is not None else None

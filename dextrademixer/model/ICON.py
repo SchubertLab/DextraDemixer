@@ -46,7 +46,7 @@ def icon_assign_pmhc(adata: Union[md.MuData, ad.AnnData],
     if isinstance(adata, md.MuData):
         is_mudata = True
         dex = adata.mod[dex_key]
-        dex = pd.DataFrame(dex.X.toarray(), index=dex.obs_names, columns=dex.var_names)
+        dex = dex.to_df()  # works for sparse and dense X
     elif isinstance(adata, ad.AnnData):
         is_mudata = False
         dex = adata.obsm[dex_key]
