@@ -63,8 +63,16 @@ class DextraDemixer(ApMHCDeconvolution):
 
     """
 
-    def __init__(self, model_type: str = "mixturemodelkmeans", 
-                 model_config: Dict = None):
+    def __init__(self, model_type: str = "mixturemodelkmeans",
+                 overdispersion_scale_prior: float = 1e-2, alpha_offset: float = 0.0):
+        """
+        Args:
+            model_type: which model of `available_methods()` to use
+            overdispersion_scale_prior: scale of the HalfCauchy prior on the variance-to-mean ratio
+            alpha_offset: offset of the negative binomial scale parameter alpha for the specific
+                          component. Increase if the model is fitting noise, decrease if the
+                          antigen-specific component gets too narrow
+        """
         super().__init__()
 
         self.sampler = None
@@ -72,12 +80,13 @@ class DextraDemixer(ApMHCDeconvolution):
         self.svi_result = None
         self.rng_key = None
         self.guide = None
-        self.model_config = model_config if model_config is not None else {}
 
         if model_type not in ADextraDemixerModel.registry.keys():
-            raise warnings.warn(f"`model_type` {model_type} not supported using the standard model.")
-        self.model = ADextraDemixerModel.registry.get(model_type, DextraDemixerKmeansModel)()
-        self.model._model_config.update(self.model_config)
+            raise ValueError(f"`model_type` {model_type!r} not supported, "
+                             f"available: {sorted(ADextraDemixerModel.registry.keys())}")
+        self.model = ADextraDemixerModel.registry[model_type]()
+        self.model._model_config.update(overdispersion_scale_prior=overdispersion_scale_prior,
+                                        alpha_offset=alpha_offset)
 
     @property
     def version(self):
@@ -104,7 +113,7 @@ class DextraDemixer(ApMHCDeconvolution):
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
                               use_size_factor: bool = None,
-                              outlier_threshold: float = None,
+                              outlier_threshold: float = 100,
                               **kwargs):
         """
         Preprocesses the data and initializes the model
@@ -158,37 +167,78 @@ class DextraDemixer(ApMHCDeconvolution):
 
         return size_factors
 
-    @staticmethod
-    def get_default_sampler_config():
+    def fit(self, mdata: md.MuData, *, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
+            ir_key: str = "airr", ir_clone_key: str = None, use_size_factor: bool = None,
+            outlier_threshold: float = 100,
+            guide='normal', maxiter: int = 1000, num_particles: int = 10, progress_bar: bool = True,
+            lr_init_value: float = 3e-1, lr_end_value: float = 3e-3,
+            lr_decay_rate: float = 0.995, lr_transition_steps: int = 1,
+            nof_inits: int = 10, use_minimal_loss: bool = True, rng_key: int = 998777,
+            **kwargs) -> "DextraDemixer":
+        """
+        Extracts the model data from `mdata` and fits it, i.e. `preprocess_model_data` followed by
+        `fit_svi`. This is the recommended entry point; call the two separately only if you want to
+        refit the same preprocessed data with several inference settings.
 
-        sampler_config = {
-            "svi": {
-                "maxiter": 1000,
-                "progress_bar": True,
-                "adam": {
-                    "init_value": 3e-1,
-                    "transition_steps": 1,
-                    "decay_rate": 0.995,
-                    "end_value": 3e-3,
-                },
-                "tracer": {
-                    "num_particles": 10,
-                }
-            }
-        }
+        Args:
+            mdata: A Mudata containing only dextramer counts and clonotype information
+            pmhc_key: a string specifying the pMHC column in `gex_key` modality`s `X` which should be deconvolved
+            gex_key: the MuData transcriptome module key
+            neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
+            ir_key: the MuData AIRR module key
+            ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
+            use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, is use all
+            outlier_threshold: cells more than this many standard deviations from the mean count are
+                        held out of the fit but still scored by `predict_posterior_class`. None
+                        disables the filtering
+            guide: The guide to use for variational inference.
+                   If None, self.model object will be checked for a guide function,
+                   elif 'normal', AutoNormal guide will be used, elif 'mvnormal', AutoMultivariateNormal guide will be used
+            maxiter: number of SVI steps
+            num_particles: Monte-Carlo samples used per step to estimate the ELBO gradient. Higher is
+                           less noisy and proportionally slower
+            progress_bar: whether to show a progress bar over the SVI steps
+            lr_init_value: initial learning rate of the exponentially decaying Adam schedule
+            lr_end_value: final learning rate the schedule decays to
+            lr_decay_rate: decay rate of the schedule
+            lr_transition_steps: number of steps between applications of the decay
+            nof_inits: number of initializations tried with different seeds to find gut init values
+            use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
+            rng_key: integer seed to initialize numpyros RNG-Key store
+            kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
+        Returns:
+            self, so that `predict_posterior_class` can be chained onto the call
+        """
+        self.preprocess_model_data(mdata, pmhc_key=pmhc_key, gex_key=gex_key, neg_ctrl_key=neg_ctrl_key,
+                                   ir_key=ir_key, ir_clone_key=ir_clone_key,
+                                   use_size_factor=use_size_factor, outlier_threshold=outlier_threshold,
+                                   **kwargs)
+        self.fit_svi(guide=guide, maxiter=maxiter, num_particles=num_particles,
+                     progress_bar=progress_bar, lr_init_value=lr_init_value, lr_end_value=lr_end_value,
+                     lr_decay_rate=lr_decay_rate, lr_transition_steps=lr_transition_steps,
+                     nof_inits=nof_inits, use_minimal_loss=use_minimal_loss, rng_key=rng_key)
+        return self
 
-        return sampler_config
-
-    def fit_svi(self, guide='normal', svi_config: Dict[str, Union[int, float]] = None,
-                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777) \
+    def fit_svi(self, guide='normal', maxiter: int = 1000, num_particles: int = 10,
+                progress_bar: bool = True, lr_init_value: float = 3e-1, lr_end_value: float = 3e-3,
+                lr_decay_rate: float = 0.995, lr_transition_steps: int = 1,
+                nof_inits: int = 10, use_minimal_loss: bool = True, rng_key: int = 998777) \
                 -> az.InferenceData:
         """
-        Implements stochastic variational inference
+        Implements stochastic variational inference on data prepared by `preprocess_model_data`.
+        Low-level path: `fit` does both steps in one call.
 
         guide: The guide to use for variational inference.
                If None, self.model object will be checked for a guide function,
                elif 'normal', AutoNormal guide will be used, elif 'mvnormal', AutoMultivariateNormal guide will be used
-        svi_config: configuration for optimizer (Adam) and posterior samples
+        maxiter: number of SVI steps
+        num_particles: Monte-Carlo samples used per step to estimate the ELBO gradient. Higher is
+                       less noisy and proportionally slower
+        progress_bar: whether to show a progress bar over the SVI steps
+        lr_init_value: initial learning rate of the exponentially decaying Adam schedule
+        lr_end_value: final learning rate the schedule decays to
+        lr_decay_rate: decay rate of the schedule
+        lr_transition_steps: number of steps between applications of the decay
         nof_inits: number of initializations tried with different seeds to find gut init values
         use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
         rng_key: integer seed to initialize numpyros RNG-Key store
@@ -199,16 +249,9 @@ class DextraDemixer(ApMHCDeconvolution):
 
         self.rng_key = rng_key
 
-        if svi_config is None:
-            svi_config = self.get_default_sampler_config()["svi"]
-
-        adam_config = {**self.get_default_sampler_config()["svi"]["adam"], **svi_config.get("adam", {})}
-        tracer_config = {**self.get_default_sampler_config()["svi"]["tracer"], **svi_config.get("tracer", {})}
-        svi_config = {**self.get_default_sampler_config()["svi"], **svi_config}
-        svi_config.pop("adam", None)
-        svi_config.pop("tracer", None)
-
-        optimizer = npy.optim.ClippedAdam(exponential_decay(**adam_config),)
+        optimizer = npy.optim.ClippedAdam(exponential_decay(
+            init_value=lr_init_value, end_value=lr_end_value,
+            decay_rate=lr_decay_rate, transition_steps=lr_transition_steps))
         # check for custom guide in self.model otherwise use autoguide
         if guide == 'normal':
             guide = npy.infer.autoguide.AutoNormal
@@ -222,7 +265,7 @@ class DextraDemixer(ApMHCDeconvolution):
             else:
                 self.guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
             svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
-                                loss=npy.infer.TraceGraph_ELBO(**tracer_config))
+                                loss=npy.infer.TraceGraph_ELBO(num_particles=num_particles))
             init_state = svi.init(key)
             loss = svi.evaluate(init_state)
 
@@ -235,7 +278,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         self.guide = best_guide
         svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
-                            loss=npy.infer.TraceGraph_ELBO(**tracer_config))
+                            loss=npy.infer.TraceGraph_ELBO(num_particles=num_particles))
 
         def body_fn(svi_state, step):
             svi_state, loss = svi.stable_update(svi_state, step=step)
@@ -246,8 +289,7 @@ class DextraDemixer(ApMHCDeconvolution):
         params = []
         compiled_body_fn = jit(body_fn)
 
-        with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
-                         disable=(not svi_config.get("progress_bar", False)), mininterval=10) as t:
+        with tqdm.trange(1, maxiter + 1, disable=(not progress_bar), mininterval=10) as t:
             batch = 10
             for i in t:
                 svi_state, loss, param = compiled_body_fn(svi_state, i)
@@ -268,7 +310,6 @@ class DextraDemixer(ApMHCDeconvolution):
         self.svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
 
     def predict_posterior_class(self,
-                                data: Dict = None,
                                 threshold: float = None,
                                 target_fdr: float = None,
                                 cred_intvl: float = None,
@@ -280,6 +321,10 @@ class DextraDemixer(ApMHCDeconvolution):
         Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
         If neither threshold nor target_fdr is provided the max posterior class probability will be used.
 
+        Scores `self.model.data_full`, i.e. *all* cells including the ones an `outlier_threshold`
+        held out of the fit. This is intended: outliers are excluded from fitting but still get a
+        posterior probability. The model is transductive, so there is no scoring of other datasets.
+
         Args:
             threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
                         probabilities
@@ -288,7 +333,10 @@ class DextraDemixer(ApMHCDeconvolution):
             cred_intvl: (Optional) instead of using the summarized class probability we estimate a distribution
                         over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
             clonotype_median_p: (Optional) after initial probability, use median within each clonotype for each cell
-            clone_id: (Optional) map each cell id to clone id, shape=(n_cells)
+            clone_id: (Optional) map each cell id to clone id, shape=(n_cells). Only needed as an
+                        override: without it the clonotypes given to `fit`/`preprocess_model_data`
+                        as `ir_clone_key` are used. Pass it to aggregate over a different clonotype
+                        definition without refitting.
         Returns:
             A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
             class assignment decision
@@ -301,7 +349,9 @@ class DextraDemixer(ApMHCDeconvolution):
 
             if clonotype_median_p:
                 if clone_id is None:
-                    raise ValueError("If `clonotype_mean_p`= True a clonotype vector `clone_id` must be specified.")
+                    raise ValueError("`clonotype_median_p`=True needs clonotypes: either pass "
+                                     "`ir_clone_key` to `fit`/`preprocess_model_data`, or a "
+                                     "`clone_id` vector here.")
                 unique_ids = np.unique(clone_id)
 
                 if cred_intvl:
@@ -315,7 +365,7 @@ class DextraDemixer(ApMHCDeconvolution):
                     p = jnp.array(mean_p.values)[clone_id]
             return p
 
-        data = data if data is not None else self.model.data_full
+        data = self.model.data_full
         clone_id = clone_id if clone_id is not None else data.get("clone_continuous", None)
         clone_id = pd.factorize(clone_id)[0] if clone_id is not None else None
         
@@ -630,19 +680,23 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         self._name = "Abstract"
         self._version = "0.0.0"
         self._data = None
-        self._kmeans_dict = None
 
     def preprocess_model_data(self,
                               x: Union[pd.Series, np.ndarray, Array],
                               s: Union[pd.Series, np.ndarray, Array] = None,
                               neg_cont: Union[pd.Series, np.ndarray, Array] = None,
                               c: Union[pd.Series, np.ndarray, Array] = None,
+                              outlier_threshold: float = 100,
                               **kwargs):
         """
+        Args:
+            outlier_threshold: cells whose count is more than this many standard deviations from
+                               the mean are held out of the fit (`self.data`) but still scored
+                               (`self.data_full`). None disables the filtering.
         """
         clone = None if c is None else jnp.array(c, dtype=INT_DTYPE)
         zscore = jnp.abs((x - jnp.mean(x)) / jnp.std(x))
-        outlier_threshold = 100 # TODO Hardcoded
+        keep = jnp.where(zscore < (jnp.inf if outlier_threshold is None else outlier_threshold))
         # With outliers
         self.data_full = {"x": jnp.array(x, dtype=INT_DTYPE),
                           "s": None if s is None else jnp.array(s, dtype=FLOAT_DTYPE),
@@ -652,14 +706,77 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                           "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
                           }
         # Without outliers
-        self.data = {"x": jnp.array(x[jnp.where(zscore < outlier_threshold)], dtype=INT_DTYPE),
-                     "s": jnp.array(s[jnp.where(zscore < outlier_threshold)], dtype=FLOAT_DTYPE) if s is not None else None,
-                     "x_neg": jnp.array(neg_cont[jnp.where(zscore < outlier_threshold)], dtype=FLOAT_DTYPE) if neg_cont is not None else None,
-                     "clone": jnp.array(clone[jnp.where(zscore < outlier_threshold)], dtype=INT_DTYPE) if clone is not None else None,
-                     "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone[jnp.where(zscore < outlier_threshold)]),
+        self.data = {"x": jnp.array(x[keep], dtype=INT_DTYPE),
+                     "s": jnp.array(s[keep], dtype=FLOAT_DTYPE) if s is not None else None,
+                     "x_neg": jnp.array(neg_cont[keep], dtype=FLOAT_DTYPE) if neg_cont is not None else None,
+                     "clone": jnp.array(clone[keep], dtype=INT_DTYPE) if clone is not None else None,
+                     "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone[keep]),
                      }
 
-    def _init_kmeans(self, scale_factor=1.0, outlier_threshold=None) -> Dict:
+    def model(self, **kwargs):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_default_model_config(self) -> Dict:
+        return {}
+
+    @property
+    @abc.abstractmethod
+    def name(self) -> str:
+        return self._name
+
+    @property
+    @abc.abstractmethod
+    def version(self) -> str:
+        return self._version
+
+    @property
+    def data(self) -> Dict:
+        return self._data
+
+    @data.setter
+    def data(self, value):
+        self._data = value
+
+
+class DextraDemixerKmeansModel(ADextraDemixerModel):
+    """
+    Dextramixer version who is initialized and prior parametrized by K-means++ results
+    Thus model does not rely on hyperpriors and is a bit simpler
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._name = "mixturemodelkmeans"
+        self._version = "0.0.1"
+        self._kmeans_dict = None
+        self._model_config = {
+            "overdispersion_scale_prior": 1e-2,
+            "alpha_offset": 0.0,
+        }
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def version(self) -> str:
+        return self._version
+
+    def preprocess_model_data(self,
+                              x: Union[pd.Series, np.ndarray, Array],
+                              s: Union[pd.Series, np.ndarray, Array] = None,
+                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
+                              c: Union[pd.Series, np.ndarray, Array] = None,
+                              outlier_threshold: float = 100,
+                              **kwargs):
+
+        super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c,
+                                      outlier_threshold=outlier_threshold, **kwargs)
+        self._kmeans_dict = self._init_kmeans()
+        self._model_config.update(self._kmeans_dict)
+
+    def _init_kmeans(self) -> Dict:
         """
         Initialize KMeans with 2 clusters and compute all necessary prior parameters
         for mu_q, sigma_q, alpha, and tau priors.
@@ -671,13 +788,12 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
 
         returns: Dict with params estimates and  k-mean labels,
         """
+        # already filtered by `outlier_threshold` in `preprocess_model_data`
         x = self.data["x"].copy()
-        x_no_outliers = x
-        clone = self.data.get("clone_continuous", None)
         n_clusters = 2  # KMeans with 2 clusters
 
         # Perform KMeans clustering
-        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x_no_outliers), np.max(x_no_outliers)]), n_init="auto").fit(x_no_outliers.reshape(-1, 1))
+        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x), np.max(x)]), n_init="auto").fit(x.reshape(-1, 1))
         labels = kmeans.predict(x.reshape(-1, 1))
 
         if labels.sum() <= 3:
@@ -725,76 +841,6 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         return kmeans_dict
 
     @abc.abstractmethod
-    def model(self, **kwargs):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_default_model_config(self) -> Dict:
-        return {}
-
-    @property
-    @abc.abstractmethod
-    def name(self) -> str:
-        return self._name
-
-    @property
-    @abc.abstractmethod
-    def version(self) -> str:
-        return self._version
-
-    @property
-    def data(self) -> Dict:
-        return self._data
-
-    @data.setter
-    def data(self, value):
-        self._data = value
-
-
-class DextraDemixerKmeansModel(ADextraDemixerModel):
-    """
-    Dextramixer version who is initialized and prior parametrized by K-means++ results
-    Thus model does not rely on hyperpriors and is a bit simpler
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._name = "mixturemodelkmeans"
-        self._version = "0.0.1"
-        self._model_config = {
-            "mu_w_mean_prior": 0.0,
-            "mu_w_var_prior": 10.0,
-            "mu_q_mean_prior": 0.0,
-            "mu_q_var_prior": 10.0,
-            "sigma_q_var_prior": 10.0,
-            "alpha_var_prior": 10.0,
-            "var_hyperprior": 10.0,
-            "overdispersion_scale_prior": 1e-2,
-            "alpha_offset": 0.0,
-        }
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def version(self) -> str:
-        return self._version
-
-    def preprocess_model_data(self,
-                              x: Union[pd.Series, np.ndarray, Array],
-                              s: Union[pd.Series, np.ndarray, Array] = None,
-                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
-                              c: Union[pd.Series, np.ndarray, Array] = None,
-                              scale_factor: float = 1.0,
-                              outlier_threshold: float = None,
-                              **kwargs):
-
-        super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c, **kwargs)
-        self._kmeans_dict = self._init_kmeans(scale_factor=scale_factor,
-                                              outlier_threshold=outlier_threshold)
-        self._model_config.update(self._kmeans_dict)
-
     def get_default_model_config(self) -> Dict:
         return self._model_config
 
@@ -803,7 +849,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         Define the probabilistic model based on the preprocessed data and KMeans initialization.
         """
 
-        model_config = {**self.get_default_model_config(), **kwargs.get("model_config", {})}
+        model_config = self.get_default_model_config()
         if data is None:
             if self.data is None:
                 raise RuntimeError("Model was not properly initialized. Please call `preprocess_model_data` first.")

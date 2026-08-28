@@ -67,14 +67,11 @@ def _run_model(model_variant, experiment, expected_results, threshold=None, targ
         warnings.simplefilter("ignore")
         mdata = mu.read(os.path.join(DATA_DIR, f"{experiment}.h5mu"))
 
-    model = DextraDemixer(model_config={"overdispersion_scale_prior": 1.0, "alpha_offset": 5.0})
+    model = DextraDemixer(overdispersion_scale_prior=1.0, alpha_offset=5.0)
     model.preprocess_model_data(mdata, pmhc_key="pmhc1", gex_key="gex", neg_ctrl_key=kwargs["neg_ctrl_key"])
 
-    opt_params = {
-        "maxiter": 1000,
-        "adam": {"init_value": 3e-1, "end_value": 3e-3, "decay_rate": 0.995, "transition_steps": 1},
-    }
-    model.fit_svi(svi_config=opt_params, nof_inits=10, rng_key=42)
+    model.fit_svi(maxiter=1000, lr_init_value=3e-1, lr_end_value=3e-3, lr_decay_rate=0.995,
+                  lr_transition_steps=1, nof_inits=10, rng_key=42)
 
     p_pred, assignment = model.predict_posterior_class(
         target_fdr=target_fdr,
@@ -117,6 +114,37 @@ def _run_model(model_variant, experiment, expected_results, threshold=None, targ
         f"cred_intvl={cred_intvl})\nExpected: {expected[metrics].astype(float).values}, "
         f"got: {results[metrics].values}"
     )
+
+
+def test_fit_wrapper_matches_two_step():
+    """`fit` duplicates the defaults of `preprocess_model_data`/`fit_svi`, so check both that it
+    delegates correctly and that no default has drifted apart from them."""
+    import inspect
+
+    fit, low_level = inspect.signature(DextraDemixer.fit).parameters, {}
+    for method in (DextraDemixer.preprocess_model_data, DextraDemixer.fit_svi):
+        low_level.update(inspect.signature(method).parameters)
+    drifted = {name: (p.default, low_level[name].default) for name, p in fit.items()
+               if name in low_level and p.default is not p.empty
+               and p.default != low_level[name].default}
+    assert not drifted, f"fit() defaults differ from the low-level methods: {drifted}"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mdata = mu.read(os.path.join(DATA_DIR, f"{EXPERIMENTS[0]}.h5mu"))
+    kwargs = dict(pmhc_key="pmhc1", gex_key="gex", neg_ctrl_key="neg_control")
+    svi = dict(maxiter=100, nof_inits=2, progress_bar=False, rng_key=42)
+
+    two_step = DextraDemixer(overdispersion_scale_prior=1.0, alpha_offset=5.0)
+    two_step.preprocess_model_data(mdata, **kwargs)
+    two_step.fit_svi(**svi)
+    p_two, a_two = two_step.predict_posterior_class(threshold=0.5)
+
+    one_call = DextraDemixer(overdispersion_scale_prior=1.0, alpha_offset=5.0).fit(mdata, **kwargs, **svi)
+    p_one, a_one = one_call.predict_posterior_class(threshold=0.5)
+
+    np.testing.assert_allclose(np.asarray(p_one), np.asarray(p_two))
+    np.testing.assert_array_equal(np.asarray(a_one), np.asarray(a_two))
 
 
 class TestDextraDemixer:
