@@ -60,8 +60,10 @@ Repository = "https://github.com/SchubertLab/DextraDemixer.git"
 addopts = ["--strict-markers"]
 markers = ["slow: end-to-end SVI fits (minutes); deselect with -m 'not slow'"]
 
-[tool.setuptools.packages.find]
+[tool.setuptools]
 include-package-data = false
+
+[tool.setuptools.packages.find]
 where = ["."]
 include = ["dextrademixer*"]
 exclude = ["dextrademixer.test", "dextrademixer.test.*"]
