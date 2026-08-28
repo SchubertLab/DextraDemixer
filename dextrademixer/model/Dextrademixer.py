@@ -171,7 +171,7 @@ class DextraDemixer(ApMHCDeconvolution):
             s = jnp.ones(N, dtype=FLOAT_DTYPE)
 
         self._check_parameters(x, x_neg, c)
-        self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, outlier_threshold=outlier_threshold)
+        self.model.init_from_counts(x=x, s=s, neg_cont=x_neg, c=c, outlier_threshold=outlier_threshold)
 
     @staticmethod
     def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
@@ -705,13 +705,13 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
         self._version = "0.0.0"
         self._data = None
 
-    def preprocess_model_data(self,
-                              x: Union[pd.Series, np.ndarray, Array],
-                              s: Union[pd.Series, np.ndarray, Array] = None,
-                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
-                              c: Union[pd.Series, np.ndarray, Array] = None,
-                              outlier_threshold: float = None,
-                              **kwargs): 
+    def init_from_counts(self,
+                         x: Union[pd.Series, np.ndarray, Array],
+                         s: Union[pd.Series, np.ndarray, Array] = None,
+                         neg_cont: Union[pd.Series, np.ndarray, Array] = None,
+                         c: Union[pd.Series, np.ndarray, Array] = None,
+                         outlier_threshold: float = None,
+                         **kwargs):
         """
         Args:
             outlier_threshold: cells whose count is more than this many standard deviations from
@@ -784,16 +784,16 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
     def version(self) -> str:
         return self._version
 
-    def preprocess_model_data(self,
-                              x: Union[pd.Series, np.ndarray, Array],
-                              s: Union[pd.Series, np.ndarray, Array] = None,
-                              neg_cont: Union[pd.Series, np.ndarray, Array] = None,
-                              c: Union[pd.Series, np.ndarray, Array] = None,
-                              outlier_threshold: float = None, 
-                              **kwargs):
+    def init_from_counts(self,
+                         x: Union[pd.Series, np.ndarray, Array],
+                         s: Union[pd.Series, np.ndarray, Array] = None,
+                         neg_cont: Union[pd.Series, np.ndarray, Array] = None,
+                         c: Union[pd.Series, np.ndarray, Array] = None,
+                         outlier_threshold: float = None,
+                         **kwargs):
 
-        super().preprocess_model_data(x=x, s=s, neg_cont=neg_cont, c=c,
-                                      outlier_threshold=outlier_threshold, **kwargs)
+        super().init_from_counts(x=x, s=s, neg_cont=neg_cont, c=c,
+                                 outlier_threshold=outlier_threshold, **kwargs)
         self._kmeans_dict = self._init_kmeans()
         self._model_config.update(self._kmeans_dict)
 
@@ -809,7 +809,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
 
         returns: Dict with params estimates and  k-mean labels,
         """
-        # already filtered by `outlier_threshold` in `preprocess_model_data`
+        # already filtered by `outlier_threshold` in `init_from_counts`
         x = self.data["x"].copy()
         n_clusters = 2  # KMeans with 2 clusters
 
