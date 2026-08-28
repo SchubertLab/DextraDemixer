@@ -42,7 +42,7 @@ INT_DTYPE = "int32"
 
 
 class DextraDemixer(ApMHCDeconvolution):
-    """
+    r"""
     This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
     data with increasing usage of information
 
@@ -349,7 +349,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
     @staticmethod
     def _predict_posterior_class_dist(p_samples, target_fdr, cred_intvl, nof_thresh=100):
-        """
+        r"""
         Posterior BFDR thresholding (Newton et al. 2004, extended with posterior uncertainty).
 
         Given posterior draws of signal probabilities \(p_i^{(s)}\), this method computes

@@ -29,7 +29,7 @@ FLOAT_DTYPE = "float64"
 INT_DTYPE = "int32"
 
 class DextraDemixerMulti(DextraDemixer):
-    """
+    r"""
     This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
     data with increasing usage of information for multi pMHC inputs. It treats each pMHC indipendently while size factor
     normalizing cells
