@@ -135,8 +135,7 @@ class DextraDemixer(ApMHCDeconvolution):
                               ir_key: str = "airr",
                               ir_clone_key: str = None,
                               use_size_factor: bool = None,
-                              outlier_threshold: float = 100,
-                              **kwargs):
+                              outlier_threshold: float = 100):
         """
         Preprocesses the data and initializes the model
 
@@ -150,7 +149,6 @@ class DextraDemixer(ApMHCDeconvolution):
             ir_key: the MuData AIRR module key
             ir_clone_key: (Optional) the `obs` column that holds clonotype ids (ints or strings)
             use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, True is use all
-            kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
         """
         counts, obs = self.as_counts(data, gex_key, ir_key)
         N = counts.shape[0]
@@ -173,7 +171,7 @@ class DextraDemixer(ApMHCDeconvolution):
             s = jnp.ones(N, dtype=FLOAT_DTYPE)
 
         self._check_parameters(x, x_neg, c)
-        self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, outlier_threshold=outlier_threshold, **kwargs)
+        self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, outlier_threshold=outlier_threshold)
 
     @staticmethod
     def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
@@ -199,8 +197,8 @@ class DextraDemixer(ApMHCDeconvolution):
             guide='normal', maxiter: int = 1000, num_particles: int = 10, progress_bar: bool = True,
             lr_init_value: float = 3e-1, lr_end_value: float = 3e-3,
             lr_decay_rate: float = 0.995, lr_transition_steps: int = 1,
-            nof_inits: int = 10, use_minimal_loss: bool = True, rng_key: int = 998777,
-            **kwargs) -> "DextraDemixer":
+            nof_inits: int = 10, use_minimal_loss: bool = True,
+            rng_key: int = 998777) -> "DextraDemixer":
         """
         Extracts the model data from `mdata` and fits it, i.e. `preprocess_model_data` followed by
         `fit_svi`. This is the recommended entry point; call the two separately only if you want to
@@ -233,14 +231,12 @@ class DextraDemixer(ApMHCDeconvolution):
             nof_inits: number of initializations tried with different seeds to find gut init values
             use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
             rng_key: integer seed to initialize numpyros RNG-Key store
-            kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
         Returns:
             self, so that `predict_posterior_class` can be chained onto the call
         """
         self.preprocess_model_data(data, pmhc_key=pmhc_key, gex_key=gex_key, neg_ctrl_key=neg_ctrl_key,
                                    ir_key=ir_key, ir_clone_key=ir_clone_key,
-                                   use_size_factor=use_size_factor, outlier_threshold=outlier_threshold,
-                                   **kwargs)
+                                   use_size_factor=use_size_factor, outlier_threshold=outlier_threshold)
         self.fit_svi(guide=guide, maxiter=maxiter, num_particles=num_particles,
                      progress_bar=progress_bar, lr_init_value=lr_init_value, lr_end_value=lr_end_value,
                      lr_decay_rate=lr_decay_rate, lr_transition_steps=lr_transition_steps,
