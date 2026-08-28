@@ -30,6 +30,7 @@ from sklearn.metrics import f1_score
 from optax import exponential_decay
 
 from dextrademixer.model import ApMHCDeconvolution
+from dextrademixer.model.ApMHCDeconvolution import Data
 from dextrademixer.utils import RegisteredModel, calculate_metrics
 
 if TYPE_CHECKING:
@@ -127,7 +128,7 @@ class DextraDemixer(ApMHCDeconvolution):
         return [k for k in ADextraDemixerModel.registry.keys()]
 
     def preprocess_model_data(self,
-                              mdata: md.MuData,
+                              data: Data,
                               pmhc_key: str,
                               gex_key: str = "gex",
                               neg_ctrl_key: str = None,
@@ -140,32 +141,36 @@ class DextraDemixer(ApMHCDeconvolution):
         Preprocesses the data and initializes the model
 
         Args:
-            mdata: A Mudata containing only dextramer counts and clonotype information
-            pmhc_key: a string specifying the pMHC column in `gex_key` modality`s `X` which should be deconvolved
-            gex_key: the MuData transcriptome module key
-            neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
+            data: the dextramer counts, as a MuData, an AnnData or a cells x features DataFrame.
+                  See `as_counts` for where counts and annotation are read from in each case;
+                  `gex_key`/`ir_key` are only used for MuData.
+            pmhc_key: the pMHC count column to deconvolve
+            gex_key: the MuData modality holding the counts
+            neg_ctrl_key: (Optional) the negative control count column
             ir_key: the MuData AIRR module key
-            ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
-            use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, is use all
+            ir_clone_key: (Optional) the `obs` column that holds clonotype ids (ints or strings)
+            use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, True is use all
             kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
         """
-        gex = mdata.mod[gex_key]
-        air = mdata.mod[ir_key]
-        N = gex.shape[0]
+        counts, obs = self.as_counts(data, gex_key, ir_key)
+        N = counts.shape[0]
 
-        x = gex[:, pmhc_key].X.toarray().reshape((N,))
-        x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((N,)) if neg_ctrl_key else None
+        x = counts[pmhc_key].to_numpy().reshape((N,))
+        x_neg = counts[neg_ctrl_key].to_numpy().reshape((N,)) if neg_ctrl_key else None
 
-        c = air.obs[ir_clone_key].to_numpy().astype("int32") if ir_clone_key is not None else None
+        c = obs[ir_clone_key].to_numpy() if ir_clone_key is not None else None
+        if c is not None and not np.issubdtype(c.dtype, np.number):
+            c = pd.factorize(c)[0]  # string clonotype ids, e.g. scirpy's "clonotype_7"
+        c = None if c is None else c.astype("int32")
 
         if use_size_factor:
-            pmhc_list = use_size_factor if isinstance(use_size_factor, list) else mdata[gex_key].var_names.tolist()
-            x_plus = jnp.array(gex[:, pmhc_list].X.toarray(),
+            pmhc_list = use_size_factor if isinstance(use_size_factor, list) else list(counts.columns)
+            x_plus = jnp.array(counts[pmhc_list].to_numpy(),
                                dtype=FLOAT_DTYPE)  # only used for size factor calculation
             s = self.calculate_size_factors(x_plus)
             del x_plus
         else:
-            s = jnp.ones(x.shape[0], dtype=FLOAT_DTYPE)
+            s = jnp.ones(N, dtype=FLOAT_DTYPE)
 
         self._check_parameters(x, x_neg, c)
         self.model.preprocess_model_data(x=x, s=s, neg_cont=x_neg, c=c, outlier_threshold=outlier_threshold, **kwargs)
@@ -188,7 +193,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         return size_factors
 
-    def fit(self, mdata: md.MuData, *, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
+    def fit(self, data: Data, *, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
             ir_key: str = "airr", ir_clone_key: str = None, use_size_factor: bool = None,
             outlier_threshold: float = 100,
             guide='normal', maxiter: int = 1000, num_particles: int = 10, progress_bar: bool = True,
@@ -203,13 +208,13 @@ class DextraDemixer(ApMHCDeconvolution):
 
         Args:
             data: the dextramer counts, as a MuData, an AnnData or a cells x features DataFrame.
-                  See `_as_counts` for where counts and annotation are read from in each case;
+                  See `as_counts` for where counts and annotation are read from in each case;
                   `gex_key`/`ir_key` are only used for MuData.
             pmhc_key: the pMHC count column to deconvolve
             gex_key: the MuData modality holding the counts
             neg_ctrl_key: (Optional) the negative control count column
             ir_key: the MuData AIRR module key
-            ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
+            ir_clone_key: (Optional) the `obs` column that holds clonotype ids (ints or strings)
             use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, is use all
             outlier_threshold: cells more than this many standard deviations from the mean count are
                         held out of the fit but still scored by `predict_posterior_class`. None
@@ -232,7 +237,7 @@ class DextraDemixer(ApMHCDeconvolution):
         Returns:
             self, so that `predict_posterior_class` can be chained onto the call
         """
-        self.preprocess_model_data(mdata, pmhc_key=pmhc_key, gex_key=gex_key, neg_ctrl_key=neg_ctrl_key,
+        self.preprocess_model_data(data, pmhc_key=pmhc_key, gex_key=gex_key, neg_ctrl_key=neg_ctrl_key,
                                    ir_key=ir_key, ir_clone_key=ir_clone_key,
                                    use_size_factor=use_size_factor, outlier_threshold=outlier_threshold,
                                    **kwargs)
@@ -390,7 +395,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         data = self.model.data_full
         clone_id = clone_id if clone_id is not None else data.get("clone_continuous", None)
-        clone_id = pd.factorize(clone_id)[0] if clone_id is not None else None
+        clone_id = pd.factorize(np.asarray(clone_id))[0] if clone_id is not None else None
         
         if self.sampler is None and self.svi_result is None:
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")

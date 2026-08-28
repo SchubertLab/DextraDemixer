@@ -116,6 +116,34 @@ def _run_model(model_variant, experiment, expected_results, threshold=None, targ
     )
 
 
+def test_input_formats_agree():
+    """MuData, AnnData and DataFrame must all reach the same fit."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mdata = mu.read(os.path.join(DATA_DIR, f"{EXPERIMENTS[0]}.h5mu"))
+    gex, airr = mdata.mod["gex"], mdata.mod["airr"]
+    adata = gex.copy()
+    adata.obs["clone"] = [f"c{i}" for i in airr.obs["clone_id"]]  # string ids, as scirpy has them
+    df = gex.to_df()
+    df["clone"] = adata.obs["clone"].values
+    svi = dict(pmhc_key="pmhc1", neg_ctrl_key="neg_control", ir_clone_key="clone", maxiter=50,
+               nof_inits=2, progress_bar=False, rng_key=42)
+
+    out = {}
+    for name, data in {"MuData": mdata, "AnnData": adata, "DataFrame": df}.items():
+        keys = {**svi, "ir_clone_key": "clone_id"} if name == "MuData" else svi
+        model = DextraDemixer().fit(data, **keys)
+        out[name] = model.predict_posterior_class(threshold=0.5, clonotype_median_p=True)
+
+    for other in ("AnnData", "DataFrame"):
+        np.testing.assert_allclose(np.asarray(out["MuData"][0]), np.asarray(out[other][0]),
+                                   err_msg=f"MuData vs {other} probabilities differ")
+        np.testing.assert_array_equal(np.asarray(out["MuData"][1]), np.asarray(out[other][1]))
+
+    with pytest.raises(TypeError, match="unsupported input type"):
+        DextraDemixer().preprocess_model_data(df.to_numpy(), pmhc_key=0)
+
+
 def test_fit_wrapper_matches_two_step():
     """`fit` duplicates the defaults of `preprocess_model_data`/`fit_svi`, so check both that it
     delegates correctly and that no default has drifted apart from them."""

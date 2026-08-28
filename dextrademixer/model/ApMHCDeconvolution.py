@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import abc
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Tuple, Union
 
+import anndata as ad
 import mudata as md
+import pandas as pd
 
 from jax import lax
 import jax.numpy as jnp
@@ -12,12 +14,14 @@ import jax.numpy as jnp
 if TYPE_CHECKING:
     from jax._src.typing import Array
 
+Data = Union[md.MuData, ad.AnnData, pd.DataFrame]
+
 
 class ApMHCDeconvolution:
 
     @abc.abstractmethod
     def preprocess_model_data(self,
-                              mdata: md.MuData,
+                              data: Data,
                               pmhc_key: str,
                               gex_key: str = "gex",
                               neg_ctrl_key: str = None,
@@ -81,6 +85,27 @@ class ApMHCDeconvolution:
         assignment = (p >= threshold).astype("int32")
         return assignment
 
+
+    @staticmethod
+    def as_counts(data: Data, gex_key: str = "gex", ir_key: str = "airr") -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Normalizes any supported input into a (counts, obs) pair of DataFrames, so that count
+        columns are addressed by `counts[key]` and per-cell annotation by `obs[key]`:
+
+        - MuData: counts from the `gex_key` modality, obs from the `ir_key` modality
+        - AnnData: counts from `X`, obs from `obs`
+        - DataFrame (cells x features): obs is the frame itself, so clonotypes can be a column
+
+        """
+        if isinstance(data, md.MuData):
+            counts, _ = ApMHCDeconvolution.as_counts(data.mod[gex_key])
+            return counts, data.mod[ir_key].obs if ir_key in data.mod else data.obs
+        if isinstance(data, ad.AnnData):
+            return data.to_df(), data.obs
+        if isinstance(data, pd.DataFrame):
+            return data, data
+        raise TypeError(f"unsupported input type {type(data).__name__}, expected a MuData, an "
+                        f"AnnData or a cells x features DataFrame")
 
     @staticmethod
     def _check_parameters(x, neg_x, c):
