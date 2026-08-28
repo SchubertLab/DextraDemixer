@@ -64,7 +64,9 @@ class DextraDemixer(ApMHCDeconvolution):
     """
 
     def __init__(self, model_type: str = "mixturemodelkmeans",
-                 overdispersion_scale_prior: float = 1e-2, alpha_offset: float = 0.0):
+                 overdispersion_scale_prior: float = 1e-2, alpha_offset: float = 0.0,
+                 neg_ctrl_mean_ratio_prior: Tuple[float, float] = None,
+                 neg_ctrl_overdispersion_ratio_prior: Tuple[float, float] = None):
         """
         Args:
             model_type: which model of `available_methods()` to use
@@ -72,6 +74,14 @@ class DextraDemixer(ApMHCDeconvolution):
             alpha_offset: offset of the negative binomial scale parameter alpha for the specific
                           component. Increase if the model is fitting noise, decrease if the
                           antigen-specific component gets too narrow
+            neg_ctrl_mean_ratio_prior: (mean, variance) of the LogNormal prior on the ratio between
+                          the non-binding component mean and the negative control mean; converted
+                          to the LogNormal`s log-space parameters internally. `None` keeps the
+                          defaults, which were fit on a real dataset. Only used when a
+                          `neg_ctrl_key` is given
+            neg_ctrl_overdispersion_ratio_prior: (mean, variance) of the LogNormal prior on the same
+                          ratio for the overdispersion. `None` keeps the defaults, only used when a
+                          `neg_ctrl_key` is given
         """
         super().__init__()
 
@@ -87,6 +97,16 @@ class DextraDemixer(ApMHCDeconvolution):
         self.model = ADextraDemixerModel.registry[model_type]()
         self.model._model_config.update(overdispersion_scale_prior=overdispersion_scale_prior,
                                         alpha_offset=alpha_offset)
+        for key, moments in (("neg_ctrl_mean_ratio_prior", neg_ctrl_mean_ratio_prior),
+                             ("neg_ctrl_overdispersion_ratio_prior", neg_ctrl_overdispersion_ratio_prior)):
+            if moments is not None:
+                self.model._model_config[key] = self.lognormal_from_moments(*moments)
+
+    @staticmethod
+    def lognormal_from_moments(mean: float, var: float) -> Tuple[float, float]:
+        """(loc, scale) of the LogNormal that has the given mean and variance."""
+        sigma2 = np.log(var / mean ** 2 + 1)
+        return np.log(mean) - sigma2 / 2, np.sqrt(sigma2)
 
     @property
     def version(self):
@@ -181,10 +201,12 @@ class DextraDemixer(ApMHCDeconvolution):
         refit the same preprocessed data with several inference settings.
 
         Args:
-            mdata: A Mudata containing only dextramer counts and clonotype information
-            pmhc_key: a string specifying the pMHC column in `gex_key` modality`s `X` which should be deconvolved
-            gex_key: the MuData transcriptome module key
-            neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
+            data: the dextramer counts, as a MuData, an AnnData or a cells x features DataFrame.
+                  See `_as_counts` for where counts and annotation are read from in each case;
+                  `gex_key`/`ir_key` are only used for MuData.
+            pmhc_key: the pMHC count column to deconvolve
+            gex_key: the MuData modality holding the counts
+            neg_ctrl_key: (Optional) the negative control count column
             ir_key: the MuData AIRR module key
             ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
             use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, is use all
@@ -751,8 +773,10 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         self._version = "0.0.1"
         self._kmeans_dict = None
         self._model_config = {
-            "overdispersion_scale_prior": 1e-2,
-            "alpha_offset": 0.0,
+            "overdispersion_scale_prior": 1.0,
+            "alpha_offset": 5.0,
+            "neg_ctrl_mean_ratio_prior": (0.9692917285815055, 0.6293977074906485),
+            "neg_ctrl_overdispersion_ratio_prior": (0.19724303327974974, 0.43970806321879075),
         }
 
     @property
@@ -867,6 +891,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         tau_concentration_prior = model_config["tau_concentration_prior"]
         overdispersion_scale_prior = model_config["overdispersion_scale_prior"]
         alpha_offset = model_config.get("alpha_offset", False)
+        s_q_loc, s_q_scale = model_config["neg_ctrl_mean_ratio_prior"]
+        s_alpha_loc, s_alpha_scale = model_config["neg_ctrl_overdispersion_ratio_prior"]
 
         # Cluster probability prior
         w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
@@ -899,9 +925,9 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
 
         if x_neg is not None:
-            s_q = npy.sample("s_q", npd.LogNormal(0.9692917285815055, 0.6293977074906485))
+            s_q = npy.sample("s_q", npd.LogNormal(s_q_loc, s_q_scale))
             q_neg = npy.deterministic("q_neg", jnp.clip(s * q[0] / s_q, 1e-3, None))
-            s_alpha = npy.sample("s_alpha", npd.LogNormal(0.19724303327974974, 0.43970806321879075))
+            s_alpha = npy.sample("s_alpha", npd.LogNormal(s_alpha_loc, s_alpha_scale))
             overdispersion_neg = npy.deterministic("overdispersion_neg", jnp.clip(overdispersion[0] / s_alpha, 1.0 + 1e-3, None))
             with npy.plate("sample_axis", N_sample):
                 alpha_neg = npy.deterministic("alpha_neg", q_neg ** 2 / (q_neg * overdispersion_neg - q_neg))
