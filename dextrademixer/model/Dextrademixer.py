@@ -13,7 +13,7 @@ import warnings
 import os
 import pickle
 
-from typing import TYPE_CHECKING, Union, Dict, Tuple
+from typing import TYPE_CHECKING, Union, Dict, Tuple, List
 
 import arviz as az
 import tqdm
@@ -139,26 +139,27 @@ class DextraDemixer(ApMHCDeconvolution):
     def preprocess_model_data(self,
                               data: Data,
                               pmhc_key: str,
-                              gex_key: str = "gex",
+                              pmhc_modality_key: str = "gex",
                               neg_ctrl_key: str = None,
-                              ir_key: str = "airr",
+                              ir_modality_key: str = "airr",
                               ir_clone_key: str = None,
-                              use_size_factor: bool = None,
-                              outlier_threshold: float = 100):
+                              size_factor_keys: Union[bool, List[str]] = None,
+                              outlier_z_score: float = 100):
         """
         Preprocesses the data and initializes the model
 
         Args:
-            data: the dextramer counts, as a MuData, an AnnData or a cells x features DataFrame.
+            data: the pMHC counts, as a MuData, an AnnData or a cells x features DataFrame.
                   See `as_counts` for where counts and annotation are read from in each case;
-                  `gex_key`/`ir_key` are only used for MuData.
+                  `pmhc_modality_key`/`ir_modality_key` are only used for MuData.
             pmhc_key: the pMHC count column to deconvolve
-            gex_key: the MuData modality holding the counts
+            pmhc_modality_key: the MuData modality holding the counts
             neg_ctrl_key: (Optional) the negative control count column
-            ir_key: the MuData AIRR module key
+            ir_modality_key: the MuData AIRR module key
             ir_clone_key: (Optional) the `obs` column that holds clonotype ids (ints or strings)
-            use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, True is use all
-            outlier_threshold: cells more than this many standard deviations from the mean count are
+            size_factor_keys: (Optional) pMHC columns to compute the DESeq2 size factors from.
+                  True uses all columns of the count table, None/False disables the normalization
+            outlier_z_score: cells more than this many standard deviations from the mean count are
                         held out of the fit but still scored by `predict_posterior_class`. None
                         disables the filtering
 
@@ -166,29 +167,29 @@ class DextraDemixer(ApMHCDeconvolution):
             TypeError: if `data` is of an unsupported type.
             ValueError: if the counts contain NaNs or the annotation length does not match them.
         """
-        counts, obs = self.as_counts(data, gex_key, ir_key)
-        N = counts.shape[0]
+        counts, obs = self.as_counts(data, pmhc_modality_key, ir_modality_key)
+        n_cells = counts.shape[0]
 
-        x = counts[pmhc_key].to_numpy().reshape((N,))
-        x_neg = counts[neg_ctrl_key].to_numpy().reshape((N,)) if neg_ctrl_key else None
+        x = counts[pmhc_key].to_numpy().reshape((n_cells,))
+        x_neg = counts[neg_ctrl_key].to_numpy().reshape((n_cells,)) if neg_ctrl_key else None
 
         clone_id = obs[ir_clone_key].to_numpy() if ir_clone_key is not None else None
         if clone_id is not None and not np.issubdtype(clone_id.dtype, np.number):
             clone_id = pd.factorize(clone_id)[0]  # string ids, e.g. scirpy's "clonotype_7"
         clone_id = None if clone_id is None else clone_id.astype("int32")
 
-        if use_size_factor:
-            pmhc_list = use_size_factor if isinstance(use_size_factor, list) else list(counts.columns)
+        if size_factor_keys:
+            pmhc_list = size_factor_keys if isinstance(size_factor_keys, list) else list(counts.columns)
             x_plus = jnp.array(counts[pmhc_list].to_numpy(),
                                dtype=FLOAT_DTYPE)  # only used for size factor calculation
             s = self.calculate_size_factors(x_plus)
             del x_plus
         else:
-            s = jnp.ones(N, dtype=FLOAT_DTYPE)
+            s = jnp.ones(n_cells, dtype=FLOAT_DTYPE)
 
         self._check_parameters(x, x_neg, clone_id)
         self.model.init_from_counts(x=x, s=s, x_neg=x_neg, clone_id=clone_id,
-                                    outlier_threshold=outlier_threshold)
+                                    outlier_z_score=outlier_z_score)
 
     @staticmethod
     def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
@@ -217,9 +218,9 @@ class DextraDemixer(ApMHCDeconvolution):
 
         return size_factors
 
-    def fit(self, data: Data, *, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
-            ir_key: str = "airr", ir_clone_key: str = None, use_size_factor: bool = None,
-            outlier_threshold: float = 100,
+    def fit(self, data: Data, *, pmhc_key: str, pmhc_modality_key: str = "gex", neg_ctrl_key: str = None,
+            ir_modality_key: str = "airr", ir_clone_key: str = None, size_factor_keys: Union[bool, List[str]] = None,
+            outlier_z_score: float = 100,
             guide='normal', maxiter: int = 1000, n_particles: int = 10, progress_bar: bool = True,
             lr_init_value: float = 3e-1, lr_end_value: float = 3e-3,
             lr_decay_rate: float = 0.995, lr_transition_steps: int = 1,
@@ -231,16 +232,17 @@ class DextraDemixer(ApMHCDeconvolution):
         refit the same preprocessed data with several inference settings.
 
         Args:
-            data: the dextramer counts, as a MuData, an AnnData or a cells x features DataFrame.
+            data: the pMHC counts, as a MuData, an AnnData or a cells x features DataFrame.
                   See `as_counts` for where counts and annotation are read from in each case;
-                  `gex_key`/`ir_key` are only used for MuData.
+                  `pmhc_modality_key`/`ir_modality_key` are only used for MuData.
             pmhc_key: the pMHC count column to deconvolve
-            gex_key: the MuData modality holding the counts
+            pmhc_modality_key: the MuData modality holding the counts
             neg_ctrl_key: (Optional) the negative control count column
-            ir_key: the MuData AIRR module key
+            ir_modality_key: the MuData AIRR module key
             ir_clone_key: (Optional) the `obs` column that holds clonotype ids (ints or strings)
-            use_size_factor: (Optional) if wanting to use size factors, provide keys of pMHCs to use, is use all
-            outlier_threshold: cells more than this many standard deviations from the mean count are
+            size_factor_keys: (Optional) pMHC columns to compute the DESeq2 size factors from.
+                  True uses all columns of the count table, None/False disables the normalization
+            outlier_z_score: cells more than this many standard deviations from the mean count are
                         held out of the fit but still scored by `predict_posterior_class`. None
                         disables the filtering
             guide: The guide to use for variational inference.
@@ -261,9 +263,9 @@ class DextraDemixer(ApMHCDeconvolution):
         Returns:
             self, so that `predict_posterior_class` can be chained onto the call
         """
-        self.preprocess_model_data(data, pmhc_key=pmhc_key, gex_key=gex_key, neg_ctrl_key=neg_ctrl_key,
-                                   ir_key=ir_key, ir_clone_key=ir_clone_key,
-                                   use_size_factor=use_size_factor, outlier_threshold=outlier_threshold)
+        self.preprocess_model_data(data, pmhc_key=pmhc_key, pmhc_modality_key=pmhc_modality_key, neg_ctrl_key=neg_ctrl_key,
+                                   ir_modality_key=ir_modality_key, ir_clone_key=ir_clone_key,
+                                   size_factor_keys=size_factor_keys, outlier_z_score=outlier_z_score)
         self.fit_svi(guide=guide, maxiter=maxiter, n_particles=n_particles,
                      progress_bar=progress_bar, lr_init_value=lr_init_value, lr_end_value=lr_end_value,
                      lr_decay_rate=lr_decay_rate, lr_transition_steps=lr_transition_steps,
@@ -311,16 +313,16 @@ class DextraDemixer(ApMHCDeconvolution):
             decay_rate=lr_decay_rate, transition_steps=lr_transition_steps))
         # check for custom guide in self.model otherwise use autoguide
         if guide == 'normal':
-            guide = npy.infer.autoguide.AutoNormal
+            guide_cls = npy.infer.autoguide.AutoNormal
         elif (guide == 'mvnormal') or (guide == 'multivariatenormal'):
-            guide = npy.infer.autoguide.AutoMultivariateNormal
+            guide_cls = npy.infer.autoguide.AutoMultivariateNormal
         # find good random initialization
         random_init = []
         for i, key in enumerate(random.split(random.PRNGKey(rng_key), n_inits)):
             if callable(getattr(self.model, "guide", None)):
                 self.guide = self.model.guide
             else:
-                self.guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
+                self.guide = guide_cls(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
             svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
                                 loss=npy.infer.TraceGraph_ELBO(num_particles=n_particles))
             init_state = svi.init(key)
@@ -378,7 +380,7 @@ class DextraDemixer(ApMHCDeconvolution):
         Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
         If neither threshold nor target_fdr is provided the max posterior class probability will be used.
 
-        Scores `self.model.data_full`, i.e. *all* cells including the ones an `outlier_threshold`
+        Scores `self.model.data_full`, i.e. *all* cells including the ones an `outlier_z_score`
         held out of the fit. This is intended: outliers are excluded from fitting but still get a
         posterior probability. The model is transductive, so there is no scoring of other datasets.
 
@@ -396,18 +398,18 @@ class DextraDemixer(ApMHCDeconvolution):
                         definition without refitting.
 
         Returns:
-            A tuple (p, assignment) of arrays, with p the posterior probability of binding and
+            A tuple (p_pred, assignment) of arrays, with p_pred the posterior probability of binding and
             assignment the class assignment decision.
 
         Raises:
             RuntimeError: if the model has not been fit yet.
             ValueError: if `clonotype_median_p` is True but no clonotypes are available.
         """
-        def __return_p_summary(p_sample):
+        def __return_p_summary(p_samples):
             if cred_intvl:
-                p = p_sample
+                p_pred = p_samples
             else:
-                p = jnp.nanmean(p_sample, axis=0)[:, 1]
+                p_pred = jnp.nanmean(p_samples, axis=0)[:, 1]
 
             if clonotype_median_p:
                 if clone_id is None:
@@ -418,14 +420,14 @@ class DextraDemixer(ApMHCDeconvolution):
 
                 if cred_intvl:
                     # mean for each clone while keeping posterior samples, shape (num_clones, n_samples, 2)
-                    mean_p = np.stack([jnp.quantile(p[:, clone_id == cid], q=0.5, axis=1, method='higher') for cid in unique_ids])
-                    p = mean_p[clone_id].transpose(1, 0, 2)  # shape (num_posterior_samples, num_cells, 2)
+                    mean_p = np.stack([jnp.quantile(p_pred[:, clone_id == cid], q=0.5, axis=1, method='higher') for cid in unique_ids])
+                    p_pred = mean_p[clone_id].transpose(1, 0, 2)  # shape (num_posterior_samples, num_cells, 2)
 
                 else:
-                    df = pd.DataFrame({"p": p, "clone_id": clone_id})
+                    df = pd.DataFrame({"p": p_pred, "clone_id": clone_id})
                     mean_p = df.groupby("clone_id")["p"].quantile(0.5, interpolation='higher')
-                    p = jnp.array(mean_p.values)[clone_id]
-            return p
+                    p_pred = jnp.array(mean_p.values)[clone_id]
+            return p_pred
 
         data = self.model.data_full
         clone_id = clone_id if clone_id is not None else data.get("clone_continuous", None)
@@ -438,14 +440,14 @@ class DextraDemixer(ApMHCDeconvolution):
         predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
                                             num_samples=500)
         samples = predictive(jax.random.PRNGKey(self.rng_key), data=data)  # self.rng_key
-        p = __return_p_summary(jnp.exp(samples["log_p"]))
+        p_pred = __return_p_summary(jnp.exp(samples["log_p"]))
 
         if cred_intvl is not None:
-            p, assignment, threshold = self._predict_posterior_class_dist(p, target_fdr, cred_intvl)
+            p_pred, assignment, threshold = self._predict_posterior_class_dist(p_pred, target_fdr, cred_intvl)
         else:
-            assignment = self._predict_posterior_class(p, threshold, target_fdr)
+            assignment = self._predict_posterior_class(p_pred, threshold, target_fdr)
 
-        return p, assignment
+        return p_pred, assignment
 
     def summary(self):
         """
@@ -605,7 +607,7 @@ class DextraDemixer(ApMHCDeconvolution):
             return_plt: if True, the figure is left open for further modification instead of being
                         closed. Nothing is returned either way; use `plt.gcf()` to get the figure.
             data: (Optional) data dict to plot; defaults to `self.model.data_full`, i.e. all cells
-                  including the ones an `outlier_threshold` held out of the fit.
+                  including the ones an `outlier_z_score` held out of the fit.
 
         Raises:
             RuntimeError: if the model has not been fit yet.
@@ -802,7 +804,7 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
                          s: Union[pd.Series, np.ndarray, Array] = None,
                          x_neg: Union[pd.Series, np.ndarray, Array] = None,
                          clone_id: Union[pd.Series, np.ndarray, Array] = None,
-                         outlier_threshold: float = None,
+                         outlier_z_score: float = None,
                          ):
         """
         Stores the count arrays as `self.data` and `self.data_full` for the model to consume.
@@ -812,27 +814,27 @@ class ADextraDemixerModel(metaclass=RegisteredModel):
             s: (Optional) per-cell size factors, shape (n_cells,).
             x_neg: (Optional) negative control counts, shape (n_cells,).
             clone_id: (Optional) integer clonotype id per cell, shape (n_cells,).
-            outlier_threshold: cells whose count is more than this many standard deviations from
+            outlier_z_score: cells whose count is more than this many standard deviations from
                                the mean are held out of the fit (`self.data`) but still scored
                                (`self.data_full`). None disables the filtering.
         """
-        clone = None if clone_id is None else jnp.array(clone_id, dtype=INT_DTYPE)
+        clone_id = None if clone_id is None else jnp.array(clone_id, dtype=INT_DTYPE)
         zscore = jnp.abs((x - jnp.mean(x)) / jnp.std(x))
-        keep = jnp.where(zscore < (jnp.inf if outlier_threshold is None else outlier_threshold))
+        keep = jnp.where(zscore < (jnp.inf if outlier_z_score is None else outlier_z_score))
         # With outliers
         self.data_full = {"x": jnp.array(x, dtype=INT_DTYPE),
                           "s": None if s is None else jnp.array(s, dtype=FLOAT_DTYPE),
                           "x_neg": None if x_neg is None else jnp.array(x_neg, dtype=FLOAT_DTYPE),
-                          "clone": clone,
+                          "clone_id": clone_id,
                           # If clone is not contiuous, then there will be problems with indexing
-                          "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone),
+                          "clone_continuous": None if clone_id is None else jnp.searchsorted(jnp.unique(clone_id), clone_id),
                           }
         # Without outliers
         self.data = {"x": jnp.array(x[keep], dtype=INT_DTYPE),
                      "s": jnp.array(s[keep], dtype=FLOAT_DTYPE) if s is not None else None,
                      "x_neg": jnp.array(x_neg[keep], dtype=FLOAT_DTYPE) if x_neg is not None else None,
-                     "clone": jnp.array(clone[keep], dtype=INT_DTYPE) if clone is not None else None,
-                     "clone_continuous": None if clone is None else jnp.searchsorted(jnp.unique(clone), clone[keep]),
+                     "clone_id": jnp.array(clone_id[keep], dtype=INT_DTYPE) if clone_id is not None else None,
+                     "clone_continuous": None if clone_id is None else jnp.searchsorted(jnp.unique(clone_id), clone_id[keep]),
                      }
 
     def model(self, **kwargs):
@@ -887,11 +889,11 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
                          s: Union[pd.Series, np.ndarray, Array] = None,
                          x_neg: Union[pd.Series, np.ndarray, Array] = None,
                          clone_id: Union[pd.Series, np.ndarray, Array] = None,
-                         outlier_threshold: float = None,
+                         outlier_z_score: float = None,
                          **kwargs):
 
         super().init_from_counts(x=x, s=s, x_neg=x_neg, clone_id=clone_id,
-                                 outlier_threshold=outlier_threshold, **kwargs)
+                                 outlier_z_score=outlier_z_score, **kwargs)
         self._kmeans_dict = self._init_kmeans()
         self.model_config.update(self._kmeans_dict)
 
@@ -909,10 +911,10 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         Returns:
             A dict with the KMeans labels (`z`), the per-cluster mean and unbiased variance of the
             counts (`cluster_means`, `cluster_variances`), the cluster sizes as fractions
-            (`cluster_proportion`) and the Dirichlet concentration derived from them
-            (`tau_concentration_prior`).
+            (`cluster_proportions`) and the Dirichlet concentration derived from them
+            (`w_concentration_prior`).
         """
-        # already filtered by `outlier_threshold` in `init_from_counts`
+        # already filtered by `outlier_z_score` in `init_from_counts`
         x = self.data["x"].copy()
         n_clusters = 2  # KMeans with 2 clusters
 
@@ -943,7 +945,7 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             cluster_variance = np.var(cluster_points, ddof=1)
             cluster_variances.append(cluster_variance)
 
-        # Calculate cluster proportions (tau_concentration_prior)
+        # Calculate cluster proportions (w_concentration_prior)
         cluster_counts = np.bincount(labels, minlength=2)
         cluster_proportions = cluster_counts / len(labels)
 
@@ -958,8 +960,8 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             "z": labels,
             "cluster_means": cluster_means,  # Mean for each cluster
             "cluster_variances": cluster_variances,  # variance for each cluster
-            "cluster_proportion": cluster_proportions,
-            "tau_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
+            "cluster_proportions": cluster_proportions,
+            "w_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
         })
 
         return kmeans_dict
@@ -984,20 +986,20 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
         x = data["x"]
         s = data["s"]
         x_neg = data["x_neg"]
-        N_sample = x.shape[0]
+        n_cells = x.shape[0]
         K = 2
 
         # Extract hyperpriors
         cluster_means = model_config["cluster_means"]
         cluster_variances = model_config["cluster_variances"]
-        tau_concentration_prior = model_config["tau_concentration_prior"]
+        w_concentration_prior = model_config["w_concentration_prior"]
         overdispersion_scale_prior = model_config["overdispersion_scale_prior"]
         alpha_offset = model_config.get("alpha_offset", False)
         s_q_loc, s_q_scale = model_config["neg_ctrl_mean_ratio_prior"]
         s_alpha_loc, s_alpha_scale = model_config["neg_ctrl_overdispersion_ratio_prior"]
 
         # Cluster probability prior
-        w = npy.sample("w", npd.Dirichlet(tau_concentration_prior))
+        w = npy.sample("w", npd.Dirichlet(w_concentration_prior))
         z = npd.Categorical(probs=w)
 
         # Convert kmeans priors to deltas, due to cumsum ordering
@@ -1031,13 +1033,13 @@ class DextraDemixerKmeansModel(ADextraDemixerModel):
             q_neg = npy.deterministic("q_neg", jnp.clip(s * q[0] / s_q, 1e-3, None))
             s_alpha = npy.sample("s_alpha", npd.LogNormal(s_alpha_loc, s_alpha_scale))
             overdispersion_neg = npy.deterministic("overdispersion_neg", jnp.clip(overdispersion[0] / s_alpha, 1.0 + 1e-3, None))
-            with npy.plate("sample_axis", N_sample):
+            with npy.plate("sample_axis", n_cells):
                 alpha_neg = npy.deterministic("alpha_neg", q_neg ** 2 / (q_neg * overdispersion_neg - q_neg))
                 yhat_neg = npy.sample("yhat_neg", obs=x_neg,
                                         fn=npd.NegativeBinomial2(mean=q_neg, concentration=alpha_neg, ))
 
         # Sample from the mixture model
-        with npy.plate("sample_axis", N_sample):
+        with npy.plate("sample_axis", n_cells):
             # target pMHC
             mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=s[:,None]*q, concentration=alpha))
 

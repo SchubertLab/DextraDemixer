@@ -37,16 +37,16 @@ class BEAM(ApMHCDeconvolution):
         self.p = None
         self.data = None
 
-    def preprocess_model_data(self, mdata: md.MuData, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
-                              ir_key: str = "airr", ir_clone_key: str = None, ir_cov_key: str = None, **kwargs):
+    def preprocess_model_data(self, data: md.MuData, pmhc_key: str, pmhc_modality_key: str = "gex", neg_ctrl_key: str = None,
+                              ir_modality_key: str = "airr", ir_clone_key: str = None, **kwargs):
         if neg_ctrl_key is None:
             raise ValueError(f"{self.__name} requires a negative control. Please specify a `neg_ctrl_key`.")
 
-        gex = mdata.mod[gex_key]
-        N = gex.shape[0]
+        gex = data.mod[pmhc_modality_key]
+        n_cells = gex.shape[0]
 
-        x = gex[:, pmhc_key].X.toarray().reshape((N,))
-        x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((N,))
+        x = gex[:, pmhc_key].X.toarray().reshape((n_cells,))
+        x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((n_cells,))
 
         self._check_parameters(x, x_neg, None)
 

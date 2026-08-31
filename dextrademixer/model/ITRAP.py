@@ -51,8 +51,8 @@ class ITRAP:
             pmhc_keys: Union[str, List[str]] = None, 
             neg_ctrl_key: str = None,
             ir_clone_key: str = 'clone_id',
-            dex_key: str = "dex", 
-            ir_key: str = "airr",
+            pmhc_modality_key: str = "dex", 
+            ir_modality_key: str = "airr",
             umi_cols_TRA: list=None, umi_cols_TRB: list=None,
             is_cell_key: str = 'is_cell',
             chain_pairing_key: str = 'chain_pairing',
@@ -63,19 +63,19 @@ class ITRAP:
         Args:
             adata: A MuData object containing only dextramer counts and clonotype information,
                 or an AnnData object containing the dextramer counts and clonotype information in the specified obsm and obs keys.
-            pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `dex_key` modality which should be deconvolved.
+            pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `pmhc_modality_key` modality which should be deconvolved.
                 If None is given, the full dextramer matrix is used, excluding the negative control.
-            neg_ctrl_key: A string specifying the negative control column in the `dex_key` matrix.
-            ir_clone_key: A string specifying the field in `obs` that holds clonotype ids. If adata is a MuData object, this will be prefixed with `{ir_key}:`
-            dex_key: the dextramer signal MuData module key, or the obsm key if adata is an AnnData object
-            ir_key: the MuData module key where the immune receptor data is stored, only relevant if adata is a MuData object.
-            umi_cols_TRA: list of strings specifying the columns in `obs` that hold the UMI counts for TRA, if available. If adata is a MuData object, these will be prefixed with `{ir_key}:`
-            umi_cols_TRB: list of strings specifying the columns in `obs` that hold the UMI counts for TRB, if available. If adata is a MuData object, these will be prefixed with `{ir_key}:`
+            neg_ctrl_key: A string specifying the negative control column in the `pmhc_modality_key` matrix.
+            ir_clone_key: A string specifying the field in `obs` that holds clonotype ids. If adata is a MuData object, this will be prefixed with `{ir_modality_key}:`
+            pmhc_modality_key: the dextramer signal MuData module key, or the obsm key if adata is an AnnData object
+            ir_modality_key: the MuData module key where the immune receptor data is stored, only relevant if adata is a MuData object.
+            umi_cols_TRA: list of strings specifying the columns in `obs` that hold the UMI counts for TRA, if available. If adata is a MuData object, these will be prefixed with `{ir_modality_key}:`
+            umi_cols_TRB: list of strings specifying the columns in `obs` that hold the UMI counts for TRB, if available. If adata is a MuData object, these will be prefixed with `{ir_modality_key}:`
             is_cell_key: string specifying the column in `obs` that indicates whether a barcode is classified as a cell, only relevant if 'is_cell' filter is applied.
             chain_pairing_key: string specifying the column in `obs` that indicates whether a cell has complete TCR chain pairing, only relevant if 'complete_TCRs' filter is applied.
             hashing_classification_key: string specifying the column in `obs` that indicates the hashing classification of a cell, only relevant if 'hashing_singlets' filter is applied.
         """
-        def calc_delta(x):
+        def calculate_delta(x):
             """ Calculate UMI ratio of two most abundant pMHCs, 0.25 is a small constant to avoid division by zero"""
             if len(x) == 1:
                 return x[-1] / 0.25
@@ -92,16 +92,16 @@ class ITRAP:
 
         # Adjust data access for mudata and anndata
         if isinstance(adata, md.MuData):
-            dex = adata.mod[dex_key]
+            dex = adata.mod[pmhc_modality_key]
             dex = dex.to_df()  # works for sparse and dense X
-            ir_clone_key = f'{ir_key}:{ir_clone_key}' if not ir_clone_key in adata.obs.columns else ir_clone_key
-            chain_pairing_key = f'{ir_key}:{chain_pairing_key}' if not chain_pairing_key in adata.obs.columns else chain_pairing_key
-            umi_cols_TRA = [f'{ir_key}:{col}' if not col in adata.obs.columns else col for col in umi_cols_TRA] if umi_cols_TRA is not None else None
-            umi_cols_TRB = [f'{ir_key}:{col}' if not col in adata.obs.columns else col for col in umi_cols_TRB] if umi_cols_TRB is not None else None
+            ir_clone_key = f'{ir_modality_key}:{ir_clone_key}' if not ir_clone_key in adata.obs.columns else ir_clone_key
+            chain_pairing_key = f'{ir_modality_key}:{chain_pairing_key}' if not chain_pairing_key in adata.obs.columns else chain_pairing_key
+            umi_cols_TRA = [f'{ir_modality_key}:{col}' if not col in adata.obs.columns else col for col in umi_cols_TRA] if umi_cols_TRA is not None else None
+            umi_cols_TRB = [f'{ir_modality_key}:{col}' if not col in adata.obs.columns else col for col in umi_cols_TRB] if umi_cols_TRB is not None else None
             adata.pull_obs() # make sure adata.obs is updated with prefixed columns from ir module
             
         elif isinstance(adata, ad.AnnData):
-            dex = adata.obsm[dex_key]
+            dex = adata.obsm[pmhc_modality_key]
         
         if pmhc_keys is None:
             pmhc_keys = dex.columns[dex.columns != neg_ctrl_key].tolist()
@@ -130,14 +130,14 @@ class ITRAP:
         # umi_count_X = max(UMI count of X)
         # delta_umi_X = ratio between highest and second highest UMI counts
         data['umi_count_mhc'] = data[self.umi_cols_mhc].max(1)
-        data['delta_umi_mhc'] = data[self.umi_cols_mhc].apply(calc_delta, axis=1)
+        data['delta_umi_mhc'] = data[self.umi_cols_mhc].apply(calculate_delta, axis=1)
         data['umi_count_mhc_rel'] = data['umi_count_mhc'] / data['umi_count_mhc'].quantile(0.9, interpolation='lower')
         if umi_cols_TRA is not None:
             data['umi_count_TRA'] = adata.obs[umi_cols_TRA].max(1) if len(umi_cols_TRA) > 1 else adata.obs[umi_cols_TRA].values
-            data['delta_umi_TRA'] = adata.obs[umi_cols_TRA].apply(calc_delta, axis=1)
+            data['delta_umi_TRA'] = adata.obs[umi_cols_TRA].apply(calculate_delta, axis=1)
         if umi_cols_TRB is not None:
             data['umi_count_TRB'] = adata.obs[umi_cols_TRB].max(1) if len(umi_cols_TRB) > 1 else adata.obs[umi_cols_TRB].values
-            data['delta_umi_TRB'] = adata.obs[umi_cols_TRB].apply(calc_delta, axis=1)
+            data['delta_umi_TRB'] = adata.obs[umi_cols_TRB].apply(calculate_delta, axis=1)
         self.data = data
 
     def fit(self):
@@ -157,7 +157,7 @@ class ITRAP:
             hashing_classification_keep_values: List=['singlet', 'Singlet'],
         ) -> np.array:
         """
-        Returns the binder assignments based on the most abundant UMI count for each cell.
+        Returns the binder assignment based on the most abundant UMI count for each cell.
         To filter out noise, different filters are applied to the data.
         Args:
             adata: If provided, the pMHC assignment will be added to adata.obs['itrap_pMHC_assignment'] and adata.obsm['itrap_pMHC_assignment'].
@@ -178,12 +178,12 @@ class ITRAP:
         self.data['assignment_before_filtering'] = self.data['assignment'].copy()
         filters = self._generate_filters(self.data, is_cell_keep_values, chain_pairing_keep_values, hashing_classification_keep_values)
         self.data.loc[~filters, 'assignment'] = 0
-        assignments = pd.Series(self.data['assignment'].values.astype(int)).map(self.idx_to_specificity).values
+        assignment = pd.Series(self.data['assignment'].values.astype(int)).map(self.idx_to_specificity).values
 
         if adata is not None:
-            adata.obs['itrap_pMHC_assignment'] = assignments
-            adata.obsm['itrap_pMHC_assignment'] = pd.get_dummies(assignments).astype(int).set_index(adata.obs_names)
-        return assignments
+            adata.obs['itrap_pMHC_assignment'] = assignment
+            adata.obsm['itrap_pMHC_assignment'] = pd.get_dummies(assignment).astype(int).set_index(adata.obs_names)
+        return assignment
 
     def _generate_filters(
             self, data, is_cell_keep_values, chain_pairing_keep_values, hashing_classification_keep_values,
@@ -227,10 +227,8 @@ class ITRAP:
         w, p = stats.wilcoxon(data[most_abundant_epitope[0]].fillna(0) - data[most_abundant_epitope[1]].fillna(0),
                               alternative='greater')
 
-        if p <= 0.05:
-            return True, most_abundant_epitope[0]
-        else:
-            return False, most_abundant_epitope[0]
+        # a Series, so that groupby.apply builds a two-column frame regardless of the group count
+        return pd.Series({'significant': p <= 0.05, 'expected_target': most_abundant_epitope[0]})
 
     def _calculate_ideal_umi_thresholds(self, data):
         # In case of a tie, in default params negative control is the first column and hence chosen as most abundant
@@ -238,9 +236,12 @@ class ITRAP:
 
         # Calculate expected target for each clonotype
         ct_pep = data.groupby(self.ir_clone_key, observed=True).filter(lambda x: len(x) >= 10)
-        ct_pep = ct_pep.groupby(self.ir_clone_key, observed=True).apply(self._calculate_expected_target).to_frame()
-        ct_pep[['significant', 'expected_target']] = ct_pep[0].apply(pd.Series)
-        ct_pep = ct_pep[ct_pep['significant']].drop(columns=0)
+        # built explicitly instead of via `groupby.apply`, whose return shape for a Series-returning
+        # callback depends on the data (a two-column frame or a MultiIndex Series)
+        groups = ct_pep.groupby(self.ir_clone_key, observed=True)[self.umi_cols_mhc]
+        ct_pep = pd.DataFrame({clone: self._calculate_expected_target(g) for clone, g in groups},
+                              index=['significant', 'expected_target']).T
+        ct_pep = ct_pep[ct_pep['significant'].astype(bool)]
 
         # Add expected target of each clonotype to full data and filter out non-significant clonotype targets
         data['ct_pep'] = data[self.ir_clone_key].map(ct_pep['expected_target'])
@@ -270,6 +271,11 @@ class ITRAP:
                                       'delta_umi_TRB',])
 
         n_total_gems = len(cells_with_ct_pep)
+        if n_total_gems == 0:
+            raise ValueError("No clonotype has a significant expected target (needs at least 10 cells "
+                             "and Wilcoxon p <= 0.05 between its two most abundant pMHCs), so there is "
+                             "nothing to grid-search the UMI thresholds on. ITRAP needs a panel of "
+                             "several pMHCs and clonotypes large enough to reach significance.")
 
         i = -1
         for uca in umi_count_TRA_l:

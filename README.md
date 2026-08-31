@@ -45,7 +45,7 @@ from dextrademixer.model import DextraDemixer
 
 mdata = mu.read("data/example_data.h5mu")
 
-model = DextraDemixer().fit(mdata, pmhc_key="pmhc1", gex_key="gex")
+model = DextraDemixer().fit(mdata, pmhc_key="pmhc1", pmhc_modality_key="gex")
 p_binder, is_binder = model.predict_posterior_class(threshold=0.5)
 
 mdata.mod["gex"].obs["dextrademixer_probability"] = p_binder
@@ -58,7 +58,7 @@ To include a negative-control multimer, pass `neg_ctrl_key`. To aggregate probab
 model = DextraDemixer().fit(
     mdata,
     pmhc_key="pmhc1",
-    gex_key="gex",
+    pmhc_modality_key="gex",
     neg_ctrl_key="neg_control",
     ir_clone_key="clone_id",
 )
@@ -72,8 +72,8 @@ Use either `threshold` for a fixed decision boundary or `target_fdr` for FDR-con
 
 DextraDemixer needs the pMHC UMI counts and, optionally, a cell-level clonotype identifier. It reads them from any of:
 
-- A [`MuData`](https://mudata.readthedocs.io/) object: counts in the `.X` of the feature modality (`gex_key`, `gex` by default), clonotypes in the `.obs` of the AIRR modality (`ir_key`, `airr` by default).
-- An [`AnnData`](https://anndata.readthedocs.io/) object: counts in `.X`, clonotypes in `.obs`; `gex_key` and `ir_key` are then unused.
+- A [`MuData`](https://mudata.readthedocs.io/) object: counts in the `.X` of the feature modality (`pmhc_modality_key`, `gex` by default), clonotypes in the `.obs` of the AIRR modality (`ir_modality_key`, `airr` by default).
+- An [`AnnData`](https://anndata.readthedocs.io/) object: counts in `.X`, clonotypes in `.obs`; `pmhc_modality_key` and `ir_modality_key` are then unused.
 - A cells x features [`DataFrame`](https://pandas.pydata.org/): counts and annotation in the same table, so every key is a column name.
 
 `pmhc_key` and the optional `neg_ctrl_key` name the count columns, `ir_clone_key` the clonotype column, whose ids may be integers or strings. The bundled example dataset ships in all three formats: `data/example_data.h5mu`, `.h5ad` and `.csv`.

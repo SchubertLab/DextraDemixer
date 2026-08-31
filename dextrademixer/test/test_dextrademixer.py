@@ -68,7 +68,7 @@ def _run_model(model_variant, experiment, expected_results, threshold=None, targ
         mdata = mu.read(os.path.join(DATA_DIR, f"{experiment}.h5mu"))
 
     model = DextraDemixer(overdispersion_scale_prior=1.0, alpha_offset=5.0)
-    model.preprocess_model_data(mdata, pmhc_key="pmhc1", gex_key="gex", neg_ctrl_key=kwargs["neg_ctrl_key"])
+    model.preprocess_model_data(mdata, pmhc_key="pmhc1", pmhc_modality_key="gex", neg_ctrl_key=kwargs["neg_ctrl_key"])
 
     model.fit_svi(maxiter=1000, lr_init_value=3e-1, lr_end_value=3e-3, lr_decay_rate=0.995,
                   lr_transition_steps=1, n_inits=10, rng_key=42)
@@ -160,7 +160,7 @@ def test_fit_wrapper_matches_two_step():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         mdata = mu.read(os.path.join(DATA_DIR, f"{EXPERIMENTS[0]}.h5mu"))
-    kwargs = dict(pmhc_key="pmhc1", gex_key="gex", neg_ctrl_key="neg_control")
+    kwargs = dict(pmhc_key="pmhc1", pmhc_modality_key="gex", neg_ctrl_key="neg_control")
     svi = dict(maxiter=100, n_inits=2, progress_bar=False, rng_key=42)
 
     two_step = DextraDemixer(overdispersion_scale_prior=1.0, alpha_offset=5.0)

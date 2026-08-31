@@ -5,14 +5,14 @@ import mudata as md
 import anndata as ad
 
 
-def icon_assign_pmhc(adata: Union[md.MuData, ad.AnnData],
+def icon_assign_pmhc(data: Union[md.MuData, ad.AnnData],
                      ir_clone_key: str,
                      neg_ctrl_key: str = None,
                      threshold: float = 0,
                      bg_noise: float = None,
                      bg_noise_quantile: float = 0.975,
                      pmhc_keys: Union[str, List[str]] = None,
-                     dex_key: str = "dex",
+                     pmhc_modality_key: str = "dex",
                      inplace=False,
                      faithful: bool = False,
                      ):
@@ -21,35 +21,35 @@ def icon_assign_pmhc(adata: Union[md.MuData, ad.AnnData],
     requires clonal information and dextramer counts, and optionally a negative control column to estimate background noise.
 
     Args:
-        adata: A MuData object containing only dextramer counts and clonotype information,
+        data: A MuData object containing only dextramer counts and clonotype information,
             or an AnnData object containing the dextramer counts and clonotype information in the specified obsm and obs keys.
         threshold: A relative threshold to determine dextramer-specificity
         bg_noise: (Optional) A value to substract from dextramer counts to account for background noise. 
             If None is given, the bg_noise_quantile of the negative control column is used if specified, otherwise 10.
-        pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `dex_key` modality which should be
+        pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `pmhc_modality_key` modality which should be
             deconvolved. If None is given, the full matrix is used, excluding the negative control if specified.
-        dex_key: the dextramer signal MuData module key, or the obsm key if adata is an AnnData object
-        neg_ctrl_key: (Optional) a string specifying the negative control column in the `dex_key` matrix.
+        pmhc_modality_key: the dextramer signal MuData module key, or the obsm key if data is an AnnData object
+        neg_ctrl_key: (Optional) a string specifying the negative control column in the `pmhc_modality_key` matrix.
         ir_clone_key: A string specifying the field in `obs` that holds clonotype ids. 
-            If in the immune receptor modality of a mudata object, should be `ir_key:clone_key`.
+            If in the immune receptor modality of a mudata object, should be `ir_modality_key:clone_key`.
         inplace: boolean indicating whether assignment should be stored in `obsm`
         faithful: boolean indicating whether to use the original ICON procedure (True) or a debuged version based on the paper description
 
-    Returns: An array of pMHC assignments per cell, or modifies the adata object adding an obsm matrix at `dex_key`
+    Returns: An array of pMHC assignments per cell, or modifies the data object adding an obsm matrix at `pmhc_modality_key`
     """
     # check if clone key contains NA values
-    if adata.obs[ir_clone_key].isna().sum() > 0:
-        raise ValueError(f"NA values found in clone key {ir_clone_key} of adata.obs. ICON works only for cells with TCR information. Please filter the object.")
-    c = adata.obs[ir_clone_key].to_numpy().astype("int32")
+    if data.obs[ir_clone_key].isna().sum() > 0:
+        raise ValueError(f"NA values found in clone key {ir_clone_key} of data.obs. ICON works only for cells with TCR information. Please filter the object.")
+    c = data.obs[ir_clone_key].to_numpy().astype("int32")
 
     # get dextramer counts
-    if isinstance(adata, md.MuData):
+    if isinstance(data, md.MuData):
         is_mudata = True
-        dex = adata.mod[dex_key]
+        dex = data.mod[pmhc_modality_key]
         dex = dex.to_df()  # works for sparse and dense X
-    elif isinstance(adata, ad.AnnData):
+    elif isinstance(data, ad.AnnData):
         is_mudata = False
-        dex = adata.obsm[dex_key]
+        dex = data.obsm[pmhc_modality_key]
 
     if pmhc_keys is None:
         X = dex.loc[:,dex.columns != neg_ctrl_key].values
@@ -100,8 +100,8 @@ def icon_assign_pmhc(adata: Union[md.MuData, ad.AnnData],
     assignment = (S > threshold).astype("uint8")
     if inplace:
         if is_mudata:
-            adata.mod[dex_key].obsm["icon_pMHC_assignment"] = assignment
+            data.mod[pmhc_modality_key].obsm["icon_pMHC_assignment"] = assignment
         else:
-            adata.obsm["icon_pMHC_assignment"] = assignment
+            data.obsm["icon_pMHC_assignment"] = assignment
     else:
         return assignment

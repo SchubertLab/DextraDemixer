@@ -193,8 +193,8 @@ class DextramerSimulator:
     def estimate_simulation_params(self,
                                    mdata: md.MuData,
                                    neg_ctrl_key: str,
-                                   gex_key: str = "gex",
-                                   ir_key: str = "airr",
+                                   pmhc_modality_key: str = "gex",
+                                   ir_modality_key: str = "airr",
                                    ir_dist_key: str = "dist",
                                    filter_extreme_values: Union[bool, list[bool]] = False,
                                    iq_range: Union[float, list[float]] = 0.8,
@@ -209,8 +209,8 @@ class DextramerSimulator:
         Args:
             mdata: A Mudata containing only dextramer counts and clonotype information
             neg_ctrl_key: a string specifying the negative control column
-            gex_key: the MuData transcriptome module key
-            ir_key: the MuData AIRR module key
+            pmhc_modality_key: the MuData transcriptome module key
+            ir_modality_key: the MuData AIRR module key
             ir_dist_key: the key in AIRR module's '.uns' that contains a full, symmetric and square distance matrix
                          for all clonotype cluster
             filter_extreme_values: boolean or list of booleans indicating whether extreme values should be filtered
@@ -251,8 +251,8 @@ class DextramerSimulator:
         param = {}
 
         # normalize gex data
-        X = mdata.mod[gex_key].X
-        neg_idx = mdata.mod[gex_key].var["gene_ids"].to_list().index(neg_ctrl_key)
+        X = mdata.mod[pmhc_modality_key].X
+        neg_idx = mdata.mod[pmhc_modality_key].var["gene_ids"].to_list().index(neg_ctrl_key)
 
         #####################
         # Estimate parameters
@@ -268,7 +268,7 @@ class DextramerSimulator:
         param["neg_x"] = neg_x
 
         # fit clonotype size distribution
-        clone_size = mdata.mod[ir_key].obs.groupby("clone_id", dropna=False).size()
+        clone_size = mdata.mod[ir_modality_key].obs.groupby("clone_id", dropna=False).size()
         rv = stats.boltzmann
         bounds = [(0, 10000), (1, np.max(clone_size)), (1, 1)]
         clone_size = __remove_extreme_values(clone_size, filter_extreme_values[i], iq_range[i])
@@ -282,11 +282,11 @@ class DextramerSimulator:
         param["cells_per_clonotype"] = clone_size
 
         # fit inv dispersion distribution
-        invdisp = []
+        inv_overdispersion = []
         var = []
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
-            for c, g in mdata.mod[ir_key].obs.groupby("clone_id", dropna=False):
+            for c, g in mdata.mod[ir_modality_key].obs.groupby("clone_id", dropna=False):
                 if g.shape[0] < 15:  #at least 15 cells to fit neg_binom model
                     continue
                 m = mdata.mod["gex"][g.index]
@@ -296,16 +296,16 @@ class DextramerSimulator:
                     nbfit = smf.negativebinomial(f"{d.columns[0]} ~ 1", data=d, loglike_method="nb2").fit(disp=False)
                     if not nbfit.converged:
                         continue
-                    invdisp.append(1 / nbfit.params.iloc[1])  # concentration parameter
+                    inv_overdispersion.append(1 / nbfit.params.iloc[1])  # concentration parameter
                     var.append(convert_to_variance(np.exp(nbfit.params.iloc[0]), nbfit.params.iloc[1]))
 
-        invdisp = __remove_extreme_values(np.array(invdisp), filter_extreme_values[i], iq_range[i])
-        dist_param["concentration_param"] = stats.gamma.fit(invdisp)
-        param["concentration"] = invdisp
+        inv_overdispersion = __remove_extreme_values(np.array(inv_overdispersion), filter_extreme_values[i], iq_range[i])
+        dist_param["concentration_param"] = stats.gamma.fit(inv_overdispersion)
+        param["concentration"] = inv_overdispersion
         param["variance"] = var
 
         # fit prior for covariance matrix
-        dist = mdata.mod[ir_key].uns[ir_dist_key]
+        dist = mdata.mod[ir_modality_key].uns[ir_dist_key]
 
         cov = dist_to_sim(dist, normalize=True)
 
@@ -324,9 +324,9 @@ class DextramerSimulator:
 
         # QC plot
         if plot_qc:
-            return self.__qc_plot(neg_x, clone_size, invdisp, dist_norm, cov, dist_flat, rng)
+            return self.__qc_plot(neg_x, clone_size, inv_overdispersion, dist_norm, cov, dist_flat, rng)
 
-    def __qc_plot(self, neg_x, clone_size, invdisp, dist, cov, dist_flat, rng):
+    def __qc_plot(self, neg_x, clone_size, inv_overdispersion, dist, cov, dist_flat, rng):
         """
         Plots QQ plots of fitted theoretical distribution against empirical distribution
         """
@@ -372,9 +372,9 @@ class DextramerSimulator:
                      log_scale=True, legend=False, ax=axs[1, 2])
         axs[1, 2].title.set_text("Fitted clone size distribution")
 
-        sns.histplot(x=invdisp, log_scale=False, legend=False, ax=axs[2, 0])
+        sns.histplot(x=inv_overdispersion, log_scale=False, legend=False, ax=axs[2, 0])
         axs[2, 0].title.set_text("Empirical inverse dispersion \n distribution of clonotypes")
-        stats.probplot(invdisp, dist=stats.gamma,
+        stats.probplot(inv_overdispersion, dist=stats.gamma,
                        sparams=params["concentration_param"], plot=axs[2, 1], rvalue=True)
         axs[2, 1].title.set_text("Gamma fitted inverse dispersion \n of clonotypes")
         axs[2, 1].get_children()[2].set_fontsize("x-small")
