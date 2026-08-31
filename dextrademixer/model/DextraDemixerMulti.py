@@ -1,462 +1,233 @@
+"""
+Multi-pMHC deconvolution: one independent `DextraDemixer` per pMHC, plus cross-pMHC resolving resulting cells x pMHC probability matrix into unique assignments via `max_prob`.
+"""
 from __future__ import annotations
 
-import sys
-import warnings
-from typing import TYPE_CHECKING, Union, Dict, Tuple, List, Iterable
+from typing import TYPE_CHECKING, Dict, List, Tuple
 
-import arviz as az
-import jax
-import jax.lax
-import jax.numpy as jnp
-import mudata as md
 import numpy as np
-import numpyro as npy
 import pandas as pd
-import tqdm
-from jax import random, jit
-from numpyro.infer.svi import SVIRunResult
-from optax import exponential_decay
 
-from dextrademixer.model import ApMHCDeconvolution
-from dextrademixer.model.Dextrademixer import ADextraDemixerModel, DextraDemixer, DextraDemixerMixtureModel
+from dextrademixer.model.ApMHCDeconvolution import ApMHCDeconvolution, Data
+from dextrademixer.model.Dextrademixer import DextraDemixer
 
 if TYPE_CHECKING:
-    pass
+    from jax._src.typing import Array
 
-npy.enable_x64()
 
-FLOAT_DTYPE = "float64"
-INT_DTYPE = "int32"
-
-class DextraDemixerMulti(DextraDemixer):
+class DextraDemixerMulti(ApMHCDeconvolution):
     r"""
-    This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
-    data with increasing usage of information for multi pMHC inputs. It treats each pMHC indipendently while size factor
-    normalizing cells
+    Runs `DextraDemixer` over several pMHCs and summarizes the results across them.
 
+    Each pMHC gets its own `DextraDemixer`, fit independently; the models are reachable as
+    `self.demixers[pmhc_key]` if a single fit needs inspecting or plotting. Call order is the same
+    as for `DextraDemixer`: `preprocess_model_data` -> `fit_svi` -> `predict_posterior_class`, or
+    `fit` for the first two in one go.
 
-    This class tries to reuse the compiled sampler, guide, and model with the different pMHC as new input. This should
-    work as the input dimensions do not change.
-
-    **Given**:
-
-    A read count matrix ***$X_{ij}\in \mathbb{N}$*** approximating the avidity of $i\in N$ T cell for the $j\in M$
-    epitope. The $N$ T cells can be grouped based on their T-cell receptor sequence into $C$ cluster.
-
-    **Assumption**:
-
-    1) Each read counts $X_{.j}$ of an epitope is iid.
-    2) We assume that $X_{.j}$ can be represented as a mixture of two Negative Binomial distributions. Each clonal group
-       $c \in C$ belongs to either the clone-specific **Binding** or the **Non-Binding** component. The **Non-Binding**
-       component represents unspecific epitope binding and assay noise.
-    3) It is assumed that unspecific binding T cells and non-binding T cells exhibit lower read counts compared to
-       specifically binding T cell after appropriate normalization.
-    4) T cells of a clonal group $c\in C$ are drawn from the same distribution.
-
+    On top of the per-pMHC results, `max_prob=True` turns the cells x pMHC assignment matrix into
+    unique assignments: among the pMHCs whose probability clears the threshold, keep the highest. It acts
+    on whatever probability was thresholded, so `clonotype_median_p` picks the level.
     """
 
-    def __init__(self, model_type: str = "mixturemodel", mode: str = "I", alpha_model="overdispersion"):
+    def __init__(self, **demixer_kwargs):
+        """
+        Args:
+            demixer_kwargs: passed to every per-pMHC `DextraDemixer`, e.g. `model_type`,
+                            `overdispersion_scale_prior` or `alpha_offset`.
+        """
         super().__init__()
-
-        if mode.upper() not in ("I"):
-            raise ValueError(f"`mode` must be either of the three `I`=independent, `H`=hierarchical, "
-                             + f"`C`=clonotype-specific but was {mode}")
-
-        if model_type not in ADextraDemixerModel.registry.keys():
-            raise warnings.warn(f"`model_type` {model_type} not supported using the standard model.")
-
-
-        #technical variables
-        self.rng_key = None
-        self.mode = mode.upper()
-        self.alpha_model = alpha_model
-
-        self.traces = None
-        self.svi_results = None
-
-        self.model = ADextraDemixerModel.registry.get(model_type, DextraDemixerMixtureModel)()
-        self.sampler = None
-        self.svi = None
-        self.optimizer = None
-        self.guides = None
-        self.is_svi = None
-
-        # input data
-        self.pmhc_names = None
-        self.N = None
-        self.M = None
-        self.x = None
-        self.x_neg = None
-        self.s = None
-        self.c = None
-        self.sigma = None
+        self._demixer_kwargs = demixer_kwargs
+        self.demixers: Dict[str, DextraDemixer] = {}
+        self.pmhc_keys: List[str] = []
+        self.obs_names = None
+        self.counts = None
 
     def preprocess_model_data(self,
-                              mdata: md.MuData,
+                              data: Data,
                               pmhc_keys: List[str],
-                              gex_key: str = "gex",
+                              pmhc_modality_key: str = "gex",
                               neg_ctrl_key: str = None,
-                              ir_key: str = "airr",
+                              ir_modality_key: str = "airr",
                               ir_clone_key: str = None,
-                              ir_cov_key: str = None,
-                              **kwargs):
+                              size_factor_keys: Union[bool, List[str]] = None,
+                              outlier_z_score: float = 100):
         """
-        Preprocesses the data and initializes the model
+        Preprocesses the data and initializes one model per pMHC.
 
         Args:
-            mdata: A Mudata containing only dextramer counts and clonotype information
-            pmhc_keys: a list of strings specifying the pMHC columns in `gex_key` modality`s `X` which should be deconvolved
-            gex_key: the MuData transcriptome module key
-            neg_ctrl_key: (Optional) a string specifying the negative control column in `gex_key` modality`s `X`
-            ir_key: the MuData AIRR module key
-            ir_clone_key: (Optional) a string specifying the field in `obs` of `ir_key` that holds clonotype ids
-            ir_cov_key: (Optional) the key in AIRR module's `.uns` that contains a full, symmetric and square distance matrix
-                         for all clonotype cluster
-            kwargs: dictionary of additional information pasted to the Model object (used for custom model prior)
+            data: the dextramer counts, as a MuData, an AnnData or a cells x features DataFrame.
+                  See `as_counts` for where counts and annotation are read from in each case;
+                  `pmhc_modality_key`/`ir_modality_key` are only used for MuData.
+            pmhc_keys: the pMHC count columns to deconvolve. `neg_ctrl_key` is dropped from the
+                       list if present.
+            pmhc_modality_key: the MuData modality holding the counts
+            neg_ctrl_key: (Optional) the negative control count column
+            ir_modality_key: the MuData AIRR module key
+            ir_clone_key: (Optional) the `obs` column that holds clonotype ids (ints or strings)
+            size_factor_keys: (Optional) which pMHC columns to compute size factors from, True for
+                             all of them. Shared across the pMHCs, as every delegate derives them
+                             from the same columns
+            outlier_z_score: cells more than this many standard deviations from the mean count are
+                        held out of the fit but still scored by `predict_posterior_class`. None
+                        disables the filtering
+
+        Raises:
+            ValueError: if `pmhc_keys` is empty after removing the negative control.
         """
-        gex = mdata.mod[gex_key]
-        air = mdata.mod[ir_key]
+        self.pmhc_keys = [k for k in pmhc_keys if k != neg_ctrl_key]
+        if not self.pmhc_keys:
+            raise ValueError("`pmhc_keys` is empty after removing `neg_ctrl_key`.")
 
-        # extract data specific information
-        if neg_ctrl_key in pmhc_keys:
-            pmhc_keys.remove(neg_ctrl_key)
-        self.M = len(pmhc_keys)
-        self.N = gex.shape[0]
-        self.pmhc_names = pmhc_keys
+        counts, _ = self.as_counts(data, pmhc_modality_key, ir_modality_key)
+        self.obs_names = counts.index
+        self.counts = counts[self.pmhc_keys]  # only needed to break ties in `resolve`
 
-        self.c = jnp.array(air.obs[ir_clone_key].to_numpy().astype("int32")) if ir_clone_key is not None else None
-        self.sigma = jnp.array(air.uns[ir_cov_key]) if ir_cov_key is not None else None
+        self.demixers = {}
+        for pmhc_key in self.pmhc_keys:
+            demixer = DextraDemixer(**self._demixer_kwargs)
+            demixer.preprocess_model_data(data, pmhc_key=pmhc_key, pmhc_modality_key=pmhc_modality_key,
+                                          neg_ctrl_key=neg_ctrl_key, ir_modality_key=ir_modality_key,
+                                          ir_clone_key=ir_clone_key,
+                                          size_factor_keys=size_factor_keys,
+                                          outlier_z_score=outlier_z_score)
+            self.demixers[pmhc_key] = demixer
 
-        if self.mode == "C":
-            if self.c is None:
-                raise ValueError("If `mode`= C a clonotype vector `c` must be specified.")
-
-        if len(pmhc_keys) > 1:
-            x_plus = jnp.array(gex[:, pmhc_keys + [neg_ctrl_key]].X.toarray(),
-                               dtype=FLOAT_DTYPE)  # only used for size factor calculation
-            s = self.__size_factors(x_plus)
-            del x_plus
-        else:
-            s = jnp.ones(self.N, dtype=FLOAT_DTYPE)
-        self.s = s
-
-        self.x = jnp.array(gex[:, pmhc_keys].X.toarray(), dtype=FLOAT_DTYPE)
-        self.x_neg = jnp.array(gex[:, neg_ctrl_key].X.toarray().reshape((self.N,)),
-                          dtype=FLOAT_DTYPE) if neg_ctrl_key else None
-
-        self._check_parameters(self.x, self.x_neg, self.c, self.sigma)
-
-        # technical variables:
-        self.traces = [None] * self.M
-        self.svi_results = [None] * self.M
-        self.guides = [None] * self.M
-
-    @staticmethod
-    def __size_factors(counts: jnp.ndarray) -> jnp.ndarray:
+    def fit_svi(self, progress_bar: bool = True, **svi_kwargs) -> None:
         """
-        DEGSeq2 size factor calculation
+        Fits every pMHC with SVI, see `DextraDemixer.fit_svi` for the inference settings.
+
+        Args:
+            progress_bar: whether to show a progress bar per pMHC, labelled with the pMHC key
+            svi_kwargs: passed to `DextraDemixer.fit_svi`, e.g. `maxiter`, `n_inits`, `rng_key`
+
+        Raises:
+            RuntimeError: if `preprocess_model_data` has not been called yet.
         """
+        if not self.demixers:
+            raise RuntimeError("Model is not initialized. Please call `preprocess_model_data` first.")
 
-        log_counts = jnp.log(counts)
-        log_counts = jnp.where(jnp.isinf(log_counts), jnp.nan, log_counts)
-        log_means = jnp.nanmean(log_counts, axis=0)
+        for i, (pmhc_key, demixer) in enumerate(self.demixers.items(), start=1):
+            if progress_bar:
+                print(f"Fitting {i}/{len(self.demixers)}: {pmhc_key}")
+            demixer.fit_svi(progress_bar=progress_bar, **svi_kwargs)
 
-        mask = log_means > 0 # TODO not sure this is correct
-        log_ratios = log_counts[:, mask] - log_means[mask]
-        log_medians = jnp.nanmedian(log_ratios, axis=1)
-
-        return jnp.exp(log_medians)
-
-    def fit(self, sampler_config: Dict[str, Union[int, float]] = None, rng_key: int = 3) -> List[az.InferenceData]:
+    def fit(self, data: Data, *, pmhc_keys: List[str], pmhc_modality_key: str = "gex",
+            neg_ctrl_key: str = None, ir_modality_key: str = "airr", ir_clone_key: str = None,
+            size_factor_keys: Union[bool, List[str]] = None, outlier_z_score: float = 100,
+            **svi_kwargs) -> "DextraDemixerMulti":
         """
-        fits the mixture model with MCMC and returns the trace
+        `preprocess_model_data` followed by `fit_svi`. The recommended entry point.
+
+        Args:
+            data: the dextramer counts, as a MuData, an AnnData or a cells x features DataFrame
+            pmhc_keys: the pMHC count columns to deconvolve
+            pmhc_modality_key: the MuData modality holding the counts
+            neg_ctrl_key: (Optional) the negative control count column
+            ir_modality_key: the MuData AIRR module key
+            ir_clone_key: (Optional) the `obs` column that holds clonotype ids
+            size_factor_keys: (Optional) which pMHC columns to compute size factors from
+            outlier_z_score: see `preprocess_model_data`
+            svi_kwargs: passed to `DextraDemixer.fit_svi`
+
+        Returns:
+            self, so that `predict_posterior_class` can be chained onto the call
         """
-        if self.x is None:
-            raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
-
-        self.is_svi = False
-
-        if sampler_config is None:
-            sampler_config = self.get_default_sampler_config()["mcmc"]
-
-        nuts_config = {**self.get_default_sampler_config()["mcmc"]["nuts"], **sampler_config.get("nuts", {})}
-        sampling_config = {**self.get_default_sampler_config()["mcmc"], **sampler_config}
-        sampling_config.pop("nuts", None)
-
-
-        for j in range(self.M):
-            # preprocess model with new incoming data
-            self.model.preprocess_model_data(x=self.x[:,j], s=self.s, neg_cont=self.x_neg, c=self.c, sigma=self.sigma,
-                                             alpha_model=self.alpha_model, mode=self.mode)
-            self.__fit(j, nuts_config, sampling_config, rng_key)
-        return self.traces
-
-    def __fit(self,
-              j: int,
-              nuts_config: Dict[str, Union[int, float]],
-              sampling_config: Dict[str, Union[int, float]],
-              rng_key: int) -> None:
-
-        if sampling_config["progress_bar"]:
-            print(f"Fitting {j + 1}. pMHC:\n", file=sys.stderr)
-
-        if self.sampler is None:
-            self.sampler = npy.infer.MCMC(
-                npy.infer.NUTS(self.model.model, **nuts_config),
-                **sampling_config
-            )
-
-        self.sampler.run(random.PRNGKey(rng_key))
-        self.traces[j] = az.from_numpyro(self.sampler)
-
-
-    def fit_svi(self, guide=npy.infer.autoguide.AutoMultivariateNormal, svi_config: Dict[str, Union[int, float]] = None,
-                nof_inits: int = 100, use_minimal_loss: bool = True, rng_key: int = 998777,
-                return_loss: bool = False) -> List[az.InferenceData]:
-
-        if self.x is None:
-            raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
-
-        self.is_svi = True
-        self.rng_key = rng_key
-
-        if svi_config is None:
-            svi_config = self.get_default_sampler_config()["svi"]
-
-        adam_config = {**self.get_default_sampler_config()["svi"]["adam"], **svi_config.get("adam", {})}
-        tracer_config = {**self.get_default_sampler_config()["svi"]["tracer"], **svi_config.get("tracer", {})}
-        svi_config = {**self.get_default_sampler_config()["svi"], **svi_config}
-        svi_config.pop("adam", None)
-        svi_config.pop("tracer", None)
-
-        self.optimizer = npy.optim.ClippedAdam(adam_config["init_value"])
-
-        for j in range(self.M):
-            # preprocess model with new incoming data
-            self.model.preprocess_model_data(x=self.x[:,j], s=self.s, neg_cont=self.x_neg, c=self.c, sigma=self.sigma,
-                                             alpha_model=self.alpha_model, mode=self.mode)
-            self.__fit_svi(j, guide, tracer_config, svi_config, nof_inits, use_minimal_loss, rng_key)
-        return self.traces
-
-    def __fit_svi(self,
-                  j: int,
-                  guide: type[npy.infer.autoguide.AutoGuide],
-                  tracer_config: Dict[str, Union[int, float]],
-                  svi_config: Dict[str, Union[int, float]],
-                  nof_inits: int, use_minimal_loss: bool,
-                  rng_key: int) -> None:
-        """
-        Implements stochastic variational inference
-
-        j: index of pmhc
-        guide: The guide to use for variational inference. If None, self.model object will be checked for a guide function
-        svi_config: configuration for optimizer (Adam) and posterior samples
-        nof_inits: number of initializations tried with different seeds to find gut init values
-        use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
-        """
-
-        # find good random initialization
-        random_init = []
-        for i, key in enumerate(random.split(random.PRNGKey(rng_key), nof_inits)):
-            if callable(getattr(self.model, "guide", None)):
-                local_guide = self.model.guide
-            else:
-                local_guide = guide(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
-            svi = npy.infer.SVI(self.model.model, local_guide, self.optimizer,
-                                loss=npy.infer.TraceGraph_ELBO(**tracer_config))
-            init_state = svi.init(key)
-            loss = svi.evaluate(init_state)
-
-            # Initialization depends on the guide, so need to save the best guide
-            random_init.append((loss, key, local_guide))
-
-        init_losses = np.array([x[0] for x in random_init])
-        best_idx = jnp.nanargmin(init_losses)
-        best_loss, best_key, best_guide = random_init[best_idx]
-
-        self.guides[j] = best_guide
-        svi = npy.infer.SVI(self.model.model, self.guides[j], self.optimizer,
-                            loss=npy.infer.TraceGraph_ELBO(**tracer_config))
-
-        def body_fn(svi_state, step):
-            svi_state, loss = svi.stable_update(svi_state, step=step)
-            return svi_state, loss, svi.get_params(svi_state)
-
-        svi_state = svi.init(rng_key=best_key)
-        losses = []
-        params = []
-        with tqdm.trange(1, svi_config.get("maxiter", 1000) + 1,
-                         desc=f"Fitting {j + 1}. pMHC: ",
-                         disable=(not svi_config.get("progress_bar", False))) as t:
-            batch = max(svi_config.get("maxiter", 1000) // 20, 1)
-            for i in t:
-                svi_state, loss, param = jit(body_fn)(svi_state, i)
-                losses.append(loss)
-                params.append(param)
-                if i % batch == 0:
-                    valid_losses = [x for x in losses[i - batch:] if x == x]
-                    num_valid = len(valid_losses)
-                    if num_valid == 0:
-                        avg_loss = float("nan")
-                    else:
-                        avg_loss = sum(valid_losses) / num_valid
-                    t.set_postfix_str(
-                        "init loss: {:.4f}, avg. loss [{}-{}]: {:.4f}".format(
-                            losses[0], i - batch + 1, i, avg_loss
-                        ),
-                        refresh=False,
-                    )
-        losses = jnp.stack(losses)
-
-        params = params[jnp.argmin(losses)] if use_minimal_loss else params[-1]
-        svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
-        self.svi_results[j] = svi_result
-
-        posterior_samples = self.guides[j].sample_posterior(random.PRNGKey(self.rng_key), svi_result.params,
-                                                        sample_shape=(500,))
-
-        # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
-        posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
-        self.traces[j] = az.from_dict(posterior=posterior_samples_np)
+        self.preprocess_model_data(data, pmhc_keys=pmhc_keys, pmhc_modality_key=pmhc_modality_key,
+                                   neg_ctrl_key=neg_ctrl_key, ir_modality_key=ir_modality_key,
+                                   ir_clone_key=ir_clone_key, size_factor_keys=size_factor_keys,
+                                   outlier_z_score=outlier_z_score)
+        self.fit_svi(**svi_kwargs)
+        return self
 
     def predict_posterior_class(self,
-                                max_pmhc=False,
-                                clone_majority=False,
-                                threshold: Union[List[float], float] = None,
-                                target_fdr: Union[List[float], float] = None,
-                                quantile: Union[List[float], float] = None,
-                                cred_intvl: Union[List[float], float] = None,
-                                clonotype_adherence: Union[List[bool], bool] = False
-                                ) -> Tuple[np.array, np.array]:
+                                threshold: float = None,
+                                target_fdr: float = None,
+                                cred_intvl: float = None,
+                                clonotype_median_p: bool = False,
+                                clone_id: Array = None,
+                                max_prob: bool = False,
+                                ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Returns the binder assignments based on the inferred posterior class probabilities.
-        Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
-        If neither threshold nor target_fdr is provided the max posterior class probability will be used.
+        Returns the per-pMHC binder assignments, optionally resolved into unique calls per cell.
 
-        On a global level two summarization strategies can be combined to generate unique assignments per cell.
-        1) max posterior class probability across all pMHCs combined with threshold or target_fdr assignment and
-        2) majority pMHC assignment per clonotype (if such information is provided).
-        Both approaches can be combined, applying first max posterior class assignment then majority pMHC class
-        assignment. Ties will not be resolved.
+        The first five arguments are handed to `DextraDemixer.predict_posterior_class` unchanged and
+        apply to every pMHC alike; `max_prob` then acts across pMHCs.
 
         Args:
-             max_pmhc: whether to report the pMHC with highest posterior probability across all pMHCs as sole assignment
-                       in case of ties all possible pMHCs will be assigned
-             clone_majority: whether to report the majority pMHC as sole assignment for cells of a clonotype
-                           (can be used in combinatio with max_pmhc)
-             threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
-                        probabilities
-            target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
-                        class probability
-            quantile: (Optional) whether and what lower quantile should be used instead of the population mean as conservative
-                      measure of p. quantile should be in (0, 0.5]
-            cred_intvl: (Optional) instead of using the summarized class probability we estimate a distribution
-                        over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
-            clonotype_adherence: instead of using posterior class assignment per cell use clonotype probability vector
-                                if available.
+            threshold: (Optional) a threshold in [0,1] determining binder based on inferred
+                       posterior class probabilities
+            target_fdr: (Optional) the FDR to control instead of a fixed threshold. Controlled per
+                        pMHC, not across them
+            cred_intvl: (Optional) instead of the summarized class probability, estimate a
+                        distribution over Pr(FDR(t)<=alpha|posterior)>=cred_intvl
+            clonotype_median_p: (Optional) replace each cell's probability by the median within its
+                        clonotype before assigning
+            clone_id: (Optional) clonotype id per cell, overriding the one given at preprocessing
+            max_prob: whether to narrow multiple calls per cell down to the pMHC with the highest
+                      probability among those clearing the threshold. Acts on the same probability
+                      that was thresholded, so `clonotype_median_p` decides whether that is the
+                      per-cell or the per-clonotype one. Equal probabilities go to the higher
+                      multimer count, then to the first pMHC
+
         Returns:
-            A tuple (p, assignment) of arrays with p being the posterior probability of binding and assignment the
-            class assignment decision
+            A tuple (p_pred, assignment) of cells x pMHC DataFrames, with p_pred the posterior probability of
+            binding and assignment the 0/1 class assignment decision.
+
+        Raises:
+            RuntimeError: if the models have not been fit yet.
+            ValueError: if `clonotype_median_p` is set but no clonotypes are available.
         """
-
-        def __check_input(input, er_msg):
-            if isinstance(input, Iterable):
-                if len(input) != self.M:
-                    raise ValueError(er_msg.format(self.M, len(input)))
-            else:
-                input = [input] * self.M
-            return input
-
-        def __return_p_summary(p_sample, _quantile=None, _cred_intvl=None):
-            if _quantile:
-                return jnp.quantile(p_sample, _quantile, axis=0)[:, 1]
-            elif _cred_intvl:
-                return p_sample
-            else:
-                return jnp.nanmean(p_sample, axis=0)[:, 1]
-
-        if self.is_svi is None:
+        if not self.demixers:
             raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
 
-        threshold = __check_input(threshold,
-                                  "`threshold` must be a float or a list of length {} but has length {}.")
-        target_fdr = __check_input(target_fdr,
-                                   "`target_fdr` must be a float or a list of length {} but has length {}.")
-        clonotype_adherence = __check_input(clonotype_adherence,
-                                   "`clonotype_adherence` must be a float or a list of length {} but has length {}.")
-        quantile = __check_input(quantile,
-                                            "`quantile` must be a bool or a list of length {} but has length {}.")
-        cred_intvl = __check_input(cred_intvl,
-                                            "`cred_intvl` must be a bool or a list of length {} but has length {}.")
+        results = {k: d.predict_posterior_class(threshold=threshold, target_fdr=target_fdr,
+                                                cred_intvl=cred_intvl,
+                                                clonotype_median_p=clonotype_median_p,
+                                                clone_id=clone_id)
+                   for k, d in self.demixers.items()}
+        p_pred = pd.DataFrame({k: np.asarray(v[0]) for k, v in results.items()}, index=self.obs_names)
+        assignment = pd.DataFrame({k: np.asarray(v[1]) for k, v in results.items()},
+                                  index=self.obs_names)
 
-        ps, assignments = [], []
+        return p_pred, self.resolve(p_pred, assignment, self.counts, max_prob=max_prob)
 
-        for j in range(self.M):
-            # posterior probability of belonging to the binding class
-            if self.is_svi:
-                if clonotype_adherence[j] and self.model.data["clone_continuous"] is not None:
-                    posterior_samples = self.guides[j].sample_posterior(random.PRNGKey(self.rng_key),
-                                                                        self.svi_results[j].params,
-                                                                        sample_shape=(500,))
+    @staticmethod
+    def resolve(p_pred: pd.DataFrame,
+                assignment: pd.DataFrame,
+                counts: pd.DataFrame,
+                max_prob: bool = False) -> pd.DataFrame:
+        """
+        Keeps, per cell, only the called pMHC with the highest probability.
 
-                    # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
-                    p = __return_p_summary(jnp.array(posterior_samples["w"]), quantile[j], cred_intvl[j])
-                else:
-                    predictive = npy.infer.Predictive(self.model.model,
-                                                      guide=self.guides[j],
-                                                      params=self.svi_results[j].params,
-                                                      num_samples=500)
-                    samples = predictive(jax.random.PRNGKey(self.rng_key)) # self.rng_key
-                    p = __return_p_summary(jnp.exp(samples["log_p"]), quantile[j], cred_intvl[j])
+        Equal probabilities go to the higher multimer count, then to the first pMHC. A cell without
+        a call stays unassigned.
 
-            else:
-                if clonotype_adherence[j] and self.model.data["clone_continuous"] is not None:
-                    w = jnp.array(self.traces[j].posterior["w"])
-                    # requires chain flattening to be compatible with svi-branch
-                    w = w.reshape((w.shape[0] * w.shape[1],) + w.shape[2:])
-                    p = __return_p_summary(w, quantile[j], cred_intvl[j])
-                else:
-                    log_p = jnp.array(self.traces[j].posterior["log_p"].values)
-                    # requires chain flattening to be compatible with svi-branch
-                    log_p = log_p.reshape((log_p.shape[0] * log_p.shape[1],) + log_p.shape[2:])
-                    p = __return_p_summary(jnp.exp(log_p[..., [0, 1]]), quantile[j], cred_intvl[j])
+        Args:
+            p_pred: cells x pMHC posterior probabilities.
+            assignment: cells x pMHC 0/1 assignments, same shape and columns as `p_pred`.
+            counts: cells x pMHC multimer counts, same shape and columns as `p_pred`.
+            max_prob: whether to resolve at all. False returns `assignment` unchanged.
 
-            if cred_intvl[j] is not None:
-                p, assignment, threshold = self._predict_posterior_class_dist(p, target_fdr[j], cred_intvl[j])
-            else:
-                assignment = self._predict_posterior_class(p, threshold[j], target_fdr[j])
+        Returns:
+            The narrowed 0/1 assignment matrix.
+        """
+        if not max_prob:
+            return assignment
 
-            if clonotype_adherence[j] and self.model.data["clone_continuous"] is not None:
-                assignment = assignment[self.model.data["clone_continuous"]]
-                p = p[self.model.data["clone_continuous"]]
+        p = p_pred.where(assignment.astype(bool))  # only called pMHCs compete
+        best = p.eq(p.max(axis=1), axis=0).to_numpy()
+        winner = np.where(best, counts.to_numpy(), -np.inf).argmax(axis=1)  # first wins on equal counts
 
-            ps.append(p)
-            assignments.append(assignment)
+        out = np.zeros(assignment.shape, dtype=int)
+        out[np.arange(len(out)), winner] = best.any(axis=1)  # nothing called -> nothing assigned
+        return pd.DataFrame(out, index=assignment.index, columns=assignment.columns)
 
-        ps, assignments = np.vstack(ps).T, np.vstack(assignments).T
+    def summary(self) -> pd.DataFrame:
+        """
+        Concatenates the per-pMHC `DextraDemixer.summary()` tables, keyed by pMHC.
 
-        # max p assignment per cell
-        if max_pmhc:
-            assignments = ((ps == ps.max(axis=1, keepdims=True)) & assignments.astype(bool)).astype(int)
-
-        # clonal majority assignment
-        if clone_majority and self.model.data["clone_continuous"] is not None:
-            c = self.model.data["clone_continuous"]
-            tmp = np.zeros_like(assignments)
-
-            for g in np.unique(c):
-                rows = np.where(c == g)[0]
-                col_counts = assignments[rows].sum(axis=0)
-                max_count = col_counts.max()
-                tmp[np.ix_(rows, np.where(col_counts == max_count)[0])] = 1 if max_count > 0 else 0
-            assignments = tmp
-
-        return ps, assignments
-
-    def summary(self):
-        summaries = []
-        keys = []
-        for j in range(self.M):
-            summaries.append(az.summary(self.traces[j], var_names=["~log_p"]))
-            keys.append(self.pmhc_names[j])
-        return pd.concat(summaries, keys=keys, names=["pMHC"])
+        Returns:
+            The arviz summary of every fit, with the pMHC key as the outer index level.
+        """
+        return pd.concat([d.summary() for d in self.demixers.values()],
+                         keys=list(self.demixers), names=["pMHC"])

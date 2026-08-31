@@ -36,6 +36,8 @@ The final command installs the local package in editable mode. Runtime dependenc
 
 ## Quick start
 
+### Single pMHC
+
 The example below fits one pMHC feature and classifies cells using a posterior-probability threshold of 0.5.
 
 ```python
@@ -63,10 +65,31 @@ model = DextraDemixer().fit(
     ir_clone_key="clone_id",
 )
 
-p_binder, is_binder = model.predict_posterior_class(threshold=0.5, clonotype_median_p=True)
+p_pred, assignment = model.predict_posterior_class(threshold=0.5, clonotype_median_p=True)
 ```
 
 Use either `threshold` for a fixed decision boundary or `target_fdr` for FDR-controlled assignments; do not specify both.
+
+### Multiple pMHCs
+
+`DextraDemixerMulti` fits one independent `DextraDemixer` per pMHC and returns cells x pMHC tables instead of vectors. Each fit stays reachable as `model.demixers[pmhc_key]`.
+
+```python
+from dextrademixer.model import DextraDemixerMulti
+
+mdata = mu.read("data/example_multi_pmhc.h5mu")
+
+model = DextraDemixerMulti().fit(
+    mdata,
+    pmhc_keys=["pmhc1", "pmhc2", "pmhc3"],
+    pmhc_modality_key="gex",
+    neg_ctrl_key="neg_control",
+)
+
+p_pred, assignment = model.predict_posterior_class(threshold=0.5, clonotype_median_p=True, max_prob=True)
+```
+
+Because the pMHCs are fitted independently, a cell can pass the threshold for several. `max_prob=True` keeps only the pMHC with the highest probability per cell, combined with `clonotype_median_p=True` the same choice is made per clonotype.
 
 ## Input data
 
@@ -76,9 +99,9 @@ DextraDemixer needs the pMHC UMI counts and, optionally, a cell-level clonotype 
 - An [`AnnData`](https://anndata.readthedocs.io/) object: counts in `.X`, clonotypes in `.obs`; `pmhc_modality_key` and `ir_modality_key` are then unused.
 - A cells x features [`DataFrame`](https://pandas.pydata.org/): counts and annotation in the same table, so every key is a column name.
 
-`pmhc_key` and the optional `neg_ctrl_key` name the count columns, `ir_clone_key` the clonotype column, whose ids may be integers or strings. The bundled example dataset ships in all three formats: `data/example_data.h5mu`, `.h5ad` and `.csv`.
+`pmhc_key` (or `pmhc_keys`) and the optional `neg_ctrl_key` name the count columns, `ir_clone_key` the clonotype column, whose ids may be integers or strings. The bundled example dataset ships in all three formats: `data/example_data.h5mu`, `.h5ad` and `.csv`. `data/example_multi_pmhc.h5mu` is a simulated three-pMHC panel.
 
-See [`Tutorial.ipynb`](Tutorial.ipynb) for a complete, reproducible workflow using the bundled example dataset, including configuration, model fitting, evaluation, and visualization:
+See [`Tutorial.ipynb`](Tutorial.ipynb) for a complete, reproducible workflow using the bundled example dataset, including configuration, model fitting, evaluation, and visualization, and [`Tutorial DextraDemixerMulti.ipynb`](Tutorial%20DextraDemixerMulti.ipynb) for the same with multiple pMHCs:
 
 ```bash
 jupyter lab Tutorial.ipynb
