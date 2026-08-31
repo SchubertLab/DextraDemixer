@@ -324,7 +324,7 @@ class DextraDemixer(ApMHCDeconvolution):
             else:
                 self.guide = guide_cls(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
             svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
-                                loss=npy.infer.TraceGraph_ELBO(num_particles=n_particles))
+                                loss=npy.infer.Trace_ELBO(num_particles=n_particles))
             init_state = svi.init(key)
             loss = svi.evaluate(init_state)
 
@@ -337,7 +337,7 @@ class DextraDemixer(ApMHCDeconvolution):
 
         self.guide = best_guide
         svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
-                            loss=npy.infer.TraceGraph_ELBO(num_particles=n_particles))
+                            loss=npy.infer.Trace_ELBO(num_particles=n_particles))
 
         def body_fn(svi_state, step):
             svi_state, loss = svi.stable_update(svi_state, step=step)
