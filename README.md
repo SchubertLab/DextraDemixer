@@ -48,7 +48,7 @@ from dextrademixer.model import DextraDemixer
 mdata = mu.read("data/example_data.h5mu")
 
 model = DextraDemixer().fit(mdata, pmhc_key="pmhc1", pmhc_modality_key="gex")
-p_binder, is_binder = model.predict_posterior_class(threshold=0.5)
+p_binder, is_binder = model.predict(threshold=0.5)
 
 mdata.mod["gex"].obs["dextrademixer_probability"] = p_binder
 mdata.mod["gex"].obs["dextrademixer_assignment"] = is_binder
@@ -65,7 +65,7 @@ model = DextraDemixer().fit(
     ir_clone_key="clone_id",
 )
 
-p_pred, assignment = model.predict_posterior_class(threshold=0.5, clonotype_median_p=True)
+p_pred, assignment = model.predict(threshold=0.5, clonotype_median_p=True)
 ```
 
 Use either `threshold` for a fixed decision boundary or `target_fdr` for FDR-controlled assignments; do not specify both.
@@ -86,7 +86,7 @@ model = DextraDemixerMulti().fit(
     neg_ctrl_key="neg_control",
 )
 
-p_pred, assignment = model.predict_posterior_class(threshold=0.5, clonotype_median_p=True, max_prob=True)
+p_pred, assignment = model.predict(threshold=0.5, clonotype_median_p=True, max_prob=True)
 ```
 
 Because the pMHCs are fitted independently, a cell can pass the threshold for several. `max_prob=True` keeps only the pMHC with the highest probability per cell, combined with `clonotype_median_p=True` the same choice is made per clonotype.

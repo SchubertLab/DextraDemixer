@@ -73,7 +73,7 @@ def _run_model(model_variant, experiment, expected_results, threshold=None, targ
     model.fit_svi(maxiter=1000, lr_init_value=3e-1, lr_end_value=3e-3, lr_decay_rate=0.995,
                   lr_transition_steps=1, n_inits=10, rng_key=42)
 
-    p_pred, assignment = model.predict_posterior_class(
+    p_pred, assignment = model.predict(
         target_fdr=target_fdr,
         threshold=threshold,
         cred_intvl=cred_intvl,
@@ -133,7 +133,7 @@ def test_input_formats_agree():
     for name, data in {"MuData": mdata, "AnnData": adata, "DataFrame": df}.items():
         keys = {**svi, "ir_clone_key": "clone_id"} if name == "MuData" else svi
         model = DextraDemixer().fit(data, **keys)
-        out[name] = model.predict_posterior_class(threshold=0.5, clonotype_median_p=True)
+        out[name] = model.predict(threshold=0.5, clonotype_median_p=True)
 
     for other in ("AnnData", "DataFrame"):
         np.testing.assert_allclose(np.asarray(out["MuData"][0]), np.asarray(out[other][0]),
@@ -146,7 +146,10 @@ def test_input_formats_agree():
 
 def test_fit_wrapper_matches_two_step():
     """`fit` duplicates the defaults of `preprocess_model_data`/`fit_svi`, so check both that it
-    delegates correctly and that no default has drifted apart from them."""
+    delegates correctly and that no default has drifted apart from them.
+
+    The two branches deliberately call `predict` and `predict_posterior_class` respectively, which
+    pins the alias to the method it delegates to. Keep them different."""
     import inspect
 
     fit, low_level = inspect.signature(DextraDemixer.fit).parameters, {}
@@ -166,7 +169,7 @@ def test_fit_wrapper_matches_two_step():
     two_step = DextraDemixer(overdispersion_scale_prior=1.0, alpha_offset=5.0)
     two_step.preprocess_model_data(mdata, **kwargs)
     two_step.fit_svi(**svi)
-    p_two, a_two = two_step.predict_posterior_class(threshold=0.5)
+    p_two, a_two = two_step.predict(threshold=0.5)
 
     one_call = DextraDemixer(overdispersion_scale_prior=1.0, alpha_offset=5.0).fit(mdata, **kwargs, **svi)
     p_one, a_one = one_call.predict_posterior_class(threshold=0.5)

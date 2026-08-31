@@ -81,6 +81,10 @@ class ApMHCDeconvolution:
             A tuple (p_pred, assignment) of per-cell binding probabilities and 0/1 assignments.
         """
 
+    def predict(self, *args, **kwargs):
+        """Alias for `predict_posterior_class`, for the familiar scikit-learn call name."""
+        return self.predict_posterior_class(*args, **kwargs)
+
     @staticmethod
     def _predict_posterior_class(p_pred: Array,
                                  threshold: float = None,
