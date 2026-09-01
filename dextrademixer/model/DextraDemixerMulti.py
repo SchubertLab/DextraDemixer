@@ -80,7 +80,7 @@ class DextraDemixerMulti(ApMHCDeconvolution):
 
         counts, _ = self.as_counts(data, pmhc_modality_key, ir_modality_key)
         self.obs_names = counts.index
-        self.counts = counts[self.pmhc_keys]  # only needed to break ties in `resolve`
+        self.counts = counts[self.pmhc_keys]  # only needed to break ties in `_resolve`
 
         self.demixers = {}
         for pmhc_key in self.pmhc_keys:
@@ -189,13 +189,12 @@ class DextraDemixerMulti(ApMHCDeconvolution):
         assignment = pd.DataFrame({k: np.asarray(v[1]) for k, v in results.items()},
                                   index=self.obs_names)
 
-        return p_pred, self.resolve(p_pred, assignment, self.counts, max_prob=max_prob)
+        return p_pred, self._resolve(p_pred, assignment, self.counts, max_prob=max_prob)
 
-    @staticmethod
-    def resolve(p_pred: pd.DataFrame,
-                assignment: pd.DataFrame,
-                counts: pd.DataFrame,
-                max_prob: bool = False) -> pd.DataFrame:
+    def _resolve(p_pred: pd.DataFrame,
+                 assignment: pd.DataFrame,
+                 counts: pd.DataFrame,
+                 max_prob: bool = False) -> pd.DataFrame:
         """
         Keeps, per cell, only the called pMHC with the highest probability.
 
