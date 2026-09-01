@@ -1,7 +1,7 @@
 # DextraDemixer
 
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-10.64898%2F2026.06.23.733339-b31b1b)](https://doi.org/10.64898/2026.06.23.733339)
-[![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
+[![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://github.com/SchubertLab/DextraDemixer/blob/main/LICENSE)
 
 **Probabilistic identification of antigen-specific T cells from single-cell pMHC multimer experiments.**
 
@@ -43,7 +43,7 @@ The example below fits one pMHC feature and classifies cells using a posterior-p
 ```python
 import muon as mu
 
-from dextrademixer.model import DextraDemixer
+from dextrademixer import DextraDemixer
 
 mdata = mu.read("data/example_data.h5mu")
 
@@ -75,7 +75,7 @@ Use either `threshold` for a fixed decision boundary or `target_fdr` for FDR-con
 `DextraDemixerMulti` fits one independent `DextraDemixer` per pMHC and returns cells x pMHC tables instead of vectors. Each fit stays reachable as `model.demixers[pmhc_key]`.
 
 ```python
-from dextrademixer.model import DextraDemixerMulti
+from dextrademixer import DextraDemixerMulti
 
 mdata = mu.read("data/example_multi_pmhc.h5mu")
 
@@ -101,7 +101,7 @@ DextraDemixer needs the pMHC UMI counts and, optionally, a cell-level clonotype 
 
 `pmhc_key` (or `pmhc_keys`) and the optional `neg_ctrl_key` name the count columns, `ir_clone_key` the clonotype column, whose ids may be integers or strings. The bundled example dataset ships in all three formats: `data/example_data.h5mu`, `.h5ad` and `.csv`. `data/example_multi_pmhc.h5mu` is a simulated three-pMHC panel.
 
-See [`Tutorial.ipynb`](Tutorial.ipynb) for a complete, reproducible workflow using the bundled example dataset, including configuration, model fitting, evaluation, and visualization, and [`Tutorial DextraDemixerMulti.ipynb`](Tutorial%20DextraDemixerMulti.ipynb) for the same with multiple pMHCs:
+See [`Tutorial.ipynb`](https://github.com/SchubertLab/DextraDemixer/blob/main/Tutorial.ipynb) for a complete, reproducible workflow using the bundled example dataset, including configuration, model fitting, evaluation, and visualization, and [`Tutorial DextraDemixerMulti.ipynb`](https://github.com/SchubertLab/DextraDemixer/blob/main/Tutorial%20DextraDemixerMulti.ipynb) for the same with multiple pMHCs:
 
 ```bash
 jupyter lab Tutorial.ipynb
@@ -134,4 +134,4 @@ If DextraDemixer supports your research, please cite:
 
 ## License
 
-DextraDemixer is distributed under the [BSD 3-Clause License](LICENSE).
+DextraDemixer is distributed under the [BSD 3-Clause License](https://github.com/SchubertLab/DextraDemixer/blob/main/LICENSE).
