@@ -1,0 +1,1050 @@
+"""
+The DextraDemixer model.
+
+Three classes live here: `DextraDemixer`, the user-facing facade that extracts the counts and runs
+inference; `ADextraDemixerModel`, the base every probabilistic model plugin derives from; and
+`DextraDemixerKmeansModel`, the default plugin, which parametrizes its priors from a 2-cluster
+KMeans of the counts. Plugins register themselves by subclassing, see `utils.registry`.
+"""
+from __future__ import annotations
+
+import abc
+import warnings
+import os
+import pickle
+
+from typing import TYPE_CHECKING, Union, Dict, Tuple, List
+
+import arviz as az
+import tqdm
+import numpy as np
+import pandas as pd
+import mudata as md
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import jax
+import jax.lax
+from jax import random, jit
+from jax.nn import logsumexp
+import jax.numpy as jnp
+
+import numpyro as npy
+import numpyro.distributions as npd
+
+from numpyro.infer.svi import SVIRunResult
+from sklearn.cluster import KMeans
+from sklearn.metrics import f1_score
+from optax import exponential_decay
+
+from dextrademixer.model import ApMHCDeconvolution
+from dextrademixer.model.ApMHCDeconvolution import Data
+from dextrademixer.utils import RegisteredModel, calculate_metrics
+
+if TYPE_CHECKING:
+    from jax._src.typing import Array
+
+npy.enable_x64()
+
+FLOAT_DTYPE = "float64"
+INT_DTYPE = "int32"
+
+
+class DextraDemixer(ApMHCDeconvolution):
+    r"""
+    This class implements several mixture models to infer pMHC dextramer specificity from single cell immune profiling
+    data with increasing usage of information
+
+    **Given**:
+
+    A read count matrix ***$X_{ij}\in \mathbb{N}$*** approximating the avidity of $i\in N$ T cell for the $j\in M$
+    epitope. The $N$ T cells can be grouped based on their T-cell receptor sequence into $C$ cluster.
+
+    **Assumption**:
+
+    1) Each read counts $X_{.j}$ of an epitope is iid.
+    2) We assume that $X_{.j}$ can be represented as a mixture of two Negative Binomial distributions. Each clonal group
+       $c \in C$ belongs to either the clone-specific **Binding** or the **Non-Binding** component. The **Non-Binding**
+       component represents unspecific epitope binding and assay noise.
+    3) It is assumed that unspecific binding T cells and non-binding T cells exhibit lower read counts compared to
+       specifically binding T cell after appropriate normalization.
+    4) T cells of a clonal group $c\in C$ are drawn from the same distribution.
+
+    """
+
+    def __init__(self, model_type: str = "mixturemodelkmeans",
+                 overdispersion_scale_prior: float = 1.0, alpha_offset: float = 5.0,
+                 neg_ctrl_mean_ratio_prior: Tuple[float, float] = (3.213505719551598,
+                                                                   5.019558265302254),
+                 neg_ctrl_overdispersion_ratio_prior: Tuple[float, float] = (1.3416693520247707,
+                                                                            0.3839547350079813)):
+        """
+        Args:
+            model_type: which model of `available_methods()` to use
+            overdispersion_scale_prior: scale of the HalfCauchy prior on the variance-to-mean ratio
+            alpha_offset: offset of the negative binomial scale parameter alpha for the specific
+                          component. Increase if the model is fitting noise, decrease if the
+                          antigen-specific component gets too narrow
+            neg_ctrl_mean_ratio_prior: (mean, variance) of the LogNormal prior on the ratio between
+                          the non-binding component mean and the negative control mean; converted
+                          to the LogNormal`s log-space parameters internally. The defaults were fit
+                          on a real dataset. Only used when a `neg_ctrl_key` is given
+            neg_ctrl_overdispersion_ratio_prior: (mean, variance) of the LogNormal prior on the same
+                          ratio for the overdispersion. Defaults fit on a real dataset, only used
+                          when a `neg_ctrl_key` is given
+        """
+        super().__init__()
+
+        self.sampler = None
+        self.trace = None
+        self.svi_result = None
+        self.rng_key = None
+        self.guide = None
+
+        if model_type not in ADextraDemixerModel.registry.keys():
+            raise ValueError(f"`model_type` {model_type!r} not supported, "
+                             f"available: {sorted(ADextraDemixerModel.registry.keys())}")
+        self.model = ADextraDemixerModel.registry[model_type]()
+        self.model.model_config.update(
+            overdispersion_scale_prior=overdispersion_scale_prior,
+            alpha_offset=alpha_offset,
+            neg_ctrl_mean_ratio_prior=self.lognormal_from_moments(*neg_ctrl_mean_ratio_prior),
+            neg_ctrl_overdispersion_ratio_prior=self.lognormal_from_moments(
+                *neg_ctrl_overdispersion_ratio_prior))
+
+    @staticmethod
+    def lognormal_from_moments(mean: float, var: float) -> Tuple[float, float]:
+        """(loc, scale) of the LogNormal that has the given mean and variance."""
+        sigma2 = np.log(var / mean ** 2 + 1)
+        return np.log(mean) - sigma2 / 2, np.sqrt(sigma2)
+
+    @property
+    def version(self):
+        return self.model.version
+
+    @property
+    def model_type(self):
+        return self.model.name
+
+    @staticmethod
+    def available_methods():
+        """
+        Returns the available DextraDemixer models.
+
+        Returns:
+            The registered model names, usable as `model_type` in `DextraDemixer(...)`.
+        """
+        return [k for k in ADextraDemixerModel.registry.keys()]
+
+    def preprocess_model_data(self,
+                              data: Data,
+                              pmhc_key: str,
+                              pmhc_modality_key: str = "gex",
+                              neg_ctrl_key: str = None,
+                              ir_modality_key: str = "airr",
+                              ir_clone_key: str = None,
+                              size_factor_keys: Union[bool, List[str]] = None,
+                              outlier_z_score: float = 100):
+        """
+        Preprocesses the data and initializes the model
+
+        Args:
+            data: the pMHC counts, as a MuData, an AnnData or a cells x features DataFrame.
+                  See `as_counts` for where counts and annotation are read from in each case;
+                  `pmhc_modality_key`/`ir_modality_key` are only used for MuData.
+            pmhc_key: the pMHC count column to deconvolve
+            pmhc_modality_key: the MuData modality holding the counts
+            neg_ctrl_key: (Optional) the negative control count column
+            ir_modality_key: the MuData AIRR module key
+            ir_clone_key: (Optional) the `obs` column that holds clonotype ids (ints or strings)
+            size_factor_keys: (Optional) pMHC columns to compute the DESeq2 size factors from.
+                  True uses all columns of the count table, None/False disables the normalization
+            outlier_z_score: cells more than this many standard deviations from the mean count are
+                        held out of the fit but still scored by `predict_posterior_class`. None
+                        disables the filtering
+
+        Raises:
+            TypeError: if `data` is of an unsupported type.
+            ValueError: if the counts contain NaNs or the annotation length does not match them.
+        """
+        counts, obs = self.as_counts(data, pmhc_modality_key, ir_modality_key)
+        n_cells = counts.shape[0]
+
+        x = counts[pmhc_key].to_numpy().reshape((n_cells,))
+        x_neg = counts[neg_ctrl_key].to_numpy().reshape((n_cells,)) if neg_ctrl_key else None
+
+        clone_id = obs[ir_clone_key].to_numpy() if ir_clone_key is not None else None
+        if clone_id is not None and not np.issubdtype(clone_id.dtype, np.number):
+            clone_id = pd.factorize(clone_id)[0]  # string ids, e.g. scirpy's "clonotype_7"
+        clone_id = None if clone_id is None else clone_id.astype("int32")
+
+        if size_factor_keys:
+            pmhc_list = size_factor_keys if isinstance(size_factor_keys, list) else list(counts.columns)
+            x_plus = jnp.array(counts[pmhc_list].to_numpy(),
+                               dtype=FLOAT_DTYPE)  # only used for size factor calculation
+            s = self.calculate_size_factors(x_plus)
+            del x_plus
+        else:
+            s = jnp.ones(n_cells, dtype=FLOAT_DTYPE)
+
+        self._check_parameters(x, x_neg, clone_id)
+        self.model.init_from_counts(x=x, s=s, x_neg=x_neg, clone_id=clone_id,
+                                    outlier_z_score=outlier_z_score)
+
+    @staticmethod
+    def calculate_size_factors(counts: jnp.ndarray) -> jnp.ndarray:
+        """
+        Computes per-cell size factors with the DESeq2 median-of-ratios method.
+
+        Each cell is scaled by the median of its counts relative to the geometric mean across
+        cells. Zero counts are excluded from the geometric means rather than pulling them to zero.
+
+        Args:
+            counts: count matrix of shape (n_cells, n_features), e.g. all pMHCs of the modality.
+
+        Returns:
+            One size factor per cell, shape (n_cells,), 1.0 for cells whose counts are all zero.
+        """
+
+        log_counts = jnp.log(counts)
+        log_counts = jnp.where(jnp.isinf(log_counts), jnp.nan, log_counts)
+        log_means = jnp.nanmean(log_counts, axis=0)
+
+        mask = jnp.isfinite(log_means) # Only use genes with non-zero geometric mean
+        log_ratios = log_counts[:, mask] - log_means[mask]
+        log_medians = jnp.nanmedian(log_ratios, axis=1)
+        size_factors = jnp.exp(log_medians)
+        size_factors = jnp.where(jnp.isnan(size_factors), 1.0, size_factors)  # Handle cells with all zero/nan counts
+
+        return size_factors
+
+    def fit(self, data: Data, *, pmhc_key: str, pmhc_modality_key: str = "gex", neg_ctrl_key: str = None,
+            ir_modality_key: str = "airr", ir_clone_key: str = None, size_factor_keys: Union[bool, List[str]] = None,
+            outlier_z_score: float = 100,
+            guide='normal', maxiter: int = 1000, n_particles: int = 10, progress_bar: bool = True,
+            lr_init_value: float = 3e-1, lr_end_value: float = 3e-3,
+            lr_decay_rate: float = 0.995, lr_transition_steps: int = 1,
+            n_inits: int = 10, use_minimal_loss: bool = True,
+            rng_key: int = 998777) -> "DextraDemixer":
+        """
+        Extracts the model data from `data` and fits it, i.e. `preprocess_model_data` followed by
+        `fit_svi`. This is the recommended entry point; call the two separately only if you want to
+        refit the same preprocessed data with several inference settings.
+
+        Args:
+            data: the pMHC counts, as a MuData, an AnnData or a cells x features DataFrame.
+                  See `as_counts` for where counts and annotation are read from in each case;
+                  `pmhc_modality_key`/`ir_modality_key` are only used for MuData.
+            pmhc_key: the pMHC count column to deconvolve
+            pmhc_modality_key: the MuData modality holding the counts
+            neg_ctrl_key: (Optional) the negative control count column
+            ir_modality_key: the MuData AIRR module key
+            ir_clone_key: (Optional) the `obs` column that holds clonotype ids (ints or strings)
+            size_factor_keys: (Optional) pMHC columns to compute the DESeq2 size factors from.
+                  True uses all columns of the count table, None/False disables the normalization
+            outlier_z_score: cells more than this many standard deviations from the mean count are
+                        held out of the fit but still scored by `predict_posterior_class`. None
+                        disables the filtering
+            guide: The guide to use for variational inference.
+                   If None, self.model object will be checked for a guide function,
+                   elif 'normal', AutoNormal guide will be used, elif 'mvnormal', AutoMultivariateNormal guide will be used
+            maxiter: number of SVI steps
+            n_particles: Monte-Carlo samples used per step to estimate the ELBO gradient. Higher is
+                           less noisy and proportionally slower
+            progress_bar: whether to show a progress bar over the SVI steps
+            lr_init_value: initial learning rate of the exponentially decaying Adam schedule
+            lr_end_value: final learning rate the schedule decays to
+            lr_decay_rate: decay rate of the schedule
+            lr_transition_steps: number of steps between applications of the decay
+            n_inits: number of initializations tried with different seeds to find gut init values
+            use_minimal_loss: boolean indicating whether to report the parameters with the lowest loss instead
+            rng_key: integer seed to initialize numpyros RNG-Key store
+
+        Returns:
+            self, so that `predict_posterior_class` can be chained onto the call
+        """
+        self.preprocess_model_data(data, pmhc_key=pmhc_key, pmhc_modality_key=pmhc_modality_key, neg_ctrl_key=neg_ctrl_key,
+                                   ir_modality_key=ir_modality_key, ir_clone_key=ir_clone_key,
+                                   size_factor_keys=size_factor_keys, outlier_z_score=outlier_z_score)
+        self.fit_svi(guide=guide, maxiter=maxiter, n_particles=n_particles,
+                     progress_bar=progress_bar, lr_init_value=lr_init_value, lr_end_value=lr_end_value,
+                     lr_decay_rate=lr_decay_rate, lr_transition_steps=lr_transition_steps,
+                     n_inits=n_inits, use_minimal_loss=use_minimal_loss, rng_key=rng_key)
+        return self
+
+    def fit_svi(self, guide='normal', maxiter: int = 1000, n_particles: int = 10,
+                progress_bar: bool = True, lr_init_value: float = 3e-1, lr_end_value: float = 3e-3,
+                lr_decay_rate: float = 0.995, lr_transition_steps: int = 1,
+                n_inits: int = 10, use_minimal_loss: bool = True, rng_key: int = 998777) -> None:
+        """
+        Implements stochastic variational inference on data prepared by `preprocess_model_data`.
+        Low-level path: `fit` does both steps in one call.
+
+        Runs `n_inits` random restarts, keeps the one with the lowest initial ELBO, and optimizes
+        it for `maxiter` steps. The result is stored in `self.svi_result`.
+
+        Args:
+            guide: the guide to use for variational inference. If None, `self.model` is checked for
+                   a guide function, 'normal' uses AutoNormal, 'mvnormal' AutoMultivariateNormal
+            maxiter: number of SVI steps
+            n_particles: Monte-Carlo samples used per step to estimate the ELBO gradient. Higher
+                           is less noisy and proportionally slower
+            progress_bar: whether to show a progress bar over the SVI steps
+            lr_init_value: initial learning rate of the exponentially decaying Adam schedule
+            lr_end_value: final learning rate the schedule decays to
+            lr_decay_rate: decay rate of the schedule
+            lr_transition_steps: number of steps between applications of the decay
+            n_inits: number of initializations tried with different seeds to find good init values
+            use_minimal_loss: whether to report the parameters of the step with the lowest loss
+                              instead of the last step
+            rng_key: integer seed to initialize numpyros RNG-Key store
+
+        Raises:
+            Exception: if `preprocess_model_data` has not been called yet.
+        """
+
+        if self.model.data is None:
+            raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
+
+        self.rng_key = rng_key
+
+        optimizer = npy.optim.ClippedAdam(exponential_decay(
+            init_value=lr_init_value, end_value=lr_end_value,
+            decay_rate=lr_decay_rate, transition_steps=lr_transition_steps))
+        # check for custom guide in self.model otherwise use autoguide
+        if guide == 'normal':
+            guide_cls = npy.infer.autoguide.AutoNormal
+        elif (guide == 'mvnormal') or (guide == 'multivariatenormal'):
+            guide_cls = npy.infer.autoguide.AutoMultivariateNormal
+        # find good random initialization
+        random_init = []
+        for i, key in enumerate(random.split(random.PRNGKey(rng_key), n_inits)):
+            if callable(getattr(self.model, "guide", None)):
+                self.guide = self.model.guide
+            else:
+                self.guide = guide_cls(self.model.model, init_loc_fn=npy.infer.initialization.init_to_median)
+            svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
+                                loss=npy.infer.Trace_ELBO(num_particles=n_particles))
+            init_state = svi.init(key)
+            loss = svi.evaluate(init_state)
+
+            # Initialization depends on the guide, so need to save the best guide
+            random_init.append((loss, key, self.guide))
+
+        init_losses = np.array([x[0] for x in random_init])
+        best_idx = jnp.nanargmin(init_losses)
+        best_loss, best_key, best_guide = random_init[best_idx]
+
+        self.guide = best_guide
+        svi = npy.infer.SVI(self.model.model, self.guide, optimizer,
+                            loss=npy.infer.Trace_ELBO(num_particles=n_particles))
+
+        def body_fn(svi_state, step):
+            svi_state, loss = svi.stable_update(svi_state, step=step)
+            return svi_state, loss, svi.get_params(svi_state)
+
+        svi_state = svi.init(rng_key=best_key)
+        losses = []
+        params = []
+        compiled_body_fn = jit(body_fn)
+
+        with tqdm.trange(1, maxiter + 1, disable=(not progress_bar), mininterval=10) as t:
+            batch = 10
+            for i in t:
+                svi_state, loss, param = compiled_body_fn(svi_state, i)
+
+                losses.append(loss)
+                params.append(param)
+                if i % batch == 0:
+                    valid_losses = [x for x in losses[i - batch:] if x == x]
+                    num_valid = len(valid_losses)
+                    if num_valid == 0:
+                        avg_loss = float("nan")
+                    else:
+                        avg_loss = sum(valid_losses) / num_valid
+
+                    t.set_postfix_str(f"avg. loss [{i - batch + 1}-{i}]: {avg_loss:.4f}", refresh=False,)
+        losses = jnp.stack(losses)
+        params = params[jnp.nanargmin(losses)] if use_minimal_loss else params[-1]
+        self.svi_result = SVIRunResult(params=params, losses=losses, state=svi_state)
+
+    def predict_posterior_class(self,
+                                threshold: float = None,
+                                target_fdr: float = None,
+                                cred_intvl: float = None,
+                                clonotype_median_p: bool = False,
+                                clone_id: Array = None,
+                                ) -> Tuple[Array, Array]:
+        """
+        Returns the binder assignments based on the inferred posterior class probabilities.
+        Assignment can be either be done by providing a threshold or target fdr value if FDR control is wanted.
+        If neither threshold nor target_fdr is provided the max posterior class probability will be used.
+
+        Scores `self.model.data_full`, i.e. *all* cells including the ones an `outlier_z_score`
+        held out of the fit. This is intended: outliers are excluded from fitting but still get a
+        posterior probability. The model is transductive, so there is no scoring of other datasets.
+
+        Args:
+            threshold: (Optional) a threshold in [0,1] determining binder based on inferred posterior class
+                        probabilities
+            target_fdr: (Optional) the FDR threshold to control False discovery rate based on the posterior
+                        class probability
+            cred_intvl: (Optional) instead of using the summarized class probability we estimate a distribution
+                        over Pr(FDR(t)≤alpha|posterior)≥cred_intvl
+            clonotype_median_p: (Optional) after initial probability, use median within each clonotype for each cell
+            clone_id: (Optional) map each cell id to clone id, shape=(n_cells). Only needed as an
+                        override: without it the clonotypes given to `fit`/`preprocess_model_data`
+                        as `ir_clone_key` are used. Pass it to aggregate over a different clonotype
+                        definition without refitting.
+
+        Returns:
+            A tuple (p_pred, assignment) of arrays, with p_pred the posterior probability of binding and
+            assignment the class assignment decision.
+
+        Raises:
+            RuntimeError: if the model has not been fit yet.
+            ValueError: if `clonotype_median_p` is True but no clonotypes are available.
+        """
+        def __return_p_summary(p_samples):
+            if cred_intvl:
+                p_pred = p_samples
+            else:
+                p_pred = jnp.nanmean(p_samples, axis=0)[:, 1]
+
+            if clonotype_median_p:
+                if clone_id is None:
+                    raise ValueError("`clonotype_median_p`=True needs clonotypes: either pass "
+                                     "`ir_clone_key` to `fit`/`preprocess_model_data`, or a "
+                                     "`clone_id` vector here.")
+                unique_ids = np.unique(clone_id)
+
+                if cred_intvl:
+                    # mean for each clone while keeping posterior samples, shape (num_clones, n_samples, 2)
+                    mean_p = np.stack([jnp.quantile(p_pred[:, clone_id == cid], q=0.5, axis=1, method='higher') for cid in unique_ids])
+                    p_pred = mean_p[clone_id].transpose(1, 0, 2)  # shape (num_posterior_samples, num_cells, 2)
+
+                else:
+                    df = pd.DataFrame({"p": p_pred, "clone_id": clone_id})
+                    mean_p = df.groupby("clone_id")["p"].quantile(0.5, interpolation='higher')
+                    p_pred = jnp.array(mean_p.values)[clone_id]
+            return p_pred
+
+        data = self.model.data_full
+        clone_id = clone_id if clone_id is not None else data.get("clone_continuous", None)
+        clone_id = pd.factorize(np.asarray(clone_id))[0] if clone_id is not None else None
+        
+        if self.sampler is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call first `fit` or `fit_svi`.")
+
+        # posterior probability of belonging to the binding class
+        predictive = npy.infer.Predictive(self.model.model, guide=self.guide, params=self.svi_result.params,
+                                            num_samples=500)
+        samples = predictive(jax.random.PRNGKey(self.rng_key), data=data)  # self.rng_key
+        p_pred = __return_p_summary(jnp.exp(samples["log_p"]))
+
+        if cred_intvl is not None:
+            p_pred, assignment, threshold = self._predict_posterior_class_dist(p_pred, target_fdr, cred_intvl)
+        else:
+            assignment = self._predict_posterior_class(p_pred, threshold, target_fdr)
+
+        return p_pred, assignment
+
+    def summary(self):
+        """
+        Summarizes the fitted posterior as an arviz table.
+
+        Draws 500 samples from the guide and reports arviz`s per-parameter statistics (mean, sd,
+        HDI, ESS, r_hat). The per-cell `log_p` site is excluded, as it has one entry per cell.
+
+        Returns:
+            The `arviz.summary` DataFrame, one row per model parameter.
+
+        Raises:
+            RuntimeError: if the model has not been fit yet.
+        """
+        if self.trace is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
+
+        posterior_samples = self.guide.sample_posterior(random.PRNGKey(self.rng_key), self.svi_result.params,
+                                                        sample_shape=(500,))
+
+        # Convert posterior_samples from JAX arrays to NumPy arrays and reshape
+        posterior_samples_np = {k: np.array(v)[np.newaxis, ...] for k, v in posterior_samples.items()}
+        inference_data = az.from_dict(posterior=posterior_samples_np)
+        return az.summary(inference_data, var_names=["~log_p"])
+
+    @staticmethod
+    def _predict_posterior_class_dist(p_samples, target_fdr, cred_intvl, n_thresh=100):
+        r"""
+        Posterior BFDR thresholding (Newton et al. 2004, extended with posterior uncertainty).
+
+        Given posterior draws of signal probabilities \(p_i^{(s)}\), this method computes
+        the posterior distribution of the global FDR across candidate thresholds \(\tau\).
+        For each \(\tau\), the per-draw FDR is
+
+        \[
+        \text{FDR}^{(s)}(\tau) =
+        \frac{\sum_i (1 - p_i^{(s)}) \mathbf{1}[p_i^{(s)} \geq \tau]}
+             {\sum_i \mathbf{1}[p_i^{(s)} \geq \tau]} .
+        \]
+
+        The selected threshold is the largest \(\tau\) such that
+        \(\Pr(\text{FDR}(\tau) \leq \alpha \mid \text{data}) \geq \text{cred\_level}\).
+        This provides a conservative extension of the DPP rule that accounts for
+        posterior uncertainty in posterior class probabilities.
+
+        Args:
+            p_samples: posterior samples of signal probabilities, shape (n_draws, n_cells).
+            target_fdr: target false discovery rate \(\alpha \in [0,1]\).
+            cred_intvl: (Optional) credibility requirement for FDR control,
+                        \(cred\_intvl \in [0.5,1)\).
+            n_thresh: number of candidate thresholds scanned in [0,1].
+
+        Returns:
+            A tuple (p_mean, assignment, threshold) with the posterior mean class probabilities
+            \(\hat{p}_i\) of shape (n_cells,), the hard 0/1 assignments of the same shape, and
+            the selected threshold \(\tau\).
+        """
+        p_samples = p_samples[:, :, 1]
+        p_mean = jnp.mean(p_samples, axis=0)
+        lfdr = 1.0 - p_samples
+        candidate_thresh = jnp.linspace(0.0, 1.0, n_thresh + 2)[1:-1]
+
+        def eval_threshold(_, tau):
+            disc = p_samples >= tau
+            n_disc = disc.sum(axis=1)
+            sum_lfdr = jnp.sum(jnp.where(disc, lfdr, 0.0), axis=1)
+            gfdr = jnp.where(n_disc > 0, sum_lfdr / n_disc, 0.0)
+            valid = jnp.mean(gfdr <= target_fdr) >= cred_intvl
+            mean_n_disc = jnp.mean(n_disc)
+            return None, (valid, mean_n_disc)
+
+        _, (valid_thr, n_discoveries) = jax.lax.scan(eval_threshold, None, candidate_thresh)
+
+        threshold_idx = jnp.argmax(jnp.where(valid_thr, n_discoveries, -1.0))
+        threshold = jnp.where(jnp.any(valid_thr), candidate_thresh[threshold_idx], 1.0)
+
+        assignment = (p_mean >= threshold).astype(jnp.int32)
+        return p_mean, assignment, threshold
+
+    def get_posterior_samples(self, n_samples: int = 1000, seed: int = 42) -> Dict:
+        """
+        Returns posterior samples of model parameters after fitting the model
+
+        Args:
+            n_samples: number of posterior samples to draw
+            seed: random seed to initialize numpyros RNG-Key store
+
+        Returns:
+            A dictionary with posterior samples of model parameters
+
+        Raises:
+            RuntimeError: if the model has not been fit yet.
+        """
+        if self.trace is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
+
+        predictive = npy.infer.Predictive(self.guide, params=self.svi_result.params, num_samples=n_samples)
+        posterior_samples = predictive(jax.random.PRNGKey(seed), data=None)
+
+        # Extract mean from posterior samples
+        q = posterior_samples["delta_q"].mean(0).cumsum(0)
+        w = posterior_samples["w"].mean(0)
+
+        if w.ndim > 2:
+            # w is per clone, transform to per cell and take mean over all cells
+            w_cell = w[self.model.data["clone_continuous"]]
+            w_mean_over_cells = w_cell.mean(0)
+        else:
+            w_mean_over_cells = w
+
+        overdispersion = posterior_samples["overdispersion"].mean(0) + 1
+        # alpha.shape = (2, )
+        alpha = q ** 2 / (q * (overdispersion) - q)
+        if self.model.model_config['alpha_offset']:
+            alpha = alpha + jnp.array([0, self.model.model_config['alpha_offset']])
+
+        alpha_mean_over_cells = alpha
+
+        posterior_samples_mean = {"q": q, "w": w, "alpha": alpha,
+                                  "w_mean_over_cells": w_mean_over_cells, "alpha_mean_over_cells": alpha_mean_over_cells}
+        posterior_samples_mean["overdispersion"] = overdispersion
+        # Negative control model
+        if 'noise_mean_inv_inc' in posterior_samples:
+            s = jnp.ones(self.model.data["x"].shape[0]) if self.model.data["s"] is None else self.model.data["s"]
+
+            posterior_samples_mean['noise_mean_inv_inc'] = posterior_samples['noise_mean_inv_inc'].mean(0)
+            posterior_samples_mean['noise_overdisp_inv_inc'] = posterior_samples['noise_overdisp_inv_inc'].mean(0)
+
+            q_neg = jnp.clip(s * q[0] / posterior_samples_mean['noise_mean_inv_inc'], 1e-3, None)
+            overdispersion_neg = jnp.clip(
+                posterior_samples_mean['overdispersion'][0] / posterior_samples_mean['noise_overdisp_inv_inc'],
+                1.0 + 1e-3, None)
+            alpha_neg = q_neg ** 2 / (q_neg * overdispersion_neg - q_neg)
+            posterior_samples_mean['q_neg'] = q_neg.mean()
+            posterior_samples_mean['alpha_neg'] = alpha_neg.mean()
+            posterior_samples_mean['overdispersion_neg'] = overdispersion_neg
+        return posterior_samples_mean
+
+    def plot_results(self, assignment, p_pred, y_true=None, seed=42, show=False, return_plt=False, data=None):
+        """
+        Plots a 3x3 diagnostic overview of the fit.
+
+        The first two columns show the count histogram (linear and log scale) and the count against
+        the posterior probability, coloured by the true and by the predicted class respectively. The
+        third column shows the two fitted negative binomial components and the weighted mixture,
+        labelled with their means `q` and concentrations `alpha`. Comparing column one with column
+        two shows which cells the model moves, and column three whether the two components are
+        separated at all.
+
+        Args:
+            assignment: per-cell 0/1 class assignment, as returned by `predict_posterior_class`.
+            p_pred: per-cell posterior probability of binding, same length as `assignment`.
+            y_true: (Optional) known labels for the first column. Zeros are used when not given,
+                    i.e. the first column then shows the counts without a class split.
+            seed: seed for the posterior draws behind the third column.
+            show: whether to call `plt.show()`.
+            return_plt: if True, the figure is left open for further modification instead of being
+                        closed. Nothing is returned either way; use `plt.gcf()` to get the figure.
+            data: (Optional) data dict to plot; defaults to `self.model.data_full`, i.e. all cells
+                  including the ones an `outlier_z_score` held out of the fit.
+
+        Raises:
+            RuntimeError: if the model has not been fit yet.
+        """
+        if self.trace is None and self.svi_result is None:
+            raise RuntimeError("Model has not been fit yet. Please call `fit` or `fit_svi` first.")
+
+        if y_true is None:
+            # Create pseudo ground-truth label for plotting
+            y_true = np.zeros_like(assignment)
+        
+        data = data if data is not None else self.model.data_full
+        
+        plt.figure(figsize=(10, 7))
+
+        # FIRST COLUMN - TRUE CLASS ASSIGNMENT
+        # Plot data colored in TRUE class assignment
+        plt.subplot(3, 3, 1)
+        ax = sns.histplot(x=data["x"], hue=y_true, discrete=True, element="step", alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("True class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.title("True class assignment")
+
+        # Plot data colored in TRUE class assignment log-scale
+        plt.subplot(3, 3, 4)
+        ax = sns.histplot(x=data["x"], hue=y_true, discrete=True, element="step", alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("True class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.yscale("log")
+        plt.title("True class assignment log-scale")
+
+        # Plot UMI count vs predicted probability colored in TRUE class assignment
+        plt.subplot(3, 3, 7)
+        ax = sns.scatterplot(x=data["x"], y=p_pred, hue=y_true, alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("True class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.xlabel("UMI count")
+        plt.ylabel("Posterior probability")
+        plt.title("Pred prob and true label")
+
+        # SECOND COLUMN - PREDICTED CLASS ASSIGNMENT
+        # Plot data colored in PREDICTED class assignment
+        plt.subplot(3, 3, 2)
+        ax = sns.histplot(x=data["x"], hue=assignment, discrete=True, element="step", alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.title("Predicted class assignment")
+
+        # Plot data colored in PREDICTED class assignment in log scale
+        plt.subplot(3, 3, 5)
+        ax = sns.histplot(x=data["x"], hue=assignment, discrete=True, element="step", alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.yscale("log")
+        plt.title("Predicted class assignment log-scale")
+
+        # Plot UMI count vs predicted probability colored in PREDICTED class assignment
+        plt.subplot(3, 3, 8)
+        ax = sns.scatterplot(x=data["x"], y=p_pred, hue=assignment, markers={0: ".", 1: "X"}, alpha=0.3)
+        leg = ax.get_legend()
+        leg.set_title("Pred class")
+        leg.set_frame_on(False)
+        sns.despine()
+        plt.xlabel("UMI count")
+        plt.ylabel("Posterior probability")
+        plt.title("Pred prob and pred label")
+
+        # THIRD COLUMN - POSTERIOR DISTRIBUTION OF NEGATIVE BINOMIAL
+        # Plot posterior distribution of Negative Binomial
+        posterior_samples = self.get_posterior_samples(n_samples=1000, seed=seed)
+        q = posterior_samples["q"]
+        w = posterior_samples["w"]
+        alpha = posterior_samples["alpha"]
+        x = np.arange(0, data["x"].max())
+
+        prob0 = jnp.exp(npd.NegativeBinomial2(q[0], alpha[0]).log_prob(x))
+        prob1 = jnp.exp(npd.NegativeBinomial2(q[1], alpha[1]).log_prob(x))
+
+        # Individual Negative Binomial
+        plt.subplot(3, 3, 6)
+        ax1 = sns.lineplot(x=np.arange(0, data["x"].max()), y=prob0,
+                            label=fr"$q={q[0]:.1f}\ \alpha={alpha[0]:.1f}$", color=sns.color_palette('tab10')[0])
+        ax2 = ax1.twinx()
+        sns.lineplot(x=np.arange(0, data["x"].max()), y=prob1, ax=ax2,
+                        label=fr"$q={q[1]:.1f}\ \alpha={alpha[1]:.1f}$", color=sns.color_palette('tab10')[1])
+        handles = ax1.lines + ax2.lines
+        labels = [h.get_label() for h in handles]
+        ax1.legend(handles, labels, frameon=False, loc='best')
+        ax2.get_legend().remove()
+        sns.despine()
+        plt.title("Posterior NB components")
+        plt.ylabel("Probability")
+
+        # Mixture model
+        plt.subplot(3, 3, 3)
+        # w.shape = (2,)
+        prob0_mix = prob0 * w[0]
+        prob1_mix = prob1 * w[1]
+        w_mean = w
+
+        sns.lineplot(x=x, y=prob0_mix.reshape(-1),
+                        label=fr"$q={q[0]:.1f}\ \alpha={alpha[0]:.1f}$", linewidth=3)
+        sns.lineplot(x=x, y=prob1_mix.reshape(-1),
+                    label=fr"$q={q[1]:.1f}\ \alpha={alpha[1]:.1f}$", linewidth=3)
+        sns.lineplot(x=x, y=(prob0_mix + prob1_mix).reshape(-1), linewidth=3, color="k",
+                        label=f"w={w_mean[0]:.2f}, {w_mean[1]:.3f}", linestyle="--")
+        plt.legend(frameon=False)
+        sns.despine()
+        plt.title("Posterior Mixture NB")
+        plt.ylabel("Probability")
+
+        plt.tight_layout()
+
+        if show:
+            plt.show()
+        if return_plt:
+            return
+        plt.close()
+
+    def save_model(self, filepath):
+        """
+        Saves the fitted model to a file using pickle.
+
+        Args:
+            filepath: path to the file the model is written to.
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump(vars(self), f)
+
+    def load_model(self, filepath):
+        """
+        Loads model state into this instance, e.g.
+        `model = DextraDemixer(); model.load_model(filepath)`.
+
+        Args:
+            filepath: path to the ckpt file.
+
+        Returns:
+            self, with the loaded state.
+        """
+        with open(filepath, 'rb') as f:
+            ckpt = pickle.load(f)
+        self.__dict__.update(ckpt)
+        return self
+
+    @classmethod
+    def from_ckpt(cls, filepath):
+        """
+        Creates a new instance directly from a ckpt file, without calling `__init__`, e.g.
+        `model = DextraDemixer.from_ckpt(filepath)`.
+
+        Args:
+            filepath: path to the ckpt file.
+
+        Returns:
+            A new instance holding the loaded state.
+        """
+        with open(filepath, 'rb') as f:
+            ckpt = pickle.load(f)
+        self = cls.__new__(cls)
+        self.__dict__.update(ckpt)
+        return self
+
+
+class ADextraDemixerModel(metaclass=RegisteredModel):
+    """
+    Base class of the probabilistic model plugins `DextraDemixer` can be configured with.
+
+    Subclassing registers the plugin under its lowercased `name`, which is what `model_type` selects
+    in `DextraDemixer(...)`, see `utils.registry.RegisteredModel`. A plugin has to provide `name`,
+    `version`, a numpyro `model` and a `model_config` dict holding the priors that `model` reads:
+    `DextraDemixer.__init__` writes the user-facing priors into it, and `init_from_counts` adds
+    whatever the plugin derives from the data, as `DextraDemixerKmeansModel` does with its KMeans
+    cluster statistics. `init_from_counts` itself is inherited and only needs overriding for that.
+    """
+
+    def __init__(self):
+        self._name = "Abstract"
+        self._version = "0.0.0"
+        self._data = None
+
+    def init_from_counts(self,
+                         x: Union[pd.Series, np.ndarray, Array],
+                         s: Union[pd.Series, np.ndarray, Array] = None,
+                         x_neg: Union[pd.Series, np.ndarray, Array] = None,
+                         clone_id: Union[pd.Series, np.ndarray, Array] = None,
+                         outlier_z_score: float = None,
+                         ):
+        """
+        Stores the count arrays as `self.data` and `self.data_full` for the model to consume.
+
+        Args:
+            x: pMHC UMI counts, shape (n_cells,).
+            s: (Optional) per-cell size factors, shape (n_cells,).
+            x_neg: (Optional) negative control counts, shape (n_cells,).
+            clone_id: (Optional) integer clonotype id per cell, shape (n_cells,).
+            outlier_z_score: cells whose count is more than this many standard deviations from
+                               the mean are held out of the fit (`self.data`) but still scored
+                               (`self.data_full`). None disables the filtering.
+        """
+        clone_id = None if clone_id is None else jnp.array(clone_id, dtype=INT_DTYPE)
+        zscore = jnp.abs((x - jnp.mean(x)) / jnp.std(x))
+        keep = jnp.where(zscore < (jnp.inf if outlier_z_score is None else outlier_z_score))
+        # With outliers
+        self.data_full = {"x": jnp.array(x, dtype=INT_DTYPE),
+                          "s": None if s is None else jnp.array(s, dtype=FLOAT_DTYPE),
+                          "x_neg": None if x_neg is None else jnp.array(x_neg, dtype=FLOAT_DTYPE),
+                          "clone_id": clone_id,
+                          # If clone is not contiuous, then there will be problems with indexing
+                          "clone_continuous": None if clone_id is None else jnp.searchsorted(jnp.unique(clone_id), clone_id),
+                          }
+        # Without outliers
+        self.data = {"x": jnp.array(x[keep], dtype=INT_DTYPE),
+                     "s": jnp.array(s[keep], dtype=FLOAT_DTYPE) if s is not None else None,
+                     "x_neg": jnp.array(x_neg[keep], dtype=FLOAT_DTYPE) if x_neg is not None else None,
+                     "clone_id": jnp.array(clone_id[keep], dtype=INT_DTYPE) if clone_id is not None else None,
+                     "clone_continuous": None if clone_id is None else jnp.searchsorted(jnp.unique(clone_id), clone_id[keep]),
+                     }
+
+    def model(self, **kwargs):
+        raise NotImplementedError
+
+    @property
+    @abc.abstractmethod
+    def name(self) -> str:
+        return self._name
+
+    @property
+    @abc.abstractmethod
+    def version(self) -> str:
+        return self._version
+
+    @property
+    def data(self) -> Dict:
+        return self._data
+
+    @data.setter
+    def data(self, value):
+        self._data = value
+
+
+class DextraDemixerKmeansModel(ADextraDemixerModel):
+    """
+    Default plugin, whose priors are parametrized from a 2-cluster KMeans of the counts.
+
+    Because the cluster means, variances and proportions enter the model as priors directly, this
+    model needs no hyperpriors, which makes it simpler and cheaper to fit than a fully hierarchical
+    version. The trade-off is that a bad KMeans split, e.g. on very sparse counts, propagates into
+    the fit.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._name = "mixturemodelkmeans"
+        self._version = "0.0.1"
+        self._kmeans_dict = None
+        self.model_config = {}
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def version(self) -> str:
+        return self._version
+
+    def init_from_counts(self,
+                         x: Union[pd.Series, np.ndarray, Array],
+                         s: Union[pd.Series, np.ndarray, Array] = None,
+                         x_neg: Union[pd.Series, np.ndarray, Array] = None,
+                         clone_id: Union[pd.Series, np.ndarray, Array] = None,
+                         outlier_z_score: float = None,
+                         **kwargs):
+
+        super().init_from_counts(x=x, s=s, x_neg=x_neg, clone_id=clone_id,
+                                 outlier_z_score=outlier_z_score, **kwargs)
+        self._kmeans_dict = self._init_kmeans()
+        self.model_config.update(self._kmeans_dict)
+
+    def _init_kmeans(self) -> Dict:
+        """
+        Splits the counts into two clusters with KMeans and derives the model priors from them.
+
+        The clusters are initialized at the smallest and largest count and sorted by mean
+        afterwards, so index 0 is the non-binding and index 1 the antigen-specific component. If
+        the upper cluster catches three cells or fewer, the three highest counts are assigned to it
+        instead, which keeps the mixture identifiable on datasets with almost no binders.
+
+        Runs on the outlier-filtered `self.data`, so the priors are not driven by extreme cells.
+
+        Returns:
+            A dict with the KMeans labels (`z`), the per-cluster mean and unbiased variance of the
+            counts (`cluster_means`, `cluster_variances`), the cluster sizes as fractions
+            (`cluster_proportions`) and the Dirichlet concentration derived from them
+            (`w_concentration_prior`).
+        """
+        # already filtered by `outlier_z_score` in `init_from_counts`
+        x = self.data["x"].copy()
+        n_clusters = 2  # KMeans with 2 clusters
+
+        # Perform KMeans clustering
+        kmeans = KMeans(n_clusters=n_clusters, init=np.vstack([np.min(x), np.max(x)]), n_init="auto").fit(x.reshape(-1, 1))
+        labels = kmeans.predict(x.reshape(-1, 1))
+
+        if labels.sum() <= 3:
+            # Assign highest three values to cluster 1 and the rest to cluster 0
+            sorted_indices = np.argsort(x)
+            labels[sorted_indices[-3:]] = 1
+        
+        # Initialize lists for cluster attributes
+        cluster_means = []
+        cluster_variances = []
+
+        kmeans_dict = {}
+
+        # Calculate parameters for each cluster
+        for cluster_id in range(n_clusters):
+            cluster_points = x[labels == cluster_id]
+
+            # Calculate mean (mu_q_mean_prior)
+            cluster_mean = np.mean(cluster_points)
+            cluster_means.append(cluster_mean)
+
+            # Calculate variance (mu_q_var_prior), using unbiased variance estimator
+            cluster_variance = np.var(cluster_points, ddof=1)
+            cluster_variances.append(cluster_variance)
+
+        # Calculate cluster proportions (w_concentration_prior)
+        cluster_counts = np.bincount(labels, minlength=2)
+        cluster_proportions = cluster_counts / len(labels)
+
+        # Sort clusters by mean for consistency
+        sorted_indices = np.argsort(cluster_means)
+        cluster_means = np.array(cluster_means)[sorted_indices]
+        cluster_variances = np.array(cluster_variances)[sorted_indices]
+        cluster_proportions = np.array(cluster_proportions)[sorted_indices]
+
+        # Update model configuration with calculated priors
+        kmeans_dict.update({
+            "z": labels,
+            "cluster_means": cluster_means,  # Mean for each cluster
+            "cluster_variances": cluster_variances,  # variance for each cluster
+            "cluster_proportions": cluster_proportions,
+            "w_concentration_prior": cluster_proportions * 10 + 1,  # Concentration for Dirichlet prior
+        })
+
+        return kmeans_dict
+
+    def model(self, data=None, **kwargs):
+        """
+        Defines the probabilistic model based on the preprocessed data and KMeans initialization.
+
+        Args:
+            data: (Optional) the data dict to condition on; defaults to `self.data`.
+
+        Raises:
+            RuntimeError: if `init_from_counts` has not been called yet.
+        """
+
+        model_config = self.model_config
+        if data is None:
+            if self.data is None:
+                raise RuntimeError("Model was not properly initialized. Please call `preprocess_model_data` first.")
+            data = self.data
+
+        x = data["x"]
+        s = data["s"]
+        x_neg = data["x_neg"]
+        n_cells = x.shape[0]
+        K = 2
+
+        # Extract hyperpriors
+        cluster_means = model_config["cluster_means"]
+        cluster_variances = model_config["cluster_variances"]
+        w_concentration_prior = model_config["w_concentration_prior"]
+        overdispersion_scale_prior = model_config["overdispersion_scale_prior"]
+        alpha_offset = model_config.get("alpha_offset", False)
+        s_q_loc, s_q_scale = model_config["neg_ctrl_mean_ratio_prior"]
+        s_alpha_loc, s_alpha_scale = model_config["neg_ctrl_overdispersion_ratio_prior"]
+
+        # Cluster probability prior
+        w = npy.sample("w", npd.Dirichlet(w_concentration_prior))
+        z = npd.Categorical(probs=w)
+
+        # Convert kmeans priors to deltas, due to cumsum ordering
+        mean_deltas = jnp.array([max(cluster_means[0], 1e-1), cluster_means[1] - cluster_means[0]])
+        var_deltas = jnp.array([max(cluster_variances[0], 1e-1), max(cluster_variances[1] - cluster_variances[0], 1)])
+
+        # Convert kmeans parameters to lognormal parameters with target mean and variance
+        # NB mean parameter: q_prior ~ LogNormal(mu_q, sigma_q), with cluster means and variances
+        sigma2_q_prior = jnp.log(var_deltas / mean_deltas ** 2 + 1)
+        sigma_q_prior = jnp.maximum(jnp.sqrt(sigma2_q_prior), 0.01)  # avoid sigma=0
+        mu_q_prior = jnp.log(mean_deltas) - sigma2_q_prior / 2
+
+        # Sample delta_q from lognormal distribution and cumsum to create ordered q
+        with npy.plate("cluster_axis", K):
+            delta_q = npy.sample("delta_q", npd.LogNormal(loc=mu_q_prior, scale=sigma_q_prior))
+        q = npy.deterministic("q", jnp.cumsum(delta_q, axis=0))
+
+        # NB concentration parameter: alpha = q^2 / (q * overdispersion - q), overdispersion ~ HalfCauchy(1) + 1
+        overdispersion_prior_dist = npd.HalfCauchy(overdispersion_scale_prior)
+        # For each mixture component, we have one alpha parameter
+        with npy.plate("cluster_axis", K):
+            overdispersion = npy.sample("overdispersion", overdispersion_prior_dist) + 1
+        # Make sure that alpha > 1 to prevent exponential dist for the second component
+        if alpha_offset:
+            alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q) + jnp.array([0, alpha_offset]))
+        else:
+            alpha = npy.deterministic("alpha", q**2 / (q * overdispersion - q))
+
+        if x_neg is not None:
+            s_q = npy.sample("s_q", npd.LogNormal(s_q_loc, s_q_scale))
+            q_neg = npy.deterministic("q_neg", jnp.clip(s * q[0] / s_q, 1e-3, None))
+            s_alpha = npy.sample("s_alpha", npd.LogNormal(s_alpha_loc, s_alpha_scale))
+            overdispersion_neg = npy.deterministic("overdispersion_neg", jnp.clip(overdispersion[0] / s_alpha, 1.0 + 1e-3, None))
+            with npy.plate("sample_axis", n_cells):
+                alpha_neg = npy.deterministic("alpha_neg", q_neg ** 2 / (q_neg * overdispersion_neg - q_neg))
+                yhat_neg = npy.sample("yhat_neg", obs=x_neg,
+                                        fn=npd.NegativeBinomial2(mean=q_neg, concentration=alpha_neg, ))
+
+        # Sample from the mixture model
+        with npy.plate("sample_axis", n_cells):
+            # target pMHC
+            mixture = npd.MixtureSameFamily(z, npd.NegativeBinomial2(mean=s[:,None]*q, concentration=alpha))
+
+            yhat = npy.sample("yhat", mixture, obs=x)
+
+            # Membership probability of each sample
+            log_probs = mixture.component_log_probs(yhat)
+            p = npy.deterministic("log_p", log_probs - logsumexp(log_probs, axis=-1, keepdims=True))

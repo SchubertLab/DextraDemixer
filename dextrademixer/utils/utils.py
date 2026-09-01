@@ -122,9 +122,9 @@ def dist_to_sim(d, nearest_psed=False, normalize=True, sigma=None, epsilon=None)
     return K
 
 
-def calculate_clonotype_kernel(mdat,
+def calculate_clonotype_kernel(data,
                                distance="tcrdist",
-                               ir_key="airr",
+                               ir_modality_key="airr",
                                key_added="dextrademixer",
                                normalize=False,
                                sigma=None,
@@ -134,12 +134,12 @@ def calculate_clonotype_kernel(mdat,
         calculates TCR dist based on specified metric for unique clones (based on aa sequence identity),
         calculates kernel based on that, and stores the kernel under specified `airr`.uns.
     """
-    ir.pp.ir_dist(mdat, metric="identity", sequence="aa", cutoff=int(1e8))
-    ir.pp.ir_dist(mdat, metric=distance, sequence="aa", cutoff=int(1e8))
+    ir.pp.ir_dist(data, metric="identity", sequence="aa", cutoff=int(1e8))
+    ir.pp.ir_dist(data, metric=distance, sequence="aa", cutoff=int(1e8))
 
-    _, _, d_ident = ir.tl.define_clonotype_clusters(mdat, sequence="aa", metric="identity",
+    _, _, d_ident = ir.tl.define_clonotype_clusters(data, sequence="aa", metric="identity",
                                               receptor_arms="all", dual_ir="any", inplace=False)
-    _, _, d_dist = ir.tl.define_clonotype_clusters(mdat, sequence="aa", metric=distance,
+    _, _, d_dist = ir.tl.define_clonotype_clusters(data, sequence="aa", metric=distance,
                                              receptor_arms="all", dual_ir="any", inplace=False)
 
     # check whether rows are ordered equally if not calculate permutation,
@@ -172,7 +172,7 @@ def calculate_clonotype_kernel(mdat,
         ),
         strict=False,
     )
-    clonotype_cluster_series = pd.Series(values, index=idx).reindex(mdat.mod[ir_key].obs_names)
+    clonotype_cluster_series = pd.Series(values, index=idx).reindex(data.mod[ir_modality_key].obs_names)
     clonotype_cluster_size_series = clonotype_cluster_series.groupby(clonotype_cluster_series).transform("count")
 
     # extract distance
@@ -180,10 +180,10 @@ def calculate_clonotype_kernel(mdat,
     dist = dist[permutation]
     K = dist_to_sim(dist, nearest_psed=nearest_psed, normalize=normalize, sigma=sigma, epsilon=epsilon)
 
-    mdat.mod[ir_key].uns[f"{key_added}_distances"] = dist
-    mdat.mod[ir_key].uns[f"{key_added}_kernel"] = K
-    mdat.mod[ir_key].obs[f"{key_added}_clone_id"] = clonotype_cluster_series
-    mdat.mod[ir_key].obs[f"{key_added}_clone_id_size"] = clonotype_cluster_size_series
+    data.mod[ir_modality_key].uns[f"{key_added}_distances"] = dist
+    data.mod[ir_modality_key].uns[f"{key_added}_kernel"] = K
+    data.mod[ir_modality_key].obs[f"{key_added}_clone_id"] = clonotype_cluster_series
+    data.mod[ir_modality_key].obs[f"{key_added}_clone_id_size"] = clonotype_cluster_size_series
 
 
 def sim_to_dist(s: jax.Array) -> jax.Array:
@@ -259,23 +259,23 @@ def remove_outliers(sr, iq_range=0.8):
     return sr[np.abs((sr - median)) <= iqr]
 
 
-def convert_neg_binom_params(mu, disp):
+def convert_neg_binom_params(mu, overdispersion):
     """
     converts mean, std to n and p of scipy.negbinom rv
 
     See https://anton-granik.medium.com/fitting-and-visualizing-a-negative-binomial-distribution-in-python-3cc27fbc7ecf
     """
 
-    p = 1 / (1 + mu * disp)
+    p = 1 / (1 + mu * overdispersion)
     n = mu * p / (1 - p)
     return n, p
 
 
-def convert_to_variance(mu, disp):
+def convert_to_variance(mu, overdispersion):
     """
     converts mean and dispersion of negative binomial to variance
     """
-    return mu + disp * mu ** 2
+    return mu + overdispersion * mu ** 2
 
 
 def convert_to_invdispersion(mu, var):

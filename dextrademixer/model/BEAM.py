@@ -14,13 +14,13 @@ from sklearn.metrics import f1_score
 import jax.lax
 import jax
 
-from dextrademixer.model import ApMHCDeconvolution
+from dextrademixer.model.ApMHCDeconvolution import ApMHCDeconvolution, Data
 
 if TYPE_CHECKING:
     from jax._src.typing import Array
 
 
-class BEAMT(ApMHCDeconvolution):
+class BEAM(ApMHCDeconvolution):
     """
     This class implements the BEAM-T algorithm used by 10x Genomics.
     It requires a negative control besides the pMHC-dextramer and calculates an antigen-specificity score using
@@ -28,25 +28,45 @@ class BEAMT(ApMHCDeconvolution):
 
     p = (1-beta.cdf(quantile, pMHC-UMI+1, neg_ctrl-UMI+3))
     """
-    __name = "BEAMT"
+    __name = "BEAM"
     __version = "0.0.1"
 
-    def __init__(self):
+    def __init__(self, percentile: float = 0.925):
+        """
+        Args:
+            percentile: the percentile which is used to classify pMHC dextramers as binder
+        """
         super().__init__()
+        self.percentile = percentile
         self.params = None
         self.p = None
         self.data = None
 
-    def preprocess_model_data(self, mdata: md.MuData, pmhc_key: str, gex_key: str = "gex", neg_ctrl_key: str = None,
-                              ir_key: str = "airr", ir_clone_key: str = None, ir_cov_key: str = None, **kwargs):
+    def preprocess_model_data(self, data: Data, pmhc_key: str, pmhc_modality_key: str = "gex", neg_ctrl_key: str = None,
+                              ir_modality_key: str = "airr", ir_clone_key: str = None, **kwargs):
+        """
+        Pulls the pMHC and negative control counts out of `data`.
+
+        Args:
+            data: the pMHC counts, as a MuData, an AnnData or a cells x features DataFrame.
+                  See `as_counts` for where the counts are read from in each case;
+                  `pmhc_modality_key`/`ir_modality_key` are only used for MuData.
+            pmhc_key: the pMHC count column to deconvolve
+            pmhc_modality_key: the MuData modality holding the counts
+            neg_ctrl_key: the negative control count column, required by BEAM
+            ir_modality_key: (Optional) unused, the MuData AIRR module key
+            ir_clone_key: (Optional) unused, accepted for interface parity
+
+        Raises:
+            ValueError: if `neg_ctrl_key` is None.
+        """
         if neg_ctrl_key is None:
             raise ValueError(f"{self.__name} requires a negative control. Please specify a `neg_ctrl_key`.")
 
-        gex = mdata.mod[gex_key]
-        N = gex.shape[0]
+        counts, _ = self.as_counts(data, pmhc_modality_key, ir_modality_key)
 
-        x = gex[:, pmhc_key].X.toarray().reshape((N,))
-        x_neg = gex[:, neg_ctrl_key].X.toarray().reshape((N,))
+        x = counts[pmhc_key].to_numpy()
+        x_neg = counts[neg_ctrl_key].to_numpy()
 
         self._check_parameters(x, x_neg, None)
 
@@ -54,15 +74,41 @@ class BEAMT(ApMHCDeconvolution):
 
         self.params = {"alpha": x+1, "beta": x_neg+3}
 
-    def fit(self, percentile: float = 0.925):
+    def fit_scores(self):
         """
-        Args:
-            percentile: the percentile which is used to classify pMHC dextramers as binder
+        Scores the data prepared by `preprocess_model_data` and stores the Beta posterior.
+
+        Raises:
+            Exception: if `preprocess_model_data` has not been called yet.
         """
         if self.params is None:
             raise Exception("Model is not initialized. Please call `preprocess_model_data` first.")
 
-        self.p = 1 - jax.scipy.stats.beta.cdf(percentile, self.params["alpha"], self.params["beta"])
+        self.p = 1 - jax.scipy.stats.beta.cdf(self.percentile, self.params["alpha"], self.params["beta"])
+
+    def fit(self, data: Data, *, pmhc_key: str = None, pmhc_modality_key: str = "gex",
+            neg_ctrl_key: str = None, ir_modality_key: str = "airr",
+            ir_clone_key: str = None) -> "BEAM":
+        """
+        Extracts the model data from `data` and fits it, i.e. `preprocess_model_data` followed by
+        `fit_scores`.
+
+        Args:
+            data: the pMHC counts, as a MuData, an AnnData or a cells x features DataFrame
+            pmhc_key: the pMHC count column to deconvolve
+            pmhc_modality_key: the MuData modality holding the counts
+            neg_ctrl_key: the negative control count column, required by BEAM
+            ir_modality_key: (Optional) unused, the MuData AIRR module key
+            ir_clone_key: (Optional) unused, the `obs` column that holds clonotype ids
+
+        Returns:
+            self, so that `predict` can be chained onto the call
+        """
+        self.preprocess_model_data(data, pmhc_key=pmhc_key, pmhc_modality_key=pmhc_modality_key,
+                                   neg_ctrl_key=neg_ctrl_key, ir_modality_key=ir_modality_key,
+                                   ir_clone_key=ir_clone_key)
+        self.fit_scores()
+        return self
 
     def predict_posterior_class(self, threshold: float = None, target_fdr: float = None) -> Tuple[np.array, np.array]:
         """

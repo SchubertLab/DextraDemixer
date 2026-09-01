@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "dextrademixer"
 version = "0.0.1"
 description = "Probabilistic identification of antigen-specific T cells from single-cell pMHC multimer data"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "BSD-3-Clause"
 authors = [
   { name = "Yang an", email = "yang.an@helmholtz-muenchen.de" },
@@ -24,35 +24,30 @@ keywords = [
   "T cell",
 ]
 classifiers = [
-  "Development Status :: 3 - Beta",
-  "Intended Audience :: Science/Research",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Development Status :: 3 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-  "anndata==0.13.2",
-  "arviz==0.22.0",
-  "jax==0.8.1",
-  "jaxlib==0.8.1",
-  "matplotlib==3.10.7",
-  "mudata==0.3.2",
-  "muon==0.1.7",
-  "numpy==2.3.5",
-  "numpyro==0.19.0",
-  "openpyxl>=3.1.5",
-  "optax==0.2.6",
-  "pandas==2.3.3",
-  "psutil==7.1.3",
-  "scanpy==1.11.5",
-  "scikit-learn==1.7.2",
-  "scipy==1.16.3",
-  "scirpy==0.22.3",
-  "seaborn==0.13.2",
-  "statsmodels==0.14.5",
-  "tcrdist3==0.3",
-  "tqdm==4.70.0",
+    "anndata>=0.12.0",
+    "arviz>=0.22.0,<1.0",
+    "jax>=0.5.1",
+    "matplotlib>=3.10.7",
+    "mudata>=0.3.2",
+    "muon>=0.1.7",
+    "numpy>=1.26.0",
+    "numpyro>=0.16.0",
+    "optax>=0.1.7",
+    "pandas>=2.3.3",
+    "pytest",
+    "scanpy>=1.10.0",
+    "scikit-learn>=1.7.2",
+    "scipy>=1.12.0",
+    "scirpy>=0.13.0",
+    "seaborn>=0.13.2",
+    "statsmodels>=0.14.1",
+    "tqdm>=4.68.3",
 ]
 
 [project.urls]
@@ -61,10 +56,14 @@ Issues = "https://github.com/SchubertLab/DextraDemixer/issues"
 Publication = "https://doi.org/10.64898/2026.06.23.733339"
 Repository = "https://github.com/SchubertLab/DextraDemixer.git"
 
+[tool.pytest.ini_options]
+addopts = ["--strict-markers"]
+markers = ["slow: end-to-end SVI fits (minutes); deselect with -m 'not slow'"]
+
 [tool.setuptools]
 include-package-data = false
 
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["dextrademixer*"]
-exclude = ["dextrademixer.test*"]
-
+exclude = ["dextrademixer.test", "dextrademixer.test.*"]
