@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from dextrademixer.model.ApMHCDeconvolution import ApMHCDeconvolution, Data
-from dextrademixer.model.Dextrademixer import DextraDemixer
+from dextrademixer.model.DextraDemixer import DextraDemixer
 
 if TYPE_CHECKING:
     from jax._src.typing import Array
