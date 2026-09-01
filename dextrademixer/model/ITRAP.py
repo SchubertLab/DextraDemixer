@@ -61,10 +61,11 @@ class ITRAP:
         ):
         """
         Args:
-            adata: A MuData object containing only dextramer counts and clonotype information,
-                or an AnnData object containing the dextramer counts and clonotype information in the specified obsm and obs keys.
+            adata: A MuData object containing only dextramer counts and clonotype information, an
+                AnnData object containing the dextramer counts and clonotype information in the specified obsm and obs keys,
+                or a cells x features DataFrame holding both the counts and the annotation columns. DataFrame input requires `pmhc_keys`.
             pmhc_keys (Optional): A string or list of strings indicating the pMHC columns in `pmhc_modality_key` modality which should be deconvolved.
-                If None is given, the full dextramer matrix is used, excluding the negative control.
+                If None is given, the full dextramer matrix is used, excluding the negative control. Required for DataFrame input.
             neg_ctrl_key: A string specifying the negative control column in the `pmhc_modality_key` matrix.
             ir_clone_key: A string specifying the field in `obs` that holds clonotype ids. If adata is a MuData object, this will be prefixed with `{ir_modality_key}:`
             pmhc_modality_key: the dextramer signal MuData module key, or the obsm key if adata is an AnnData object
@@ -74,6 +75,10 @@ class ITRAP:
             is_cell_key: string specifying the column in `obs` that indicates whether a barcode is classified as a cell, only relevant if 'is_cell' filter is applied.
             chain_pairing_key: string specifying the column in `obs` that indicates whether a cell has complete TCR chain pairing, only relevant if 'complete_TCRs' filter is applied.
             hashing_classification_key: string specifying the column in `obs` that indicates the hashing classification of a cell, only relevant if 'hashing_singlets' filter is applied.
+
+        Raises:
+            ValueError: if `ir_clone_key` or `neg_ctrl_key` is missing, or `pmhc_keys` is missing for DataFrame input.
+            TypeError: if `adata` is of an unsupported type.
         """
         def calculate_delta(x):
             """ Calculate UMI ratio of two most abundant pMHCs, 0.25 is a small constant to avoid division by zero"""
@@ -102,7 +107,19 @@ class ITRAP:
             
         elif isinstance(adata, ad.AnnData):
             dex = adata.obsm[pmhc_modality_key]
-        
+
+        elif isinstance(adata, pd.DataFrame):
+            if pmhc_keys is None:
+                raise ValueError("`pmhc_keys` is required for DataFrame input, as the count columns "
+                                 "cannot be told apart from the annotation columns.")
+            dex = adata
+
+        else:
+            raise TypeError(f"unsupported input type {type(adata).__name__}, expected a MuData, an "
+                            f"AnnData or a cells x features DataFrame")
+
+        obs = adata if isinstance(adata, pd.DataFrame) else adata.obs
+
         if pmhc_keys is None:
             pmhc_keys = dex.columns[dex.columns != neg_ctrl_key].tolist()
 
@@ -122,9 +139,9 @@ class ITRAP:
         self.hashing_classification_key = hashing_classification_key if 'hashing_singlets' in self.filters else None
         for col in [self.ir_clone_key, self.is_cell_key, self.chain_pairing_key, self.hashing_classification_key]:
             if col is not None:
-                if not col in adata.obs.columns:
+                if not col in obs.columns:
                     raise ValueError(f"Filter {col} specified but column not found in adata.obs.")
-                data[col] = adata.obs[col].values
+                data[col] = obs[col].values
 
         # Calculate UMI count and delta for pMHCs, TRA and TRB. Nomenclature follows original implementation
         # umi_count_X = max(UMI count of X)
@@ -133,14 +150,14 @@ class ITRAP:
         data['delta_umi_mhc'] = data[self.umi_cols_mhc].apply(calculate_delta, axis=1)
         data['umi_count_mhc_rel'] = data['umi_count_mhc'] / data['umi_count_mhc'].quantile(0.9, interpolation='lower')
         if umi_cols_TRA is not None:
-            data['umi_count_TRA'] = adata.obs[umi_cols_TRA].max(1) if len(umi_cols_TRA) > 1 else adata.obs[umi_cols_TRA].values
-            data['delta_umi_TRA'] = adata.obs[umi_cols_TRA].apply(calculate_delta, axis=1)
+            data['umi_count_TRA'] = obs[umi_cols_TRA].max(1) if len(umi_cols_TRA) > 1 else obs[umi_cols_TRA].values
+            data['delta_umi_TRA'] = obs[umi_cols_TRA].apply(calculate_delta, axis=1)
         if umi_cols_TRB is not None:
-            data['umi_count_TRB'] = adata.obs[umi_cols_TRB].max(1) if len(umi_cols_TRB) > 1 else adata.obs[umi_cols_TRB].values
-            data['delta_umi_TRB'] = adata.obs[umi_cols_TRB].apply(calculate_delta, axis=1)
+            data['umi_count_TRB'] = obs[umi_cols_TRB].max(1) if len(umi_cols_TRB) > 1 else obs[umi_cols_TRB].values
+            data['delta_umi_TRB'] = obs[umi_cols_TRB].apply(calculate_delta, axis=1)
         self.data = data
 
-    def fit(self):
+    def fit_thresholds(self):
         """
         Fit the ITRAP model to the data. Calculate the ideal UMI thresholds for filtering
         """
@@ -150,7 +167,25 @@ class ITRAP:
         # Calculate ideal thresholds
         self.opt_thr = self._calculate_ideal_umi_thresholds(self.data)
 
-    def assign_pmhc(
+    def fit(self, adata: Union[md.MuData, ad.AnnData, pd.DataFrame], **preprocess_kwargs) -> "ITRAP":
+        """
+        Extracts the model data from `adata` and fits it, i.e. `preprocess_model_data` followed by
+        the grid search for the ideal UMI thresholds.
+
+        Args:
+            adata: A MuData, AnnData or DataFrame object as accepted by `preprocess_model_data`.
+            **preprocess_kwargs: forwarded to `preprocess_model_data`, see there for the keys it
+                reads (`pmhc_keys`, `neg_ctrl_key`, `ir_clone_key`, `pmhc_modality_key`, ...)
+
+        Returns:
+            self, so that `predict` can be chained onto the call
+
+        """
+        self.preprocess_model_data(adata, **preprocess_kwargs)
+        self.fit_thresholds()
+        return self
+
+    def predict_posterior_class(
             self, adata=None,
             is_cell_keep_values: List=[True],
             chain_pairing_keep_values: List=['single pair', 'extra VDJ', 'extra VJ'],
@@ -161,6 +196,8 @@ class ITRAP:
         To filter out noise, different filters are applied to the data.
         Args:
             adata: If provided, the pMHC assignment will be added to adata.obs['itrap_pMHC_assignment'] and adata.obsm['itrap_pMHC_assignment'].
+                For a DataFrame the assignment is added as an `itrap_pMHC_assignment` column
+                instead
             is_cell_keep_values: List of values in `is_cell_key` column that indicate a barcode is classified as a cell, only relevant if 'is_cell' filter is applied.
             chain_pairing_keep_values: List of values in `chain_pairing_key` column that indicate a cell has complete TCR, only relevant if 'complete_TCRs' filter is applied.
             hashing_classification_keep_values: List of values in `hashing_classification_key` column that indicate a cell is a singlet, only relevant if 'hashing_singlets' filter is applied.
@@ -168,9 +205,13 @@ class ITRAP:
             An assignment array with the class assignment decision.
             If adata is not none, the assignment will be added to adata.obsm['itrap_pMHC_assignment'].
         """
-        if self.opt_thr is None:
-            print("Model has not been fit yet. Finding optimal thresholds...")
-            self.fit()
+        if self.data is None:
+            raise RuntimeError("Model is not initialized. Please call first `fit` or "
+                               "`preprocess_model_data`.")
+        # the thresholds are only consulted by the 'opt_thr' filter
+        if 'opt_thr' in self.filters and self.opt_thr is None:
+            raise RuntimeError("Model has not been fit yet. Please call first `fit` or "
+                               "`fit_thresholds`.")
 
         # Assign cells to most abundant pMHC based on UMI count, then set assignment to 0 if it fails filters
         self.data['assignment'] = self.data[self.umi_cols_mhc].idxmax(1).values
@@ -181,9 +222,16 @@ class ITRAP:
         assignment = pd.Series(self.data['assignment'].values.astype(int)).map(self.idx_to_specificity).values
 
         if adata is not None:
-            adata.obs['itrap_pMHC_assignment'] = assignment
-            adata.obsm['itrap_pMHC_assignment'] = pd.get_dummies(assignment).astype(int).set_index(adata.obs_names)
+            if isinstance(adata, pd.DataFrame):
+                adata['itrap_pMHC_assignment'] = assignment
+            else:
+                adata.obs['itrap_pMHC_assignment'] = assignment
+                adata.obsm['itrap_pMHC_assignment'] = pd.get_dummies(assignment).astype(int).set_index(adata.obs_names)
         return assignment
+
+    def predict(self, *args, **kwargs):
+        """Alias for `predict_posterior_class`."""
+        return self.predict_posterior_class(*args, **kwargs)
 
     def _generate_filters(
             self, data, is_cell_keep_values, chain_pairing_keep_values, hashing_classification_keep_values,
