@@ -191,7 +191,8 @@ class DextraDemixerMulti(ApMHCDeconvolution):
 
         return p_pred, self._resolve(p_pred, assignment, self.counts, max_prob=max_prob)
 
-    def _resolve(p_pred: pd.DataFrame,
+    def _resolve(self,
+                 p_pred: pd.DataFrame,
                  assignment: pd.DataFrame,
                  counts: pd.DataFrame,
                  max_prob: bool = False) -> pd.DataFrame:
