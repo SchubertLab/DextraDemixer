@@ -22,14 +22,20 @@ The method is described in [*DextraDemixer enables accurate identification of an
 
 ## Installation
 
-The recommended setup uses the curated Conda environment included in this repository. Creating it can take approximately 10 minutes.
+```bash
+pip install dextrademixer
+```
+
+### Alternative: Conda environment
+
+For a conda environment.
 
 ```bash
 git clone https://github.com/SchubertLab/DextraDemixer.git
 cd DextraDemixer
 conda env create -f environment.yaml
 conda activate dextrademixer
-python -m pip install -e .
+pip install -e .  # or pip install dextrademixer
 ```
 
 The final command installs the local package in editable mode. Runtime dependency constraints are aligned between `pyproject.toml` and `environment.yaml`. To reproduce the numbers from the manuscript, use `environment_reproducible.yaml` instead: it pins the exact versions, and results can shift slightly with other JAX/NumPyro releases.
